@@ -55,7 +55,7 @@ describe('TurnPipeline (Layer 1)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'prpg-'));
-    app = createApp(config, { driverFactory: () => echoDriver(), dbPath: join(dir, 'test.db') });
+    app = createApp(config, { driverFactory: () => echoDriver(), dbPath: join(dir, 'test.db'), startWorker: false });
   });
   afterEach(() => {
     app.close();
@@ -108,7 +108,7 @@ describe('TurnPipeline (Layer 1)', () => {
     app.close();
 
     // Reopen the same DB file — simulates a server restart.
-    const app2 = createApp(config, { driverFactory: () => echoDriver(), dbPath: join(dir, 'test.db') });
+    const app2 = createApp(config, { driverFactory: () => echoDriver(), dbPath: join(dir, 'test.db'), startWorker: false });
     const reloaded = app2.stories.getStory(story.id);
     expect(reloaded?.title).toBe('Persistent');
     expect(app2.stories.listTurns(story.id)).toHaveLength(1);
@@ -129,7 +129,7 @@ describe('TurnPipeline (Layer 1)', () => {
         }),
     };
     const localDir = mkdtempSync(join(tmpdir(), 'prpg-c-'));
-    const capp = createApp(config, { driverFactory: () => hangingDriver, dbPath: join(localDir, 'c.db') });
+    const capp = createApp(config, { driverFactory: () => hangingDriver, dbPath: join(localDir, 'c.db'), startWorker: false });
     const story = capp.stories.createStory({ title: 'Cancel' });
     const c = collector();
     const runP = capp.pipeline.run(story.id, 'go', c.emitter);

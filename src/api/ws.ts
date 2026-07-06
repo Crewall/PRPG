@@ -22,6 +22,10 @@ export async function registerWsRoutes(server: FastifyInstance, app: App): Promi
       }
     };
 
+    // Forward server-side events (summaries, memory, jobs) to this client.
+    const unsubscribe = app.events.on((event) => send(event));
+    socket.on('close', () => unsubscribe());
+
     socket.on('message', (raw: Buffer) => {
       let parsed;
       try {

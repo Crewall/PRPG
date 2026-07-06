@@ -3,10 +3,15 @@ import type { ContextBuilder } from './contextBuilder.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { AgentStore } from '../db/stores/agentStore.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
+import type { JobStore } from '../db/stores/jobStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
+import type { EventBus } from '../util/events.ts';
 import { Storyteller } from '../agents/storyteller.ts';
 import { estimateTokens } from '../util/tokens.ts';
 import { logger } from '../util/logger.ts';
+import { parseDirectives } from './directives.ts';
+import type { Directive } from './directives.ts';
+import { breakScene } from './scenes.ts';
 import type { Turn } from '../domain.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
@@ -24,8 +29,10 @@ export interface PipelineDeps {
   stories: StoryStore;
   agents: AgentStore;
   threadLog: ThreadLog;
+  jobs: JobStore;
   registry: LlmRegistry;
   contexts: ContextBuilder;
+  events: EventBus;
 }
 
 export class TurnPipeline {
@@ -42,6 +49,23 @@ export class TurnPipeline {
     this.aborters.get(storyId)?.abort(new Error('cancelled by user'));
   }
 
+  /** Manual scene break (from the UI "new scene" control). */
+  newScene(storyId: string, opts: { title?: string } = {}): void {
+    breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, opts);
+  }
+
+  private applySceneDirectives(storyId: string, directives: Directive[]): void {
+    for (const d of directives) {
+      if (d.type === 'scene_break') {
+        breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, {
+          title: d.title,
+          carryNpcs: d.carryNpcs,
+        });
+      }
+      // consult_npc / npc_enter / npc_exit / roll — handled in Layer 4+.
+    }
+  }
+
   /**
    * Run one turn. Layer-1 pipeline = steps 0 (preflight) → 2 (context build) →
    * 3 (storyteller stream) → 7 (emit). Scribes / NPCs / overseer arrive in later
@@ -52,7 +76,7 @@ export class TurnPipeline {
   }
 
   private async runLocked(storyId: string, playerInput: string, out: TurnEmitter): Promise<Turn | undefined> {
-    const { stories, agents, threadLog, registry, contexts } = this.deps;
+    const { stories, agents, threadLog, jobs, registry, contexts } = this.deps;
 
     // Step 0 — preflight.
     const story = stories.getStory(storyId);
@@ -85,7 +109,7 @@ export class TurnPipeline {
       // Step 3 — storyteller stream.
       out.status('storyteller is writing…');
       let streamed = '';
-      const narration = await storyteller.narrate(
+      const draft = await storyteller.narrate(
         ctx,
         (delta) => {
           streamed += delta;
@@ -93,6 +117,9 @@ export class TurnPipeline {
         },
         { turnId: turn.id, signal: aborter.signal },
       );
+
+      // Parse the (optional) fenced directive block; only narration is displayed.
+      const { narration, directives } = parseDirectives(draft);
 
       // Step 7 — emit.
       const promptTokens = estimateTokens(ctx.system) + ctx.messages.reduce((n, m) => n + estimateTokens(m.content), 0);
@@ -105,6 +132,7 @@ export class TurnPipeline {
           promptTokensEst: promptTokens,
           outputTokensEst: outTokens,
           model: bound.profile.model,
+          directives: directives.length,
         },
       });
 
@@ -115,9 +143,12 @@ export class TurnPipeline {
       const finalTurn = stories.getTurn(turn.id)!;
       out.final(finalTurn);
 
-      // Step 8/9 — scene effects + async scribes: introduced in Layer 2+.
-      // this.jobs.enqueue('scribe_story', { turnId: turn.id });
-      // this.jobs.enqueue('scribe_memory', { turnId: turn.id });
+      // Step 8 — scene effects (Layer 2: scene_break only; NPC directives = Layer 4).
+      this.applySceneDirectives(storyId, directives);
+
+      // Step 9 — post-turn async scribes (run off the player path via the worker).
+      jobs.enqueue('scribe_story', { storyId, turnId: turn.id, payload: { mode: 'scene', turnId: turn.id } });
+      jobs.enqueue('scribe_memory', { storyId, turnId: turn.id, payload: { turnId: turn.id } });
 
       return finalTurn;
     } catch (err) {

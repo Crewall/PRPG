@@ -81,7 +81,7 @@ export abstract class Agent {
   }
 
   /** Schema-enforced JSON call with 1 auto-repair retry (scribes, overseer, NPC replies). */
-  protected async invokeJson<T>(ctx: BuiltContext, schema: z.ZodType<T>, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<T> {
+  protected async invokeJson<S extends z.ZodTypeAny>(ctx: BuiltContext, schema: S, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<z.infer<S>> {
     this.logRequest(ctx, opts.turnId);
     const t0 = Date.now();
     const jsonCtx: JsonCallContext = { system: ctx.system, messages: ctx.messages, signal: opts.signal };

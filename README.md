@@ -35,7 +35,9 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 
 - **Layer 0 — Foundation (config, DB, LLM adapter):** ✅ implemented.
 - **Layer 1 — Minimal playable (server, storyteller, chat UI):** ✅ implemented.
-- Layers 2–6: designed in `docs/`, not yet built.
+- **Layer 2 — Story compression (job queue, scribe_story, bounded context):** ✅ implemented.
+- **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
+- Layers 4–6 (NPC agents, overseer, debug/polish): designed in `docs/`, not yet built.
 
 ## Running it
 

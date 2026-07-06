@@ -39,6 +39,7 @@ export function openDb(path: string): Db {
     mkdirSync(dirname(path), { recursive: true });
   }
   const raw = new DatabaseSync(path);
+  let txDepth = 0;
   raw.exec('PRAGMA journal_mode = WAL;');
   raw.exec('PRAGMA foreign_keys = ON;');
   raw.exec('PRAGMA busy_timeout = 5000;');
@@ -49,13 +50,34 @@ export function openDb(path: string): Db {
     prepare: (sql) => raw.prepare(sql) as unknown as Statement,
     pragma: (key) => (raw.prepare(`PRAGMA ${key}`).get() as Row | undefined),
     transaction<T>(fn: () => T): T {
-      raw.exec('BEGIN');
+      // Reentrant: top-level uses BEGIN/COMMIT; nested calls use SAVEPOINTs so
+      // stores that transact internally can be composed under an outer transaction.
+      if (txDepth === 0) {
+        raw.exec('BEGIN');
+        txDepth++;
+        try {
+          const out = fn();
+          raw.exec('COMMIT');
+          txDepth--;
+          return out;
+        } catch (err) {
+          raw.exec('ROLLBACK');
+          txDepth = 0;
+          throw err;
+        }
+      }
+      const sp = `sp_${txDepth}`;
+      raw.exec(`SAVEPOINT ${sp}`);
+      txDepth++;
       try {
         const out = fn();
-        raw.exec('COMMIT');
+        raw.exec(`RELEASE ${sp}`);
+        txDepth--;
         return out;
       } catch (err) {
-        raw.exec('ROLLBACK');
+        raw.exec(`ROLLBACK TO ${sp}`);
+        raw.exec(`RELEASE ${sp}`);
+        txDepth--;
         throw err;
       }
     },
@@ -92,7 +114,7 @@ export function migrate(db: Db, migrationsDir = MIGRATIONS_DIR): string[] {
       record.run(file, Date.now());
     });
     run.push(file);
-    logger.info('migration applied', { file });
+    logger.debug('migration applied', { file });
   }
   return run;
 }

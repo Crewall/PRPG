@@ -55,12 +55,12 @@ export function extractJson(text: string): string {
  * in 04-agents.md. On the first validation failure we send the parser errors
  * back and ask for corrected JSON; a second failure throws JsonCallError.
  */
-export async function callJson<T>(
+export async function callJson<S extends z.ZodTypeAny>(
   bound: BoundDriver,
   ctx: JsonCallContext,
-  schema: z.ZodType<T>,
+  schema: S,
   opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta } = {},
-): Promise<T> {
+): Promise<z.infer<S>> {
   const messages: ChatMessage[] = [...ctx.messages];
   let lastRaw = '';
 
