@@ -113,11 +113,37 @@ async function renderPlay(storyId) {
     addStatus('— new scene —');
   });
   const panelBtn = h('button', { class: 'ghost small', onclick: () => drawer.classList.toggle('open') }, '☰');
+  const npcChips = h('div', { class: 'npc-chips' });
+  const sceneHeader = h('div', { class: 'scene-header' }, h('span', { class: 'sub' }, 'Present:'), npcChips);
 
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn))), drawer),
   );
+
+  let activeNpcIds = new Set();
+  async function refreshSceneHeader() {
+    let agents = [];
+    try { agents = await api.get(`/api/stories/${storyId}/agents`); } catch {}
+    const active = agents.filter((a) => a.role === 'npc' && a.state === 'active' && a.npc);
+    activeNpcIds = new Set(active.map((a) => a.npcObjectId));
+    npcChips.replaceChildren(
+      ...(active.length ? active.map((a) => h('button', { class: 'chip', onclick: () => showObjectCard(a.npcObjectId, debug ? 'storyteller' : 'player') }, a.npc)) : [h('span', { class: 'sub' }, 'no major characters yet')]),
+    );
+  }
+
+  async function showObjectCard(oid, scope) {
+    let view;
+    try { view = await api.get(`/api/memory/objects/${oid}?scope=${scope}`); } catch { return; }
+    const facts = (view?.facts) || [];
+    const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
+      h('div', { class: 'modal' },
+        h('h3', {}, view?.name || 'Unknown'),
+        view?.summary ? h('div', { class: 'mem-summary' }, view.summary) : null,
+        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
+        h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
+    document.body.append(modal);
+  }
 
   const scrollDown = () => { scrollBox.scrollTop = scrollBox.scrollHeight; };
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
@@ -176,11 +202,20 @@ async function renderPlay(storyId) {
     const { object, view } = row;
     const facts = (view?.facts) || [];
     const factList = h('div', { class: 'facts hidden' });
-    const card = h('div', { class: 'mem-card' },
-      h('div', { class: 'mem-head', onclick: () => factList.classList.toggle('hidden') },
-        h('span', { class: 'mem-name' }, object.name),
-        h('span', { class: 'sub' }, `${facts.length} fact${facts.length === 1 ? '' : 's'}`)),
-      factList);
+    const head = h('div', { class: 'mem-head' },
+      h('span', { class: 'mem-name', onclick: () => factList.classList.toggle('hidden') }, object.name),
+      h('span', { class: 'sub', onclick: () => factList.classList.toggle('hidden') }, `${facts.length} fact${facts.length === 1 ? '' : 's'}`));
+    // Characters can be promoted to major NPCs (own agent) or demoted.
+    if (object.type === 'character') {
+      const isActive = activeNpcIds.has(object.id);
+      const btn = h('button', { class: 'link', onclick: async (ev) => {
+        ev.stopPropagation();
+        await api.post(`/api/stories/${storyId}/npcs/${object.id}/${isActive ? 'demote' : 'promote'}`);
+        await refreshSceneHeader(); refresh();
+      } }, isActive ? 'demote' : 'promote');
+      head.append(btn);
+    }
+    const card = h('div', { class: 'mem-card' }, head, factList);
     if (object.summary) factList.append(h('div', { class: 'mem-summary' }, object.summary));
     for (const f of facts) factList.append(h('div', { class: 'fact' },
       h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
@@ -253,7 +288,7 @@ async function renderPlay(storyId) {
       case 'turn.error': if (current) current.remove(); addBubble('error', `Error: ${m.message}`); current = null; setBusy(false); break;
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
-      case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); break;
+      case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
     }
   };
@@ -302,6 +337,7 @@ async function renderPlay(storyId) {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
 
   renderDrawer();
+  refreshSceneHeader();
 }
 
 route();

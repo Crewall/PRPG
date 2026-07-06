@@ -4,6 +4,7 @@ import type { App } from '../app.ts';
 import { StorySettings } from '../domain.ts';
 import { NewMemoryObject, NewFact, DetailLevel } from '../memory/model.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
+import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
 
 const CreateStoryBody = z.object({
   title: z.string().min(1).default('Untitled Story'),
@@ -283,6 +284,33 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       return { error: `You see nothing here called "${q.name}".` };
     }
     return memory.getObjectView(obj.id, { kind: 'perception' });
+  });
+
+  // ---- Layer 4: NPC agents (promote/demote, session list) ----
+  const npcDeps = { stories, agents: app.agents, memory, registry, events: app.events };
+
+  server.get('/api/stories/:id/agents', async (req) => {
+    const { id } = req.params as { id: string };
+    return app.agents.listSessions(id).map((s) => ({
+      ...s,
+      messageCount: app.agents.countMessages(s.id),
+      npc: s.npcObjectId ? memory.getObject(s.npcObjectId)?.name : undefined,
+    }));
+  });
+
+  server.post('/api/stories/:id/npcs/:oid/promote', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    if (!promoteNpc(npcDeps, id, oid)) {
+      reply.code(404);
+      return { error: 'character not found' };
+    }
+    return { ok: true };
+  });
+
+  server.post('/api/stories/:id/npcs/:oid/demote', async (req) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    demoteNpc(npcDeps, id, oid);
+    return { ok: true };
   });
 
   server.get('/api/system/settings', async () => app.settings.all());

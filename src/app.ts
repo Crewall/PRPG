@@ -54,7 +54,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const suggestions = createSuggestionStore(db);
   const registry = createRegistry(config, opts.driverFactory);
   const contexts = createContextBuilder({ stories, summaries, memory });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, registry, contexts, events });
+  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, registry, contexts, events });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events);

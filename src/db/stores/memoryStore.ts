@@ -251,6 +251,30 @@ export function createMemoryStore(db: Db) {
       };
     },
 
+    /**
+     * Everything a given NPC knows about the *world* — facts on any object that
+     * are linked to this NPC via knowledge_links (distortions substituted). This
+     * is the cross-object knowledge that getObjectView(self) does not cover, and
+     * it is the other half of the NPC persona (doc 04).
+     */
+    npcKnowledge(storyId: string, npcObjectId: string): { objectId: string; objectName: string; fact: MemoryFact; content: string }[] {
+      const rows = db
+        .prepare(
+          `SELECT mf.*, kl.distortion AS kl_distortion, mo.name AS obj_name, mo.id AS obj_id
+           FROM knowledge_links kl
+           JOIN memory_facts mf ON mf.id = kl.fact_id
+           JOIN memory_objects mo ON mo.id = mf.object_id
+           WHERE kl.knower_type = 'npc' AND kl.knower_npc_object_id = ? AND mo.story_id = ? AND mf.superseded = 0`,
+        )
+        .all<Row>(npcObjectId, storyId);
+      return rows.map((r) => ({
+        objectId: r.obj_id as string,
+        objectName: r.obj_name as string,
+        fact: rowToFact(r),
+        content: (r.kl_distortion as string) ?? (r.content as string),
+      }));
+    },
+
     // ---- FTS (used by retrieval.ts) ----
     ftsSearch(storyId: string, query: string, limit = 40): { factId: string; objectId: string; rank: number }[] {
       const cleaned = query.replace(/["*]/g, ' ').trim();
