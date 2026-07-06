@@ -23,12 +23,15 @@ const api = {
   async get(p) { const r = await fetch(p); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async post(p, b) { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async patch(p, b) { const r = await fetch(p, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
+  async put(p, b) { const r = await fetch(p, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async del(p) { const r = await fetch(p, { method: 'DELETE' }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
 };
 
 function route() {
   const hash = location.hash.slice(1) || '/';
   if (hash.startsWith('/play/')) return renderPlay(hash.slice('/play/'.length));
+  if (hash.startsWith('/settings/prompts/')) return renderPromptEditor(decodeURIComponent(hash.slice('/settings/prompts/'.length)));
+  if (hash === '/settings') return renderSettings();
   return renderHome();
 }
 window.addEventListener('hashchange', route);
@@ -70,7 +73,7 @@ async function renderHome() {
   });
 
   app.replaceChildren(
-    topbar(h('span', { class: 'badge' }, 'Layers 0–3')),
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/settings') }, '⚙ Settings')),
     h('div', { class: 'scroll' }, h('div', { class: 'container' },
       h('h2', {}, 'Your stories'), ...list,
       h('div', { class: 'card' },
@@ -338,6 +341,125 @@ async function renderPlay(storyId) {
 
   renderDrawer();
   refreshSceneHeader();
+}
+
+// ---------------- Settings ----------------
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer' };
+const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compatible (OpenRouter, etc.)' };
+
+async function renderSettings() {
+  app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  let view, prompts;
+  try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); }
+  catch (e) { app.replaceChildren(topbar(), h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Failed to load settings: ' + e.message))); return; }
+
+  const favs = view.favourites.map((f) => ({ ...f }));
+  const roles = JSON.parse(JSON.stringify(view.roles));
+  const provInputs = {};
+
+  function providerCard(kind) {
+    const p = view.providers[kind] || {};
+    const baseUrl = h('input', { placeholder: kind === 'openai_compat' ? 'https://openrouter.ai/api/v1' : 'https://api.anthropic.com (optional)', value: p.baseUrl || '' });
+    const apiKey = h('input', { type: 'password', placeholder: p.configured ? `saved (${p.hint}) — leave blank to keep` : 'paste your API key' });
+    const result = h('span', { class: 'sub' });
+    const testBtn = h('button', { class: 'small' }, 'Test key');
+    testBtn.addEventListener('click', async () => {
+      result.className = 'sub'; result.textContent = 'testing…';
+      try {
+        const r = await api.post('/api/settings/test', { provider: kind, apiKey: apiKey.value || undefined, baseUrl: baseUrl.value || undefined });
+        result.className = r.ok ? 'sub ok' : 'sub err';
+        result.textContent = r.ok ? `✓ OK (${r.latencyMs}ms · ${r.model})` : `✗ ${r.error}`;
+      } catch (e) { result.className = 'sub err'; result.textContent = '✗ ' + e.message; }
+    });
+    provInputs[kind] = { baseUrl, apiKey };
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, PROVIDER_LABELS[kind]),
+      h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
+      h('div', { class: 'row', style: 'margin-top:10px; gap:10px' }, testBtn, result));
+  }
+
+  const dynHost = h('div');
+  function paint() {
+    const favRows = favs.map((f, i) => {
+      const label = h('input', { value: f.label, placeholder: 'label', oninput: (e) => (f.label = e.target.value) });
+      const prov = h('select', { onchange: (e) => (f.provider = e.target.value) }, ...Object.keys(PROVIDER_LABELS).map((k) => h('option', { value: k, ...(k === f.provider ? { selected: true } : {}) }, k)));
+      const model = h('input', { value: f.model, placeholder: 'model id (e.g. anthropic/claude-sonnet-4.5)', oninput: (e) => (f.model = e.target.value) });
+      const rm = h('button', { class: 'link', onclick: () => { favs.splice(i, 1); paint(); } }, 'remove');
+      return h('div', { class: 'fav-row' }, label, prov, model, rm);
+    });
+    const addFav = h('button', { class: 'small', onclick: () => { favs.push({ id: 'f' + Math.random().toString(36).slice(2, 8), label: 'New model', provider: 'openai_compat', model: '' }); paint(); } }, '+ Add model');
+    const favCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model favourites'), h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Curate the models you use; pick from these per role below.'), ...favRows, addFav);
+
+    const roleRows = Object.keys(ROLE_LABELS).map((role) => {
+      const binding = roles[role] || (roles[role] = { favouriteId: favs[0]?.id || '', temperature: 0.8, maxTokens: 2048 });
+      const sel = h('select', { onchange: (e) => (binding.favouriteId = e.target.value) }, ...favs.map((f) => h('option', { value: f.id, ...(f.id === binding.favouriteId ? { selected: true } : {}) }, `${f.label} (${f.model || '—'})`)));
+      const temp = h('input', { type: 'number', step: '0.1', min: '0', max: '2', value: binding.temperature, oninput: (e) => (binding.temperature = parseFloat(e.target.value)) });
+      const maxT = h('input', { type: 'number', step: '1', min: '1', value: binding.maxTokens, oninput: (e) => (binding.maxTokens = parseInt(e.target.value, 10)) });
+      return h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, ROLE_LABELS[role]), sel, h('div', { class: 'mini' }, h('span', { class: 'sub' }, 'temp'), temp), h('div', { class: 'mini' }, h('span', { class: 'sub' }, 'max tok'), maxT));
+    });
+    const roleCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model & parameters per role'), ...roleRows);
+    dynHost.replaceChildren(favCard, roleCard);
+  }
+  paint();
+
+  const promptCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Prompts'),
+    h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Edit the instructions for each AI role.'),
+    ...prompts.map((p) => h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/prompts/' + encodeURIComponent(p.name)) },
+      h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))));
+
+  const status = h('span', { class: 'sub' });
+  const saveBtn = h('button', { class: 'primary' }, 'Save settings');
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true; status.className = 'sub'; status.textContent = 'saving…';
+    const providers = {};
+    for (const kind of Object.keys(provInputs)) {
+      const { baseUrl, apiKey } = provInputs[kind];
+      providers[kind] = { baseUrl: baseUrl.value, ...(apiKey.value ? { apiKey: apiKey.value } : {}) };
+    }
+    try { await api.put('/api/settings/config', { providers, favourites: favs, roles }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+    saveBtn.disabled = false;
+  });
+
+  app.replaceChildren(
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')),
+    h('div', { class: 'scroll' }, h('div', { class: 'container' },
+      h('h2', {}, 'Settings'),
+      providerCard('anthropic'), providerCard('openai_compat'),
+      dynHost, promptCard,
+      h('div', { class: 'row', style: 'margin-top:16px; gap:12px' }, saveBtn, status),
+    )),
+  );
+}
+
+async function renderPromptEditor(name) {
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  let data;
+  try { data = await api.get('/api/settings/prompts/' + encodeURIComponent(name)); }
+  catch { location.hash = '/settings'; return; }
+  const ta = h('textarea', { rows: '24', style: 'font-family:ui-monospace,monospace; font-size:13px' }, data.content);
+  const status = h('span', { class: 'sub' });
+  const saveBtn = h('button', { class: 'primary' }, 'Save prompt');
+  saveBtn.addEventListener('click', async () => {
+    status.textContent = 'saving…';
+    try { await api.put('/api/settings/prompts/' + encodeURIComponent(name), { content: ta.value }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+  const resetBtn = h('button', { class: 'ghost' }, 'Reset to default');
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset this prompt to the built-in default?')) return;
+    await api.del('/api/settings/prompts/' + encodeURIComponent(name));
+    ta.value = data.default; status.className = 'sub'; status.textContent = 'reset to default';
+  });
+
+  app.replaceChildren(
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/settings') }, '← Settings')),
+    h('div', { class: 'scroll' }, h('div', { class: 'container' },
+      h('h2', {}, 'Prompt: ' + name),
+      h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Placeholders like {{genre}} are filled by the engine — leave them intact.'),
+      ta,
+      h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, status),
+    )),
+  );
 }
 
 route();
