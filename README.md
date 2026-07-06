@@ -31,6 +31,32 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 7. [`docs/07-api-and-ui.md`](docs/07-api-and-ui.md) — HTTP/WebSocket API surface and the web client
 8. [`docs/08-roadmap.md`](docs/08-roadmap.md) — layered build plan: milestones, inputs/outputs, acceptance criteria
 
+## Implementation status
+
+- **Layer 0 — Foundation (config, DB, LLM adapter):** ✅ implemented.
+- **Layer 1 — Minimal playable (server, storyteller, chat UI):** ✅ implemented.
+- **Layer 2 — Story compression (job queue, scribe_story, bounded context):** ✅ implemented.
+- **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
+- Layers 4–6 (NPC agents, overseer, debug/polish): designed in `docs/`, not yet built.
+
+## Running it
+
+Requires **Node.js ≥ 22** (the DB uses the built-in `node:sqlite` module — no
+native compilation, which is what makes the Termux path painless).
+
+```bash
+npm install                       # runtime + dev deps
+cp config.example.json config.json   # then add your API key(s)
+npm run smoke                     # verify config, DB, and each provider
+npm start                         # serves http://127.0.0.1:7777
+```
+
+Then open `http://127.0.0.1:7777`, create a story with a premise, and play.
+
+- `npm test` — unit + pipeline tests (deterministic, no API key needed).
+- `npm run migrate` — apply DB migrations without starting the server.
+- On Android: `bash scripts/termux-install.sh` (see below).
+
 ## Quick architectural summary
 
 - **Backend:** Node.js + TypeScript (Fastify), SQLite storage, provider-agnostic LLM adapter

@@ -1,0 +1,39 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 7777
+  },
+  "db": {
+    "path": "data/prpg.db"
+  },
+  "providers": {
+    "anthropic": {
+      "apiKey": "sk-ant-REPLACE_ME"
+    },
+    "openai_compat": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "sk-or-REPLACE_ME"
+    }
+  },
+  "modelProfiles": {
+    "narrator-strong": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "temperature": 0.9,
+      "maxTokens": 2048
+    },
+    "worker-cheap": {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001",
+      "temperature": 0.2,
+      "maxTokens": 1024
+    }
+  },
+  "roles": {
+    "storyteller": "narrator-strong",
+    "npc": "narrator-strong",
+    "scribe_memory": "worker-cheap",
+    "scribe_story": "worker-cheap",
+    "overseer": "worker-cheap"
+  }
+}
