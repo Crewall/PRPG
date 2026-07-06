@@ -1,18 +1,23 @@
 import { StoryLocks } from './locks.ts';
-import type { ContextBuilder } from './contextBuilder.ts';
+import type { ContextBuilder, NpcReplyForWeave } from './contextBuilder.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { AgentStore } from '../db/stores/agentStore.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
 import type { JobStore } from '../db/stores/jobStore.ts';
+import type { MemoryStore } from '../db/stores/memoryStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
 import type { EventBus } from '../util/events.ts';
 import { Storyteller } from '../agents/storyteller.ts';
+import { NpcAgent } from '../agents/npcAgent.ts';
+import type { NpcReply } from '../agents/npcAgent.ts';
 import { estimateTokens } from '../util/tokens.ts';
 import { logger } from '../util/logger.ts';
 import { parseDirectives } from './directives.ts';
 import type { Directive } from './directives.ts';
 import { breakScene } from './scenes.ts';
-import type { Turn } from '../domain.ts';
+import { resolveNpc, npcEnter, npcExit } from './npc.ts';
+import type { NpcServiceDeps } from './npc.ts';
+import type { Story, Turn } from '../domain.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
 // forward events to the client; tests implement it to collect events.
@@ -30,9 +35,17 @@ export interface PipelineDeps {
   agents: AgentStore;
   threadLog: ThreadLog;
   jobs: JobStore;
+  memory: MemoryStore;
   registry: LlmRegistry;
   contexts: ContextBuilder;
   events: EventBus;
+}
+
+interface ConsultOutcome {
+  name: string;
+  objectId?: string;
+  reply?: NpcReply;
+  error?: string;
 }
 
 export class TurnPipeline {
@@ -42,6 +55,10 @@ export class TurnPipeline {
 
   constructor(deps: PipelineDeps) {
     this.deps = deps;
+  }
+
+  private npcDeps(): NpcServiceDeps {
+    return { stories: this.deps.stories, agents: this.deps.agents, memory: this.deps.memory, registry: this.deps.registry, events: this.deps.events };
   }
 
   /** Cancel the in-flight turn for a story, if any. */
@@ -54,23 +71,6 @@ export class TurnPipeline {
     breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, opts);
   }
 
-  private applySceneDirectives(storyId: string, directives: Directive[]): void {
-    for (const d of directives) {
-      if (d.type === 'scene_break') {
-        breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, {
-          title: d.title,
-          carryNpcs: d.carryNpcs,
-        });
-      }
-      // consult_npc / npc_enter / npc_exit / roll — handled in Layer 4+.
-    }
-  }
-
-  /**
-   * Run one turn. Layer-1 pipeline = steps 0 (preflight) → 2 (context build) →
-   * 3 (storyteller stream) → 7 (emit). Scribes / NPCs / overseer arrive in later
-   * layers; hooks are marked below.
-   */
   async run(storyId: string, playerInput: string, out: TurnEmitter): Promise<Turn | undefined> {
     return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out));
   }
@@ -80,14 +80,8 @@ export class TurnPipeline {
 
     // Step 0 — preflight.
     const story = stories.getStory(storyId);
-    if (!story) {
-      out.error('', `story '${storyId}' not found`);
-      return undefined;
-    }
-    if (story.status !== 'active') {
-      out.error('', `story '${storyId}' is not active`);
-      return undefined;
-    }
+    if (!story) return void out.error('', `story '${storyId}' not found`), undefined;
+    if (story.status !== 'active') return void out.error('', `story '${storyId}' is not active`), undefined;
 
     const turn = stories.appendTurn({ storyId, playerInput, status: 'streaming' });
     out.accepted(turn.id);
@@ -100,53 +94,72 @@ export class TurnPipeline {
       // Step 2 — context build.
       const ctx = contexts.forStoryteller(story, playerInput);
 
-      // Storyteller session + agent.
       const profileName = story.settings.roles.storyteller ?? registry.getForRole('storyteller').name;
       const bound = registry.getProfile(profileName);
       const session = agents.ensureSession(storyId, 'storyteller', profileName);
       const storyteller = new Storyteller({ session, bound, threadLog, storyId });
 
-      // Step 3 — storyteller stream.
-      out.status('storyteller is writing…');
-      let streamed = '';
-      const draft = await storyteller.narrate(
-        ctx,
-        (delta) => {
-          streamed += delta;
-          out.delta(delta);
-        },
-        { turnId: turn.id, signal: aborter.signal },
-      );
+      // Are there present major NPCs the storyteller might consult? If so, we buffer
+      // pass-1 (it may be a draft that gets re-woven) rather than streaming it live.
+      const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
+      const canConsult = (scene?.activeNpcIds.length ?? 0) > 0;
 
-      // Parse the (optional) fenced directive block; only narration is displayed.
-      const { narration, directives } = parseDirectives(draft);
+      // A delta gate that never leaks the ```directives fence to the player.
+      const gate = this.makeGate(out);
+
+      // Step 3 — storyteller pass 1.
+      out.status('the storyteller is writing…');
+      const draft1 = await storyteller.narrate(ctx, canConsult ? undefined : gate.onDelta, { turnId: turn.id, signal: aborter.signal });
+      let parsed = parseDirectives(draft1);
+      let finalNarration = parsed.narration;
+      let finalDirectives = parsed.directives;
+      let storytellerCalls = 1;
+
+      // Step 4 — NPC consults (parallel), Step 5 — re-weave.
+      const consults = canConsult ? parsed.directives.filter((d): d is Extract<Directive, { type: 'consult_npc' }> => d.type === 'consult_npc') : [];
+      if (consults.length) {
+        out.status('the characters are thinking…');
+        const outcomes = await Promise.all(consults.map((c) => this.consultNpc(story, turn.id, c, playerInput, parsed.narration, aborter.signal)));
+
+        const weave: NpcReplyForWeave[] = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
+        const ctx2 = contexts.withNpcReplies(ctx, draft1, weave);
+
+        out.status('the storyteller is weaving the reply…');
+        gate.reset();
+        const draft2 = await storyteller.narrate(ctx2, gate.onDelta, { turnId: turn.id, signal: aborter.signal });
+        storytellerCalls = 2;
+        parsed = parseDirectives(draft2);
+        finalNarration = parsed.narration;
+        finalDirectives = parsed.directives;
+      } else if (canConsult) {
+        // Buffered pass-1 with no consult → replay the narration so the player sees it stream.
+        gate.replay(finalNarration);
+      }
 
       // Step 7 — emit.
       const promptTokens = estimateTokens(ctx.system) + ctx.messages.reduce((n, m) => n + estimateTokens(m.content), 0);
-      const outTokens = estimateTokens(narration);
       stories.updateTurn(turn.id, {
-        narration,
+        narration: finalNarration,
         status: 'complete',
         meta: {
           durationMs: Date.now() - t0,
           promptTokensEst: promptTokens,
-          outputTokensEst: outTokens,
+          outputTokensEst: estimateTokens(finalNarration),
           model: bound.profile.model,
-          directives: directives.length,
+          storytellerCalls,
+          consults: consults.length,
         },
       });
-
-      // Persist into the storyteller's own session history (session-local record).
       agents.appendMessage(session.id, { role: 'user', content: playerInput || '(begin)', turnId: turn.id });
-      agents.appendMessage(session.id, { role: 'assistant', content: narration, turnId: turn.id });
+      agents.appendMessage(session.id, { role: 'assistant', content: finalNarration, turnId: turn.id });
 
       const finalTurn = stories.getTurn(turn.id)!;
       out.final(finalTurn);
 
-      // Step 8 — scene effects (Layer 2: scene_break only; NPC directives = Layer 4).
-      this.applySceneDirectives(storyId, directives);
+      // Step 8 — scene effects: scene_break / npc_enter / npc_exit.
+      this.applySceneDirectives(storyId, finalDirectives);
 
-      // Step 9 — post-turn async scribes (run off the player path via the worker).
+      // Step 9 — post-turn async scribes.
       jobs.enqueue('scribe_story', { storyId, turnId: turn.id, payload: { mode: 'scene', turnId: turn.id } });
       jobs.enqueue('scribe_memory', { storyId, turnId: turn.id, payload: { turnId: turn.id } });
 
@@ -162,5 +175,92 @@ export class TurnPipeline {
     } finally {
       this.aborters.delete(storyId);
     }
+  }
+
+  /** Consult one NPC. Never throws — a failed consult degrades to an error note. */
+  private async consultNpc(
+    story: Story,
+    turnId: string,
+    directive: Extract<Directive, { type: 'consult_npc' }>,
+    playerInput: string,
+    moment: string,
+    signal: AbortSignal,
+  ): Promise<ConsultOutcome> {
+    const { agents, threadLog, registry, contexts } = this.deps;
+    const obj = resolveNpc(this.npcDeps(), story.id, directive.npcName);
+    if (!obj) return { name: directive.npcName, error: 'unknown-npc' };
+
+    try {
+      const profileName = story.settings.roles.npc ?? registry.getForRole('npc').name;
+      const bound = registry.getProfile(profileName);
+      const sessionBefore = agents.listSessions(story.id).find((s) => s.role === 'npc' && s.npcObjectId === obj.id);
+      const wasDormant = sessionBefore?.state === 'dormant';
+      const session = agents.ensureSession(story.id, 'npc', profileName, obj.id);
+      if (session.state !== 'active') agents.setState(session.id, 'active');
+
+      const ctx = contexts.forNpc(story, obj.id, {
+        situation: directive.situation ?? 'respond to the player',
+        playerInput,
+        moment,
+        wasDormant,
+      });
+
+      const reply = await new NpcAgent({ session, bound, threadLog, storyId: story.id }).respond(ctx, { turnId, signal });
+      this.applyReveals(obj.id, reply, turnId);
+      agents.appendMessage(session.id, { role: 'assistant', content: JSON.stringify(reply), turnId });
+      return { name: obj.name, objectId: obj.id, reply };
+    } catch (err) {
+      logger.warn('npc consult failed', { story: story.id, npc: obj.name, err: (err as Error).message });
+      return { name: obj.name, objectId: obj.id, error: (err as Error).message };
+    }
+  }
+
+  /** revealsFactIds → grant the player knowledge of those facts. */
+  private applyReveals(npcObjectId: string, reply: NpcReply, turnId: string): void {
+    for (const factId of reply.revealsFactIds ?? []) {
+      const fact = this.deps.memory.getFact(factId);
+      if (fact) this.deps.memory.linkKnowledge(factId, { type: 'player' }, { learnedTurnId: turnId });
+    }
+  }
+
+  private applySceneDirectives(storyId: string, directives: Directive[]): void {
+    for (const d of directives) {
+      if (d.type === 'scene_break') {
+        breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, { title: d.title, carryNpcs: this.resolveNames(storyId, d.carryNpcs) });
+      } else if (d.type === 'npc_enter') {
+        npcEnter(this.npcDeps(), storyId, d.name);
+      } else if (d.type === 'npc_exit') {
+        npcExit(this.npcDeps(), storyId, d.name);
+      }
+      // roll — post-MVP.
+    }
+  }
+
+  private resolveNames(storyId: string, names?: string[]): string[] {
+    if (!names) return [];
+    return names.map((n) => resolveNpc(this.npcDeps(), storyId, n)?.id).filter((x): x is string => !!x);
+  }
+
+  /** A delta forwarder that suppresses everything from the first ``` fence onward. */
+  private makeGate(out: TurnEmitter) {
+    let acc = '';
+    let sent = 0;
+    return {
+      onDelta: (chunk: string) => {
+        acc += chunk;
+        const display = acc.split('```')[0];
+        if (display.length > sent) {
+          out.delta(display.slice(sent));
+          sent = display.length;
+        }
+      },
+      reset: () => {
+        acc = '';
+        sent = 0;
+      },
+      replay: (text: string) => {
+        for (let i = 0; i < text.length; i += 24) out.delta(text.slice(i, i + 24));
+      },
+    };
   }
 }

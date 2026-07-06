@@ -11,6 +11,9 @@ import { createMemoryStore } from './db/stores/memoryStore.ts';
 import { createSuggestionStore } from './db/stores/suggestionStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
+import { createSettingsService } from './config/settingsService.ts';
+import type { SettingsService } from './config/settingsService.ts';
+import { setPromptOverrideProvider } from './agents/prompts.ts';
 import { createContextBuilder } from './orchestrator/contextBuilder.ts';
 import { TurnPipeline } from './orchestrator/turnPipeline.ts';
 import { JobWorker } from './orchestrator/postTurn.ts';
@@ -33,6 +36,7 @@ export interface App {
   jobs: ReturnType<typeof createJobStore>;
   memory: ReturnType<typeof createMemoryStore>;
   suggestions: ReturnType<typeof createSuggestionStore>;
+  settingsService: SettingsService;
   registry: LlmRegistry;
   pipeline: TurnPipeline;
   worker: JobWorker;
@@ -52,9 +56,15 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const jobs = createJobStore(db);
   const memory = createMemoryStore(db);
   const suggestions = createSuggestionStore(db);
-  const registry = createRegistry(config, opts.driverFactory);
+
+  // Runtime settings: seed from config.json, then the DB is the source of truth.
+  // The registry reads the compiled effective config live, and prompt overrides
+  // route through the settings service.
+  const settingsService = createSettingsService(settings, config);
+  setPromptOverrideProvider((name) => settingsService.promptOverride(name));
+  const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
   const contexts = createContextBuilder({ stories, summaries, memory });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, registry, contexts, events });
+  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, registry, contexts, events });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events);
@@ -77,6 +87,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     jobs,
     memory,
     suggestions,
+    settingsService,
     registry,
     pipeline,
     worker,

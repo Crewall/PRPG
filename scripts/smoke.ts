@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   console.log(`✓ database opened at ${config.db.path} (${tableCount} tables, ${applied.length} migration(s) applied this run)`);
   db.close();
 
-  const registry = createRegistry(config);
+  const registry = createRegistry(() => config);
   const providers = Object.keys(config.providers) as ProviderKind[];
 
   let failures = 0;

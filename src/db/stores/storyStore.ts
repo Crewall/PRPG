@@ -194,6 +194,23 @@ export function createStoryStore(db: Db) {
     closeScene(sceneId: string): void {
       db.prepare(`UPDATE scenes SET status = 'closed', updated_at = ? WHERE id = ?`).run(Date.now(), sceneId);
     },
+
+    setActiveNpcs(sceneId: string, npcIds: string[]): void {
+      db.prepare(`UPDATE scenes SET active_npc_ids = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(Array.from(new Set(npcIds))), Date.now(), sceneId);
+    },
+
+    addActiveNpc(sceneId: string, npcObjectId: string): void {
+      const scene = this.getScene(sceneId);
+      if (!scene) return;
+      if (scene.activeNpcIds.includes(npcObjectId)) return;
+      this.setActiveNpcs(sceneId, [...scene.activeNpcIds, npcObjectId]);
+    },
+
+    removeActiveNpc(sceneId: string, npcObjectId: string): void {
+      const scene = this.getScene(sceneId);
+      if (!scene) return;
+      this.setActiveNpcs(sceneId, scene.activeNpcIds.filter((n) => n !== npcObjectId));
+    },
   };
 }
 

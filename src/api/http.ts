@@ -4,6 +4,11 @@ import type { App } from '../app.ts';
 import { StorySettings } from '../domain.ts';
 import { NewMemoryObject, NewFact, DetailLevel } from '../memory/model.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
+import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
+import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
+import { defaultPrompt } from '../agents/prompts.ts';
+import { anthropicDriver } from '../llm/anthropicDriver.ts';
+import { openaiDriver } from '../llm/openaiDriver.ts';
 
 const CreateStoryBody = z.object({
   title: z.string().min(1).default('Untitled Story'),
@@ -285,5 +290,124 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return memory.getObjectView(obj.id, { kind: 'perception' });
   });
 
+  // ---- Layer 4: NPC agents (promote/demote, session list) ----
+  const npcDeps = { stories, agents: app.agents, memory, registry, events: app.events };
+
+  server.get('/api/stories/:id/agents', async (req) => {
+    const { id } = req.params as { id: string };
+    return app.agents.listSessions(id).map((s) => ({
+      ...s,
+      messageCount: app.agents.countMessages(s.id),
+      npc: s.npcObjectId ? memory.getObject(s.npcObjectId)?.name : undefined,
+    }));
+  });
+
+  server.post('/api/stories/:id/npcs/:oid/promote', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    if (!promoteNpc(npcDeps, id, oid)) {
+      reply.code(404);
+      return { error: 'character not found' };
+    }
+    return { ok: true };
+  });
+
+  server.post('/api/stories/:id/npcs/:oid/demote', async (req) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    demoteNpc(npcDeps, id, oid);
+    return { ok: true };
+  });
+
   server.get('/api/system/settings', async () => app.settings.all());
+
+  // ---- Settings: providers/keys, favourites, per-role models & params, prompts ----
+  const svc = app.settingsService;
+
+  server.get('/api/settings/config', async () => svc.publicView());
+
+  const SaveConfigBody = z.object({
+    providers: z
+      .object({
+        anthropic: z.object({ apiKey: z.string().optional(), baseUrl: z.string().optional() }).optional(),
+        openai_compat: z.object({ apiKey: z.string().optional(), baseUrl: z.string().optional() }).optional(),
+      })
+      .optional(),
+    favourites: z.array(z.object({ id: z.string(), label: z.string(), provider: z.enum(['anthropic', 'openai_compat']), model: z.string() })).optional(),
+    roles: z.record(z.string(), z.object({ favouriteId: z.string(), temperature: z.number(), maxTokens: z.number().int() })).optional(),
+  });
+
+  server.put('/api/settings/config', async (req, reply) => {
+    const body = SaveConfigBody.parse(req.body);
+    try {
+      svc.update(body as never);
+      return svc.publicView();
+    } catch (err) {
+      reply.code(400);
+      return { error: (err as Error).message };
+    }
+  });
+
+  // Test a provider key with a tiny live completion. Accepts an ad-hoc apiKey/
+  // baseUrl to test a key before saving; otherwise uses the saved provider.
+  const TestBody = z.object({
+    provider: z.enum(['anthropic', 'openai_compat']),
+    model: z.string().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+  });
+  server.post('/api/settings/test', async (req) => {
+    const body = TestBody.parse(req.body);
+    const rt = svc.get();
+    const saved = rt.providers[body.provider];
+    const apiKey = body.apiKey?.trim() || saved?.apiKey;
+    const baseUrl = body.baseUrl?.trim() || saved?.baseUrl || undefined;
+    if (!apiKey) return { ok: false, error: 'no API key set for this provider' };
+    const model = body.model || rt.favourites.find((f) => f.provider === body.provider)?.model;
+    if (!model) return { ok: false, error: 'no model to test — add a favourite for this provider first' };
+
+    const driver =
+      body.provider === 'anthropic'
+        ? anthropicDriver({ apiKey, baseUrl: baseUrl || 'https://api.anthropic.com', timeoutMs: 30_000 })
+        : openaiDriver({ apiKey, baseUrl: baseUrl || 'https://api.openai.com/v1', timeoutMs: 30_000 });
+    const t0 = Date.now();
+    try {
+      const res = await driver.chat({ model, system: 'Connectivity test.', messages: [{ role: 'user', content: 'Reply with the single word: OK' }], maxTokens: 5, temperature: 0 });
+      return { ok: true, latencyMs: Date.now() - t0, model, sample: res.text.trim().slice(0, 40) };
+    } catch (err) {
+      return { ok: false, latencyMs: Date.now() - t0, model, error: (err as Error).message };
+    }
+  });
+
+  // Prompts (editable per role).
+  server.get('/api/settings/prompts', async () =>
+    EDITABLE_PROMPTS.map((p) => ({ ...p, overridden: svc.get().prompts[p.name] !== undefined })),
+  );
+
+  server.get('/api/settings/prompts/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    if (!EDITABLE_PROMPTS.some((p) => p.name === name)) {
+      reply.code(404);
+      return { error: 'unknown prompt' };
+    }
+    const override = svc.get().prompts[name];
+    return { name, content: override ?? defaultPrompt(name), default: defaultPrompt(name), overridden: override !== undefined };
+  });
+
+  server.put('/api/settings/prompts/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    if (!EDITABLE_PROMPTS.some((p) => p.name === name)) {
+      reply.code(404);
+      return { error: 'unknown prompt' };
+    }
+    const { content } = z.object({ content: z.string() }).parse(req.body);
+    svc.update({ prompts: { ...svc.get().prompts, [name]: content } });
+    return { ok: true };
+  });
+
+  server.delete('/api/settings/prompts/:name', async (req) => {
+    const { name } = req.params as { name: string };
+    const prompts = { ...svc.get().prompts };
+    delete prompts[name];
+    svc.update({ prompts });
+    return { ok: true };
+  });
 }

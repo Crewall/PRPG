@@ -37,7 +37,12 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 - **Layer 1 — Minimal playable (server, storyteller, chat UI):** ✅ implemented.
 - **Layer 2 — Story compression (job queue, scribe_story, bounded context):** ✅ implemented.
 - **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
-- Layers 4–6 (NPC agents, overseer, debug/polish): designed in `docs/`, not yet built.
+- **Layer 4 — NPC agents (personas, isolation, consult loop):** ✅ implemented.
+- Layers 5–6 (rule overseer, debug/polish): designed in `docs/`, not yet built.
+- **Settings UI (extra):** in-app page to set provider API keys (with a live
+  "test key" button), curate a favourites list of models, pick a model +
+  temperature + max-tokens per AI role, and edit each role's prompt. All
+  persisted in the DB and auto-loaded; `config.json` is just the initial seed.
 
 ## Running it
 

@@ -3,16 +3,29 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'prompts');
-const cache = new Map<string, string>();
+const fileCache = new Map<string, string>();
 
-/** Load a versioned prompt template from src/agents/prompts/<name>.md. */
-export function loadPrompt(name: string): string {
-  let tpl = cache.get(name);
+// Runtime prompt overrides (edited from the Settings UI). When set for a name,
+// the override text is used instead of the on-disk template.
+let overrideProvider: (name: string) => string | undefined = () => undefined;
+
+export function setPromptOverrideProvider(fn: (name: string) => string | undefined): void {
+  overrideProvider = fn;
+}
+
+/** The on-disk default template for a prompt (ignores overrides). */
+export function defaultPrompt(name: string): string {
+  let tpl = fileCache.get(name);
   if (tpl === undefined) {
     tpl = readFileSync(join(PROMPTS_DIR, `${name}.md`), 'utf8');
-    cache.set(name, tpl);
+    fileCache.set(name, tpl);
   }
   return tpl;
+}
+
+/** Load a prompt template — an override if one is set, else the on-disk default. */
+export function loadPrompt(name: string): string {
+  return overrideProvider(name) ?? defaultPrompt(name);
 }
 
 /** Render a template, substituting {{key}} placeholders. Unknown keys become ''. */
