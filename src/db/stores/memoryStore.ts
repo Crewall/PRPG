@@ -2,7 +2,8 @@ import type { Db, Row } from '../db.ts';
 import { id } from '../../util/id.ts';
 import { estimateTokens } from '../../util/tokens.ts';
 import { discloseFact } from '../../memory/knowledge.ts';
-import type { KnowledgeScope, KnowledgeLink, Knower, MemoryFact, MemoryObject, NewFact, NewMemoryObject, ObjectView } from '../../memory/model.ts';
+import { tierRank, tierWithin } from '../../memory/model.ts';
+import type { FactTier, KnowledgeScope, KnowledgeLink, Knower, MemoryFact, MemoryObject, NewFact, NewMemoryObject, ObjectView } from '../../memory/model.ts';
 
 const DEFAULT_MAX_FACTS = 30; // facts per object per view (doc 05 budget)
 
@@ -32,6 +33,7 @@ function rowToFact(r: Row): MemoryFact {
     category: r.category as string,
     subcategory: (r.subcategory as string) ?? null,
     detailLevel: r.detail_level as MemoryFact['detailLevel'],
+    tier: ((r.tier as string) || 'mid') as FactTier,
     content: r.content as string,
     sourceTurnId: (r.source_turn_id as string) ?? null,
     supersedesId: (r.supersedes_id as string) ?? null,
@@ -112,9 +114,9 @@ export function createMemoryStore(db: Db) {
       const now = Date.now();
       const fid = id();
       db.prepare(
-        `INSERT INTO memory_facts (id, object_id, category, subcategory, detail_level, content, source_turn_id, supersedes_id, superseded, confidence, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-      ).run(fid, f.objectId, f.category, f.subcategory ?? null, f.detailLevel, f.content, f.sourceTurnId ?? null, f.supersedesId ?? null, f.confidence ?? 1, now, now);
+        `INSERT INTO memory_facts (id, object_id, category, subcategory, detail_level, tier, content, source_turn_id, supersedes_id, superseded, confidence, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      ).run(fid, f.objectId, f.category, f.subcategory ?? null, f.detailLevel, f.tier ?? 'mid', f.content, f.sourceTurnId ?? null, f.supersedesId ?? null, f.confidence ?? 1, now, now);
       db.prepare(`UPDATE memory_objects SET updated_at = ? WHERE id = ?`).run(now, f.objectId);
       return store.getFact(fid)!;
     },
@@ -131,13 +133,14 @@ export function createMemoryStore(db: Db) {
       return rows.map(rowToFact);
     },
 
-    updateFact(factId: string, patch: Partial<Pick<MemoryFact, 'category' | 'subcategory' | 'detailLevel' | 'content' | 'confidence' | 'superseded'>>): MemoryFact | undefined {
+    updateFact(factId: string, patch: Partial<Pick<MemoryFact, 'category' | 'subcategory' | 'detailLevel' | 'tier' | 'content' | 'confidence' | 'superseded'>>): MemoryFact | undefined {
       const existing = store.getFact(factId);
       if (!existing) return undefined;
-      db.prepare(`UPDATE memory_facts SET category = ?, subcategory = ?, detail_level = ?, content = ?, confidence = ?, superseded = ?, updated_at = ? WHERE id = ?`).run(
+      db.prepare(`UPDATE memory_facts SET category = ?, subcategory = ?, detail_level = ?, tier = ?, content = ?, confidence = ?, superseded = ?, updated_at = ? WHERE id = ?`).run(
         patch.category ?? existing.category,
         patch.subcategory ?? existing.subcategory,
         patch.detailLevel ?? existing.detailLevel,
+        patch.tier ?? existing.tier,
         patch.content ?? existing.content,
         patch.confidence ?? existing.confidence,
         patch.superseded !== undefined ? (patch.superseded ? 1 : 0) : existing.superseded ? 1 : 0,
@@ -199,7 +202,7 @@ export function createMemoryStore(db: Db) {
     },
 
     // ---- The scoped view: the single choke point for detail-level filtering ----
-    getObjectView(objectId: string, scope: KnowledgeScope, opts: { categories?: string[]; maxTokens?: number; maxFacts?: number } = {}): ObjectView | undefined {
+    getObjectView(objectId: string, scope: KnowledgeScope, opts: { categories?: string[]; maxTokens?: number; maxFacts?: number; maxTier?: FactTier } = {}): ObjectView | undefined {
       const obj = store.getObject(objectId);
       if (!obj) return undefined;
 
@@ -211,20 +214,22 @@ export function createMemoryStore(db: Db) {
           const disc = discloseFact(f, links.get(f.id) ?? [], scope);
           if (!disc.visible) return null;
           if (opts.categories && !opts.categories.includes(f.category)) return null;
+          if (opts.maxTier && !tierWithin(f.tier, opts.maxTier)) return null;
           return {
             id: f.id,
             category: f.category,
             subcategory: f.subcategory ?? undefined,
             content: disc.distortion ?? f.content,
             detailLevel: f.detailLevel,
+            tier: f.tier,
             confidence: f.confidence,
             updatedAt: f.updatedAt,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      // Rank (confidence, then recency) and cap facts per view.
-      disclosed.sort((a, b) => b.confidence - a.confidence || b.updatedAt - a.updatedAt);
+      // Rank (tier — major first, then confidence, then recency) and cap facts per view.
+      disclosed.sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || b.confidence - a.confidence || b.updatedAt - a.updatedAt);
       const maxFacts = opts.maxFacts ?? DEFAULT_MAX_FACTS;
       disclosed = disclosed.slice(0, maxFacts);
 
@@ -247,8 +252,27 @@ export function createMemoryStore(db: Db) {
         name: obj.name,
         aliases: obj.aliases,
         summary: obj.summary,
-        facts: disclosed.map((f) => ({ id: f.id, category: f.category, subcategory: f.subcategory, content: f.content, detailLevel: f.detailLevel })),
+        facts: disclosed.map((f) => ({ id: f.id, category: f.category, subcategory: f.subcategory, content: f.content, detailLevel: f.detailLevel, tier: f.tier })),
       };
+    },
+
+    /**
+     * All live facts in a category across a story (e.g. 'goals' for the
+     * summary-driven context's "current goals" block). Storyteller scope —
+     * callers that need player/NPC scoping should go through views instead.
+     */
+    factsByCategory(storyId: string, categories: string[]): { objectId: string; objectName: string; fact: MemoryFact }[] {
+      if (categories.length === 0) return [];
+      const placeholders = categories.map(() => '?').join(',');
+      const rows = db
+        .prepare(
+          `SELECT mf.*, mo.name AS obj_name
+           FROM memory_facts mf JOIN memory_objects mo ON mo.id = mf.object_id
+           WHERE mo.story_id = ? AND mf.category IN (${placeholders}) AND mf.superseded = 0
+           ORDER BY mo.salience DESC, mf.updated_at DESC`,
+        )
+        .all<Row>(storyId, ...categories);
+      return rows.map((r) => ({ objectId: r.object_id as string, objectName: r.obj_name as string, fact: rowToFact(r) }));
     },
 
     /**

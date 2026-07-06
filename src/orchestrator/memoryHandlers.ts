@@ -49,6 +49,7 @@ export function createScribeMemoryHandler(deps: HandlerDeps): JobHandler {
       { playerInput: turn.playerInput, narration: turn.narration, presentNpcIds, snapshot },
       { turnId },
     );
+    if (!deps.stories.getTurn(turnId)) return; // turn rewound while extracting — discard
 
     const affected = applyMemoryDelta(deps, storyId, turnId, delta);
 
@@ -62,7 +63,7 @@ export function createScribeMemoryHandler(deps: HandlerDeps): JobHandler {
 }
 
 /** Apply a MemoryDelta with trust-but-verify post-processing. Returns affected object ids. */
-export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: string, delta: MemoryDelta): string[] {
+export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: string | null, delta: MemoryDelta): string[] {
   return deps.db.transaction(() => {
     const tempMap = new Map<string, string>(); // tempId -> real object id
     const affected = new Set<string>();
@@ -94,9 +95,10 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
         category: nf.category,
         subcategory: nf.subcategory,
         detailLevel: nf.detailLevel,
+        tier: nf.tier,
         content: nf.content,
         confidence: nf.confidence,
-        sourceTurnId: turnId,
+        sourceTurnId: turnId ?? undefined,
       };
       const supersedeId = nf.supersedesFactId && deps.memory.getFact(nf.supersedesFactId) ? nf.supersedesFactId : undefined;
       const fact = supersedeId ? deps.memory.supersedeFact(supersedeId, factInput) : deps.memory.addFact(factInput);
@@ -107,10 +109,10 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
       if (nf.detailLevel !== 'hidden') {
         for (const knower of nf.knownBy) {
           if (knower === 'player') {
-            deps.memory.linkKnowledge(fact.id, { type: 'player' }, { learnedTurnId: turnId });
+            deps.memory.linkKnowledge(fact.id, { type: 'player' }, { learnedTurnId: turnId ?? undefined });
           } else {
             const npcId = tempMap.get(knower) ?? (deps.memory.getObject(knower) ? knower : undefined);
-            if (npcId) deps.memory.linkKnowledge(fact.id, { type: 'npc', npcObjectId: npcId }, { learnedTurnId: turnId });
+            if (npcId) deps.memory.linkKnowledge(fact.id, { type: 'npc', npcObjectId: npcId }, { learnedTurnId: turnId ?? undefined });
           }
         }
       }
@@ -136,6 +138,39 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
 
     return Array.from(affected);
   });
+}
+
+/**
+ * archive_faded handler (feature 3). When the story scribe drops ("fades out")
+ * details from a summary, they are handed here and objectified into long-term
+ * memory via the memory scribe — nothing important (or unimportant) is lost,
+ * it just moves from the summary into memory.
+ */
+export function createArchiveFadedHandler(deps: HandlerDeps): JobHandler {
+  return async (job: Job) => {
+    const storyId = job.storyId!;
+    if (!deps.stories.getStory(storyId)) return;
+    const items = ((job.payload.items as string[]) ?? []).map((s) => String(s).trim()).filter(Boolean);
+    if (!items.length) return;
+
+    const text = items.map((s) => `- ${s}`).join('\n');
+    const { snapshot } = buildSnapshot(deps, storyId, text);
+    const agent = scribeMemoryAgent(deps, storyId);
+    const delta: MemoryDelta = await agent.extract(
+      {
+        playerInput: '',
+        narration:
+          `(Archival pass — these past events/details are fading out of the story summary. ` +
+          `Record anything durable as objects and facts so it is not lost. These already happened; the player witnessed them.)\n${text}`,
+        presentNpcIds: [],
+        snapshot,
+      },
+      {},
+    );
+    if (!deps.stories.getStory(storyId)) return;
+    const affected = applyMemoryDelta(deps, storyId, null, delta);
+    if (affected.length) deps.events.emit({ t: 'memory.updated', storyId, objectIds: affected });
+  };
 }
 
 /**

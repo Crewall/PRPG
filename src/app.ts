@@ -9,6 +9,7 @@ import { createSummaryStore } from './db/stores/summaryStore.ts';
 import { createJobStore } from './db/stores/jobStore.ts';
 import { createMemoryStore } from './db/stores/memoryStore.ts';
 import { createSuggestionStore } from './db/stores/suggestionStore.ts';
+import { createSnapshotStore } from './db/stores/snapshotStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
 import { createSettingsService } from './config/settingsService.ts';
@@ -18,7 +19,7 @@ import { createContextBuilder } from './orchestrator/contextBuilder.ts';
 import { TurnPipeline } from './orchestrator/turnPipeline.ts';
 import { JobWorker } from './orchestrator/postTurn.ts';
 import { createScribeStoryHandler } from './orchestrator/handlers.ts';
-import { createScribeMemoryHandler, createMemoryMaintenanceHandler } from './orchestrator/memoryHandlers.ts';
+import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler } from './orchestrator/memoryHandlers.ts';
 import { EventBus } from './util/events.ts';
 
 // The wired application: stores + registry + orchestrator + job worker. Built
@@ -36,6 +37,7 @@ export interface App {
   jobs: ReturnType<typeof createJobStore>;
   memory: ReturnType<typeof createMemoryStore>;
   suggestions: ReturnType<typeof createSuggestionStore>;
+  snapshots: ReturnType<typeof createSnapshotStore>;
   settingsService: SettingsService;
   registry: LlmRegistry;
   pipeline: TurnPipeline;
@@ -56,6 +58,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const jobs = createJobStore(db);
   const memory = createMemoryStore(db);
   const suggestions = createSuggestionStore(db);
+  const snapshots = createSnapshotStore(db);
 
   // Runtime settings: seed from config.json, then the DB is the source of truth.
   // The registry reads the compiled effective config live, and prompt overrides
@@ -64,7 +67,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
   const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
   const contexts = createContextBuilder({ stories, summaries, memory });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, registry, contexts, events });
+  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, registry, contexts, events });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events);
@@ -72,6 +75,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   worker.register('scribe_story', createScribeStoryHandler(handlerDeps));
   worker.register('scribe_memory', createScribeMemoryHandler(handlerDeps));
   worker.register('memory_maintenance', createMemoryMaintenanceHandler(handlerDeps));
+  worker.register('archive_faded', createArchiveFadedHandler(handlerDeps));
 
   if (opts.startWorker !== false) worker.start();
 
@@ -87,6 +91,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     jobs,
     memory,
     suggestions,
+    snapshots,
     settingsService,
     registry,
     pipeline,

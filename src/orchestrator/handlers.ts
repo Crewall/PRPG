@@ -52,10 +52,13 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
       const sceneSummary = deps.summaries.getSceneSummary(sceneId)?.content ?? '';
       if (!sceneSummary.trim()) return; // nothing to fold
       const prevDigest = deps.summaries.getStoryDigest(storyId)?.content ?? '';
-      const digest = await agent.foldDigest({ previousDigest: prevDigest, closedSceneSummary: sceneSummary, maxTokens: budgets.digestTokens });
+      const { storyDigest, fadedOut } = await agent.foldDigest({ previousDigest: prevDigest, closedSceneSummary: sceneSummary, maxTokens: budgets.digestTokens });
+      if (!deps.stories.getStory(storyId)) return; // story deleted while summarizing
       const maxIdx = deps.stories.nextTurnIndex(storyId) - 1;
-      deps.summaries.upsertStoryDigest(storyId, digest, maxIdx);
+      deps.summaries.upsertStoryDigest(storyId, storyDigest, maxIdx);
       deps.events.emit({ t: 'summary.updated', storyId, scope: 'story' });
+      // Feature 3: whatever faded out of the digest gets archived into memory.
+      if (fadedOut.length) deps.jobs.enqueue('archive_faded', { storyId, payload: { items: fadedOut } });
       return;
     }
 
@@ -72,7 +75,7 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
       .filter((t) => t.sceneId === turn.sceneId && t.index <= turn.index && t.status === 'complete');
     if (newTurns.length === 0) return;
 
-    const sceneSummary = await agent.summarizeScene(
+    const { sceneSummary, fadedOut } = await agent.summarizeScene(
       {
         previousSummary: prev?.content ?? '',
         newTurns: newTurns.map((t) => ({ playerInput: t.playerInput, narration: t.narration })),
@@ -80,7 +83,10 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
       },
       { turnId },
     );
+    if (!deps.stories.getTurn(turnId)) return; // turn rewound while summarizing — discard
     deps.summaries.upsertSceneSummary(storyId, turn.sceneId, sceneSummary, turn.index);
     deps.events.emit({ t: 'summary.updated', storyId, scope: 'scene' });
+    // Feature 3: details that faded out of the scene summary get archived into memory.
+    if (fadedOut.length) deps.jobs.enqueue('archive_faded', { storyId, payload: { items: fadedOut } });
   };
 }

@@ -162,6 +162,15 @@ export function createStoryStore(db: Db) {
         .map(rowToTurn);
     },
 
+    lastTurn(storyId: string): Turn | undefined {
+      const r = db.prepare(`SELECT * FROM turns WHERE story_id = ? ORDER BY idx DESC LIMIT 1`).get<Row>(storyId);
+      return r ? rowToTurn(r) : undefined;
+    },
+
+    deleteTurn(turnId: string): void {
+      db.prepare(`DELETE FROM turns WHERE id = ?`).run(turnId);
+    },
+
     recentTurns(storyId: string, k: number): Turn[] {
       // Last K completed/streaming turns in chronological order.
       const rows = db

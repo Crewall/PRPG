@@ -9,6 +9,7 @@ export const RoleName = z.enum([
   'scribe_memory',
   'scribe_story',
   'overseer',
+  'context_planner',
 ]);
 export type RoleName = z.infer<typeof RoleName>;
 

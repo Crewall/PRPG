@@ -1,8 +1,8 @@
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
 import { normalizeName } from '../db/stores/memoryStore.ts';
 import { discloseFact } from './knowledge.ts';
-import { renderObjectView } from './model.ts';
-import type { KnowledgeScope, ObjectView } from './model.ts';
+import { renderObjectView, tierWithin } from './model.ts';
+import type { FactTier, KnowledgeScope, ObjectView } from './model.ts';
 import { estimateTokens } from '../util/tokens.ts';
 
 export interface RankedFact {
@@ -11,6 +11,7 @@ export interface RankedFact {
   objectName: string;
   category: string;
   content: string;
+  tier: FactTier;
   score: number;
 }
 
@@ -23,10 +24,15 @@ export interface RetrievalOpts {
   maxTokens?: number; // total budget for the retrieved block
   perObjectTokens?: number; // budget for each entity view
   scoreWeights?: { bm25: number; salience: number; recency: number };
+  /** Deepest tier to include: 'major' → majors only; 'mid' → major+mid; 'minor' → all. */
+  maxTier?: FactTier;
 }
 
 // Weights for the lexical score (doc 05): bm25·w1 + salience·w2 + recency·w3.
 const DEFAULT_WEIGHTS = { bm25: 1.0, salience: 0.6, recency: 0.4 };
+
+// Tier bonus on top of the lexical score — conspicuous facts surface first.
+const TIER_BONUS: Record<FactTier, number> = { major: 0.3, mid: 0.15, minor: 0 };
 
 /**
  * searchFacts (doc 05): find the facts an agent needs for the turn about to be
@@ -48,7 +54,7 @@ export function searchFacts(memory: MemoryStore, storyId: string, scope: Knowled
     const names = [obj.name, ...obj.aliases].map(normalizeName).filter((n) => n.length > 1);
     const hit = names.some((n) => normQuery.includes(` ${n} `));
     if (hit) {
-      const view = memory.getObjectView(obj.id, scope, { maxTokens: perObjectTokens });
+      const view = memory.getObjectView(obj.id, scope, { maxTokens: perObjectTokens, maxTier: opts.maxTier });
       if (view && (view.facts.length > 0 || view.summary)) {
         entities.push(view);
         entityIds.add(obj.id);
@@ -68,6 +74,7 @@ export function searchFacts(memory: MemoryStore, storyId: string, scope: Knowled
     const obj = objById.get(hit.objectId);
     const fact = memory.getFact(hit.factId);
     if (!obj || !fact) continue;
+    if (opts.maxTier && !tierWithin(fact.tier, opts.maxTier)) continue;
 
     // 3. Scope filter — same rules as views.
     const links = memory.linksForFacts([fact.id]).get(fact.id) ?? [];
@@ -78,9 +85,9 @@ export function searchFacts(memory: MemoryStore, storyId: string, scope: Knowled
     const bm25Norm = 1 - Math.abs(hit.rank) / (worstBm25 + 1e-6);
     const ageDays = fact.sourceTurnId ? (now - fact.updatedAt) / 86_400_000 : (now - fact.updatedAt) / 86_400_000;
     const recency = 1 / (1 + ageDays);
-    const score = weights.bm25 * bm25Norm + weights.salience * obj.salience + weights.recency * recency;
+    const score = weights.bm25 * bm25Norm + weights.salience * obj.salience + weights.recency * recency + TIER_BONUS[fact.tier];
 
-    ranked.push({ factId: fact.id, objectId: obj.id, objectName: obj.name, category: fact.category, content: disc.distortion ?? fact.content, score });
+    ranked.push({ factId: fact.id, objectId: obj.id, objectName: obj.name, category: fact.category, content: disc.distortion ?? fact.content, tier: fact.tier, score });
   }
 
   ranked.sort((a, b) => b.score - a.score);

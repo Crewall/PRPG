@@ -7,6 +7,7 @@ import type { SummaryStore } from '../db/stores/summaryStore.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
 import { searchFacts, renderRetrieval } from '../memory/retrieval.ts';
 import { renderObjectView } from '../memory/model.ts';
+import type { ContextPlan } from '../agents/contextPlanner.ts';
 import type { Story } from '../domain.ts';
 
 // Placeholder marker used when the player submits an empty turn (auto-open).
@@ -21,6 +22,8 @@ export function truncateToTokens(text: string, maxTokens: number): string {
 export interface StorytellerContextExtras {
   /** Extra system-prompt sections injected by later layers (scene state, retrieved memory). */
   sections?: { heading: string; body: string; budgetTokens: number }[];
+  /** Retrieval plan from the context_planner (summary-driven mode, feature 4). */
+  plan?: ContextPlan;
 }
 
 export interface NpcConsultContext {
@@ -74,6 +77,10 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
   return {
     forStoryteller(story: Story, playerInput: string, extras?: StorytellerContextExtras): BuiltContext {
       const b = story.settings.budgets;
+      // Feature 4: summary-driven mode replaces the last-K raw turns with
+      // summary + prompt + scene characters + goals + planner-guided retrieval.
+      const summaryDriven = story.settings.context.summaryDriven;
+      const plan = extras?.plan;
 
       // --- System prompt: persona + premise + compressed history + injected sections ---
       const parts: string[] = [
@@ -121,8 +128,36 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
         );
       }
 
-      // --- Retrieved memory: storyteller sees everything, incl. hidden facts. ---
-      const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, playerInput, { maxTokens: b.retrievedMemoryTokens });
+      // --- Current goals (summary-driven mode): what everyone is after right now. ---
+      if (summaryDriven) {
+        const goals = memory.factsByCategory(story.id, ['goals', 'goal']).slice(0, 20);
+        if (goals.length) {
+          const lines = goals.map((g) => `- ${g.objectName}: ${g.fact.content}`);
+          parts.push(`## Current goals\n${truncateToTokens(lines.join('\n'), 300)}`);
+        }
+      }
+
+      // --- Focus objects requested by the context planner: full scoped views. ---
+      if (summaryDriven && plan?.focusObjects?.length) {
+        const seen = new Set<string>();
+        const blocks: string[] = [];
+        for (const name of plan.focusObjects) {
+          const obj = memory.findByName(story.id, name);
+          if (!obj || seen.has(obj.id)) continue;
+          seen.add(obj.id);
+          const view = memory.getObjectView(obj.id, { kind: 'storyteller' }, { maxTokens: 300, maxTier: plan.depth });
+          if (view && (view.facts.length || view.summary)) blocks.push(renderObjectView(view));
+        }
+        if (blocks.length) parts.push(`## In focus this turn\n${truncateToTokens(blocks.join('\n\n'), b.retrievedMemoryTokens)}`);
+      }
+
+      // --- Retrieved memory: storyteller sees everything, incl. hidden facts.
+      // In summary-driven mode the planner widens the query and sets tier depth. ---
+      const queryText = summaryDriven && plan?.queries?.length ? [playerInput, ...plan.queries].join('\n') : playerInput;
+      const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, queryText, {
+        maxTokens: b.retrievedMemoryTokens,
+        maxTier: summaryDriven ? plan?.depth : undefined,
+      });
       const retrievedText = renderRetrieval(retrieval);
       if (retrievedText.trim()) {
         parts.push(`## Relevant memory (you know all of this — including secrets and hidden truths — use it to stay consistent and foreshadow)\n${retrievedText}`);
@@ -134,10 +169,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
 
       const system = parts.join('\n\n');
 
-      // --- Messages: last K raw turns verbatim + the new player input ---
-      const k = b.recentTurns;
-      const recent = stories.recentTurns(story.id, k);
+      // --- Messages. Full mode: last K raw turns verbatim + the new player
+      // input. Summary-driven mode: only the latest completed exchange (the
+      // beat the player is replying to — the rolling scene summary lags one
+      // scribe job behind) + the new player input.
       const messages: ChatMessage[] = [];
+      const recent = summaryDriven
+        ? stories.recentTurns(story.id, 4).filter((t) => t.status === 'complete').slice(-1)
+        : stories.recentTurns(story.id, b.recentTurns);
       for (const t of recent) {
         messages.push({ role: 'user', content: t.playerInput || BEGIN_MARKER });
         if (t.narration) messages.push({ role: 'assistant', content: t.narration });

@@ -98,7 +98,18 @@ async function renderPlay(storyId) {
   const input = h('textarea', { rows: '1', placeholder: 'What do you do?  (/look <name>, /scene, /retry)' });
   const sendBtn = h('button', { class: 'primary' }, 'Send');
   const cancelBtn = h('button', { class: 'ghost', disabled: true }, 'Stop');
+  const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, '↶ Edit');
   const drawer = h('div', { class: 'drawer' });
+
+  // Feature 4: per-story context mode. 'summary' feeds the storyteller the
+  // summaries + planner-picked memory instead of the raw chat history.
+  let ctxSummary = !!(story.settings?.context?.summaryDriven);
+  const ctxBtn = h('button', { class: 'ghost small', title: 'What the storyteller reads: recent chat history, or summary + memory' }, ctxSummary ? 'Ctx: summary' : 'Ctx: history');
+  ctxBtn.addEventListener('click', async () => {
+    ctxSummary = !ctxSummary;
+    await api.patch(`/api/stories/${storyId}`, { settings: { context: { summaryDriven: ctxSummary } } });
+    ctxBtn.textContent = ctxSummary ? 'Ctx: summary' : 'Ctx: history';
+  });
 
   const debugBtn = h('button', { class: 'ghost small' }, debug ? 'Debug: on' : 'Debug: off');
   debugBtn.addEventListener('click', async () => {
@@ -120,8 +131,8 @@ async function renderPlay(storyId) {
   const sceneHeader = h('div', { class: 'scene-header' }, h('span', { class: 'sub' }, 'Present:'), npcChips);
 
   app.replaceChildren(
-    topbar(sceneLabel, newSceneBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn))), drawer),
+    topbar(sceneLabel, newSceneBtn, ctxBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   let activeNpcIds = new Set();
@@ -143,7 +154,7 @@ async function renderPlay(storyId) {
       h('div', { class: 'modal' },
         h('h3', {}, view?.name || 'Unknown'),
         view?.summary ? h('div', { class: 'mem-summary' }, view.summary) : null,
-        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
+        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -152,12 +163,35 @@ async function renderPlay(storyId) {
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
 
-  // Load history.
-  try {
-    const turns = await api.get(`/api/stories/${storyId}/turns`);
-    if (!turns.length) transcript.append(h('div', { class: 'empty' }, 'Press Send (even empty) to open the story.'));
-    for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
-  } catch {}
+  // Load (or reload, after a rewind) the transcript from the server.
+  async function redrawTranscript() {
+    transcript.replaceChildren();
+    try {
+      const turns = await api.get(`/api/stories/${storyId}/turns`);
+      if (!turns.length) transcript.append(h('div', { class: 'empty' }, 'Press Send (even empty) to open the story.'));
+      for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
+    } catch {}
+  }
+  await redrawTranscript();
+
+  // Feature 1: delete the latest exchange (halting any in-flight response) and
+  // put the prompt back in the box for editing. State (summaries, memory, …)
+  // is restored server-side to before the message was sent.
+  let rewinding = false;
+  rewindBtn.addEventListener('click', async () => {
+    if (rewinding) return;
+    rewinding = true; rewindBtn.disabled = true;
+    try {
+      const r = await api.post(`/api/stories/${storyId}/rewind`);
+      current = null; setBusy(false);
+      await redrawTranscript();
+      if (r.playerInput) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
+      addStatus('(rewound — edit your message and send again)');
+      input.focus();
+      renderDrawer(); refreshSceneHeader();
+    } catch (e) { addStatus('rewind failed: ' + e.message); }
+    rewinding = false; rewindBtn.disabled = false;
+  });
 
   // ---- Drawer tabs (Memory always; Summaries/Threads under debug) ----
   let activeTab = 'memory';
@@ -222,6 +256,7 @@ async function renderPlay(storyId) {
     if (object.summary) factList.append(h('div', { class: 'mem-summary' }, object.summary));
     for (const f of facts) factList.append(h('div', { class: 'fact' },
       h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
+      h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
       h('span', { class: 'fcat' }, f.category), h('span', {}, f.content)));
     factList.append(h('details', { class: 'quickadd' }, h('summary', {}, '+ fact'), quickAddFact(object.id, refresh)));
     return card;
@@ -240,9 +275,10 @@ async function renderPlay(storyId) {
     const content = h('input', { placeholder: 'Fact content' });
     const cat = h('input', { placeholder: 'category', value: 'state' });
     const lvl = h('select', {}, ...['visible', 'known', 'secret', 'hidden'].map((l) => h('option', {}, l)));
+    const tier = h('select', {}, ...['major', 'mid', 'minor'].map((t) => h('option', { ...(t === 'mid' ? { selected: true } : {}) }, t)));
     const btn = h('button', { class: 'small primary' }, 'Add');
-    btn.addEventListener('click', async () => { if (!content.value) return; await api.post(`/api/memory/objects/${objectId}/facts`, { content: content.value, category: cat.value, detailLevel: lvl.value }); refresh(); });
-    return h('div', { class: 'form' }, content, cat, lvl, btn);
+    btn.addEventListener('click', async () => { if (!content.value) return; await api.post(`/api/memory/objects/${objectId}/facts`, { content: content.value, category: cat.value, detailLevel: lvl.value, tier: tier.value }); refresh(); });
+    return h('div', { class: 'form' }, content, cat, lvl, tier, btn);
   }
 
   async function renderSummaries(body) {
@@ -292,6 +328,7 @@ async function renderPlay(storyId) {
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
+      case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
     }
   };
@@ -344,7 +381,7 @@ async function renderPlay(storyId) {
 }
 
 // ---------------- Settings ----------------
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner' };
 const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compatible (OpenRouter, etc.)' };
 
 async function renderSettings() {

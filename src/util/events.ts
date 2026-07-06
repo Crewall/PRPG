@@ -8,6 +8,7 @@ export type ServerEvent =
   | { t: 'memory.updated'; storyId: string; objectIds: string[] }
   | { t: 'job.failed'; storyId: string | null; jobId: string; type: string }
   | { t: 'scene.changed'; storyId: string; sceneId: string }
+  | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }
   | { t: 'thread.activity'; storyId: string | null; entry: unknown };
 
 export class EventBus {
