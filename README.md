@@ -1,0 +1,38 @@
+# PRPG — AI-Orchestrated Roleplay Engine
+
+PRPG is a self-hostable, multi-agent AI roleplay engine. A player interacts with a
+**Storyteller** AI, while a set of hidden support agents (per-NPC personas, memory
+scribe, story compressor, rule overseer) run in parallel threads to keep the story
+consistent, persistent, and rule-abiding — all driven by an LLM API key the user
+supplies. It runs as a local web server, light enough for **Android via Termux**
+(same deployment model as SillyTavern).
+
+## Core capabilities
+
+| Capability | Description |
+|---|---|
+| Multi-agent threads | Separate AI sessions per role: storyteller, one per active NPC, memory scribe, story scribe, rule overseer |
+| Structured memory | Characters, objects, locations, events stored as memory objects with categories, subcategories and **detail levels** (e.g. only "visible" aspects returned when something is looked at) |
+| NPC isolation | Each NPC has its own persona and its own knowledge subset — NPCs never leak each other's knowledge |
+| Story compression | The story scribe keeps a rolling summary so prompts never need the full history; details are recovered from memory on demand |
+| Rule enforcement | Optional overseer validates outputs against user-defined rules and requests regeneration when violated |
+| Hidden threads | Support threads invisible to the player by default; a debug setting exposes every thread and prompt for troubleshooting |
+
+## Documentation / development plan
+
+The full design is in `docs/`, ordered as a reading path and as a build guideline:
+
+1. [`docs/01-tech-stack.md`](docs/01-tech-stack.md) — recommended languages, frameworks, storage, and why
+2. [`docs/02-architecture.md`](docs/02-architecture.md) — system architecture, processes, module layout
+3. [`docs/03-data-model.md`](docs/03-data-model.md) — entities, schemas, persistence layout
+4. [`docs/04-agents.md`](docs/04-agents.md) — every agent thread: role, inputs, outputs, prompt design
+5. [`docs/05-memory-system.md`](docs/05-memory-system.md) — memory objects, detail levels, retrieval, scribe pipeline
+6. [`docs/06-orchestration.md`](docs/06-orchestration.md) — the turn loop: how a player input flows through all agents
+7. [`docs/07-api-and-ui.md`](docs/07-api-and-ui.md) — HTTP/WebSocket API surface and the web client
+8. [`docs/08-roadmap.md`](docs/08-roadmap.md) — layered build plan: milestones, inputs/outputs, acceptance criteria
+
+## Quick architectural summary
+
+- **Backend:** Node.js + TypeScript (Fastify), SQLite storage, provider-agnostic LLM adapter
+- **Frontend:** static single-page web app (Svelte) served by the backend, used from any browser — including the phone's own browser when hosted in Termux
+- **Orchestration:** an in-process turn pipeline (no external agent framework) that fans out to agent sessions, each with independently constructed context
