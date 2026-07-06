@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { App } from '../app.ts';
 import { StorySettings } from '../domain.ts';
 import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
+import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
@@ -215,6 +216,9 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'object not found' };
     }
+    // Feature 6: something (very) similar already recorded → return it instead.
+    const dup = findNearDuplicate(memory.listFacts(oid), body.content);
+    if (dup) return { ...dup, duplicate: true };
     reply.code(201);
     return memory.addFact({ ...body, objectId: oid });
   });
@@ -232,10 +236,15 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return updated;
   });
 
+  // Default: soft-delete (mark superseded, keeps history). ?hard=true removes it.
   server.delete('/api/memory/facts/:fid', async (req) => {
     const { fid } = req.params as { fid: string };
+    const hard = (req.query as { hard?: string }).hard === 'true';
     const fact = memory.getFact(fid);
-    if (fact) memory.updateFact(fid, { superseded: true });
+    if (fact) {
+      if (hard) memory.deleteFact(fid);
+      else memory.updateFact(fid, { superseded: true });
+    }
     return { ok: true };
   });
 

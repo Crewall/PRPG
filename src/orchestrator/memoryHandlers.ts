@@ -4,6 +4,7 @@ import type { JobHandler } from './postTurn.ts';
 import { ScribeMemory } from '../agents/scribeMemory.ts';
 import type { MemoryDelta } from '../agents/scribeMemory.ts';
 import { renderObjectView } from '../memory/model.ts';
+import { findNearDuplicate } from '../memory/similarity.ts';
 import { normalizeName } from '../db/stores/memoryStore.ts';
 
 const MAX_NEW_FACTS_PER_TURN = 20; // doc 05 budget
@@ -90,6 +91,25 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
       if (added >= MAX_NEW_FACTS_PER_TURN) break;
       const objectId = tempMap.get(nf.objectId) ?? (deps.memory.getObject(nf.objectId) ? nf.objectId : undefined);
       if (!objectId) continue; // unresolved reference — skip
+
+      // Feature 6: dedupe — when this (or something very similar) is already
+      // recorded on the object, don't add it again; just extend who knows it.
+      if (!nf.supersedesFactId) {
+        const dup = findNearDuplicate(deps.memory.listFacts(objectId), nf.content);
+        if (dup) {
+          if (nf.detailLevel !== 'hidden') {
+            for (const knower of nf.knownBy) {
+              if (knower === 'player') deps.memory.linkKnowledge(dup.id, { type: 'player' }, { learnedTurnId: turnId ?? undefined });
+              else {
+                const npcId = tempMap.get(knower) ?? (deps.memory.getObject(knower) ? knower : undefined);
+                if (npcId) deps.memory.linkKnowledge(dup.id, { type: 'npc', npcObjectId: npcId }, { learnedTurnId: turnId ?? undefined });
+              }
+            }
+          }
+          continue;
+        }
+      }
+
       const factInput = {
         objectId,
         category: nf.category,

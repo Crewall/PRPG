@@ -150,6 +150,11 @@ export function createMemoryStore(db: Db) {
       return store.getFact(factId);
     },
 
+    /** Hard-delete a fact (FTS row via trigger, knowledge links via cascade). */
+    deleteFact(factId: string): void {
+      db.prepare(`DELETE FROM memory_facts WHERE id = ?`).run(factId);
+    },
+
     /** Flag oldId superseded (kept for history) and insert the replacement. */
     supersedeFact(oldId: string, f: NewFact): MemoryFact {
       return db.transaction(() => {
