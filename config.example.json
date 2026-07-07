@@ -35,6 +35,7 @@
     "scribe_memory": "worker-cheap",
     "scribe_story": "worker-cheap",
     "overseer": "worker-cheap",
-    "context_planner": "worker-cheap"
+    "context_planner": "worker-cheap",
+    "adjudicator": "worker-cheap"
   }
 }

@@ -45,7 +45,7 @@ export interface App {
   close(): void;
 }
 
-export function createApp(config: Config, opts: { driverFactory?: DriverFactory; dbPath?: string; startWorker?: boolean } = {}): App {
+export function createApp(config: Config, opts: { driverFactory?: DriverFactory; dbPath?: string; startWorker?: boolean; rng?: () => number } = {}): App {
   const db = openDb(opts.dbPath ?? config.db.path);
   migrate(db);
 
@@ -67,7 +67,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
   const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
   const contexts = createContextBuilder({ stories, summaries, memory });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, registry, contexts, events });
+  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, registry, contexts, events, rng: opts.rng });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events);

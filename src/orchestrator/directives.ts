@@ -11,6 +11,9 @@ export const Directive = z.discriminatedUnion('type', [
   z.object({ type: z.literal('npc_enter'), name: z.string() }),
   z.object({ type: z.literal('npc_exit'), name: z.string() }),
   z.object({ type: z.literal('roll'), kind: z.string().optional(), difficulty: z.string().optional() }),
+  // Adjudication: an uncertain, consequential attempt whose outcome the
+  // storyteller must NOT decide — the adjudicator weighs it, the engine rolls.
+  z.object({ type: z.literal('resolve_action'), actor: z.string(), action: z.string(), factors: z.array(z.string()).optional() }),
 ]);
 export type Directive = z.infer<typeof Directive>;
 

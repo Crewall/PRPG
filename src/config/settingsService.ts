@@ -37,7 +37,11 @@ export const RuntimeSettings = z.object({
 export type RuntimeSettings = z.infer<typeof RuntimeSettings>;
 
 const KEY = 'runtimeConfig';
-const ALL_ROLES: RoleName[] = ['storyteller', 'npc', 'scribe_memory', 'scribe_story', 'overseer', 'context_planner'];
+const ALL_ROLES: RoleName[] = ['storyteller', 'npc', 'scribe_memory', 'scribe_story', 'overseer', 'context_planner', 'adjudicator'];
+
+// Roles added after the initial config shape — when absent from config.json,
+// seed them from the (cheap) scribe_memory binding.
+const LATE_ROLES: RoleName[] = ['context_planner', 'adjudicator'];
 
 // The editable prompt templates surfaced in the Settings UI.
 export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
@@ -48,6 +52,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'scribe-memory', label: 'Memory scribe — extraction' },
   { name: 'context-planner', label: 'Context planner — memory selection' },
   { name: 'npc-dossier', label: 'Memory scribe — NPC dossier' },
+  { name: 'adjudicator', label: 'Adjudicator — action resolution' },
 ];
 
 /** Convert the boot config.json into the initial RuntimeSettings shape. */
@@ -60,9 +65,7 @@ function seedFromConfig(base: Config): RuntimeSettings {
   }));
   const roles: Record<string, z.infer<typeof RoleBinding>> = {};
   for (const role of ALL_ROLES) {
-    // context_planner arrived after the initial config shape — when absent from
-    // config.json, seed it from the (cheap) scribe_memory binding.
-    const profileName = base.roles[role] ?? (role === 'context_planner' ? base.roles.scribe_memory : undefined);
+    const profileName = base.roles[role] ?? (LATE_ROLES.includes(role) ? base.roles.scribe_memory : undefined);
     const profile = profileName ? base.modelProfiles[profileName] : undefined;
     const fav = favourites.find((f) => f.id === profileName) ?? favourites[0];
     roles[role] = {
