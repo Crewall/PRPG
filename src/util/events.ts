@@ -9,7 +9,11 @@ export type ServerEvent =
   | { t: 'job.failed'; storyId: string | null; jobId: string; type: string; error: string }
   | { t: 'scene.changed'; storyId: string; sceneId: string }
   | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }
-  | { t: 'thread.activity'; storyId: string | null; entry: unknown };
+  | {
+      t: 'thread.activity';
+      storyId: string | null;
+      entry: { agentRole: string; direction: 'request' | 'response'; turnId: string | null; sessionId: string | null };
+    };
 
 export class EventBus {
   private emitter = new EventEmitter();

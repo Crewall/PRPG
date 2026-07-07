@@ -1,5 +1,8 @@
 node_modules/
 data/
+# ...but the shipped story-seed phrases live under src/data and must be tracked.
+!src/data/
+!src/data/story-seeds.txt
 config.json
 *.log
 .DS_Store

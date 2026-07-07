@@ -118,6 +118,55 @@ async function renderPlay(storyId) {
   const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, '↶ Edit');
   const drawer = h('div', { class: 'drawer' });
 
+  // Agent status bar (feature): a live view of what each AI agent is doing this
+  // round, fed by thread.activity events. Hidden by default, toggled from the
+  // topbar, closable. State resets whenever the player sends new input.
+  const AGENT_BAR_ROLES = ['context_planner', 'storyteller', 'adjudicator', 'npc', 'scribe_story', 'scribe_memory'];
+  const agentStatus = new Map(); // role -> { attempt, status: 'waiting' | 'ok' | 'error' }
+  const agentChips = h('div', { class: 'agent-chips' });
+  const agentBar = h('div', { class: 'agent-bar gone' },
+    h('span', { class: 'sub' }, 'Agents'),
+    agentChips,
+    h('span', { class: 'spacer' }),
+    h('button', { class: 'link', title: 'Hide the agent bar', onclick: () => toggleAgentBar(false) }, '✕'));
+  const agentBarBtn = h('button', { class: 'ghost small' }, '📊 Agents');
+  agentBarBtn.addEventListener('click', () => toggleAgentBar(agentBar.classList.contains('gone')));
+  function toggleAgentBar(show) {
+    agentBar.classList.toggle('gone', !show);
+    agentBarBtn.classList.toggle('on', show);
+  }
+  function renderAgentBar() {
+    const extra = [...agentStatus.keys()].filter((r) => !AGENT_BAR_ROLES.includes(r));
+    agentChips.replaceChildren(...[...AGENT_BAR_ROLES, ...extra].map((role) => {
+      const s = agentStatus.get(role);
+      const label = ROLE_LABELS[role] || role;
+      let txt = 'none', cls = 'none';
+      if (s) {
+        cls = s.status;
+        txt = s.status === 'waiting' ? `req ${s.attempt} · waiting` : s.status === 'ok' ? `req ${s.attempt} · OK` : `req ${s.attempt} · error`;
+      }
+      return h('span', { class: `agent-chip ${cls}` }, `${label}: ${txt}`);
+    }));
+  }
+  function noteAgentActivity(entry) {
+    if (!entry || !entry.agentRole) return;
+    const role = entry.agentRole, cur = agentStatus.get(role);
+    if (entry.direction === 'request') {
+      // A fresh request while still 'waiting' means a retry (jobs re-run on failure).
+      agentStatus.set(role, { attempt: cur && cur.status === 'waiting' ? cur.attempt + 1 : 1, status: 'waiting' });
+    } else {
+      agentStatus.set(role, { attempt: cur ? cur.attempt : 1, status: 'ok' });
+    }
+    renderAgentBar();
+  }
+  function markAgentError(role) {
+    const cur = agentStatus.get(role);
+    agentStatus.set(role, { attempt: cur ? cur.attempt : 1, status: 'error' });
+    renderAgentBar();
+  }
+  function resetAgentStatus() { agentStatus.clear(); renderAgentBar(); }
+  renderAgentBar();
+
   // Story options popover — the settings you touch during play: verbosity
   // slider, adjudicator on/off, context mode, salience.
   const patchSettings = async (patch) => {
@@ -173,7 +222,8 @@ async function renderPlay(storyId) {
   const sceneHeader = h('div', { class: 'scene-header' }, h('span', { class: 'sub' }, 'Present:'), npcChips);
 
   app.replaceChildren(
-    topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
+    topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
+    agentBar,
     h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
@@ -339,6 +389,7 @@ async function renderPlay(storyId) {
   let rewinding = false;
   rewindBtn.addEventListener('click', async () => {
     if (rewinding) return;
+    if (!confirm('Delete the last story message? This removes the storyteller’s latest response and restores memory & summaries to before it.')) return;
     rewinding = true; rewindBtn.disabled = true;
     try {
       const r = await api.post(`/api/stories/${storyId}/rewind`);
@@ -665,10 +716,10 @@ async function renderPlay(storyId) {
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
-      case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
+      case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
       // surface the full error in the transcript instead of failing silently.
-      case 'job.failed': if (m.storyId === storyId) addBubble('error', `Background agent failed — ${m.type}: ${m.error || 'unknown error'} (retry from the failed-jobs list or ignore; play continues)`); break;
+      case 'job.failed': if (m.storyId === storyId) { markAgentError(m.type); addBubble('error', `Background agent failed — ${m.type}: ${m.error || 'unknown error'} (retry from the failed-jobs list or ignore; play continues)`); } break;
     }
   }
 
@@ -703,6 +754,7 @@ async function renderPlay(storyId) {
     if (!isRetry && text) addBubble('player', text);
     lastInput = text;
     setBusy(true);
+    resetAgentStatus(); // fresh round — clear last turn's agent activity
     ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text }));
     return true;
   }
