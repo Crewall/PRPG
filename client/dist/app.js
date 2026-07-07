@@ -475,14 +475,69 @@ async function renderPlay(storyId) {
     }
   }
 
-  // ---- WebSocket ----
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  let current = null, busy = false, lastInput = '';
+  // ---- WebSocket (with auto-reconnect and a tappable status dot) ----
+  let ws = null, current = null, busy = false, lastInput = '';
+  let disposed = false, reconnectTimer = null;
+  const wsInfo = { attempts: 0, since: null, lastClose: null, nextRetryAt: null };
   const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; };
-  ws.onopen = () => wsDot.classList.add('on');
-  ws.onclose = () => wsDot.classList.remove('on');
-  ws.onerror = () => wsDot.classList.remove('on');
-  ws.onmessage = (ev) => {
+  const wsOpen = () => ws && ws.readyState === WebSocket.OPEN;
+
+  function connectWs() {
+    if (disposed) return;
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    ws.onopen = () => { wsDot.classList.add('on'); wsInfo.attempts = 0; wsInfo.since = Date.now(); wsInfo.lastClose = null; wsInfo.nextRetryAt = null; };
+    ws.onclose = (ev) => {
+      wsDot.classList.remove('on');
+      wsInfo.lastClose = { code: ev.code, reason: ev.reason || '', at: Date.now() };
+      scheduleReconnect();
+    };
+    ws.onerror = () => wsDot.classList.remove('on');
+    ws.onmessage = onWsMessage;
+  }
+  function scheduleReconnect() {
+    if (disposed || reconnectTimer) return;
+    wsInfo.attempts++;
+    const delay = Math.min(15000, 1000 * 2 ** Math.min(4, wsInfo.attempts - 1));
+    wsInfo.nextRetryAt = Date.now() + delay;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connectWs(); }, delay);
+  }
+  // Leaving the page stops the reconnect loop and closes the socket.
+  const dispose = () => { disposed = true; clearTimeout(reconnectTimer); try { ws?.close(); } catch {} window.removeEventListener('hashchange', dispose); };
+  window.addEventListener('hashchange', dispose);
+
+  // Tapping the green/red dot explains the connection state.
+  wsDot.style.cursor = 'pointer';
+  wsDot.title = 'connection status — tap for details';
+  wsDot.addEventListener('click', async () => {
+    const rows = [];
+    const row = (k, v) => h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, k), h('span', { class: 'kv-val' }, v));
+    if (wsOpen()) rows.push(row('connection', `✓ connected${wsInfo.since ? ` (since ${new Date(wsInfo.since).toLocaleTimeString()})` : ''}`));
+    else {
+      rows.push(row('connection', '✗ disconnected'));
+      if (wsInfo.lastClose) rows.push(row('closed', `code ${wsInfo.lastClose.code}${wsInfo.lastClose.reason ? ` — ${wsInfo.lastClose.reason}` : ''} at ${new Date(wsInfo.lastClose.at).toLocaleTimeString()}`));
+      if (wsInfo.nextRetryAt) rows.push(row('retrying', `attempt ${wsInfo.attempts}, next in ~${Math.max(0, Math.round((wsInfo.nextRetryAt - Date.now()) / 1000))}s`));
+    }
+    const healthRow = row('server', 'checking…');
+    rows.push(healthRow);
+    const reconnectBtn = h('button', { class: 'small' }, 'Reconnect now');
+    const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
+      h('div', { class: 'modal' },
+        h('h3', {}, 'Connection'),
+        h('div', { class: 'kv-obj' }, ...rows),
+        h('div', { class: 'row', style: 'margin-top:8px; gap:10px' },
+          reconnectBtn,
+          h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close'))));
+    reconnectBtn.addEventListener('click', () => { clearTimeout(reconnectTimer); reconnectTimer = null; try { ws?.close(); } catch {} connectWs(); modal.remove(); });
+    document.body.append(modal);
+    // Distinguish "server down" from "websocket blocked": probe the HTTP API.
+    try {
+      const r = await fetch('/api/system/health', { signal: AbortSignal.timeout(4000) });
+      const j = r.ok ? await r.json() : null;
+      healthRow.lastChild.textContent = r.ok ? `✓ reachable (providers: ${(j?.providers || []).join(', ') || 'none'})` : `✗ HTTP ${r.status}`;
+    } catch (e) { healthRow.lastChild.textContent = '✗ unreachable — is the PRPG server running? (' + e.message + ')'; }
+  });
+
+  function onWsMessage(ev) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
       case 'turn.accepted': current = addBubble('narration cursor', ''); break;
@@ -493,14 +548,19 @@ async function renderPlay(storyId) {
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown(); break;
       case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; setBusy(false); break;
-      case 'turn.error': if (current) current.remove(); addBubble('error', `Error: ${m.message}`); current = null; setBusy(false); break;
+      case 'turn.error':
+        if (current) current.remove();
+        addBubble('error', `The turn failed — ${m.message}`);
+        // Don't lose the message: put it back in the box for another try.
+        if (!input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
+        current = null; setBusy(false); break;
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
     }
-  };
+  }
 
   async function handleSlash(text) {
     if (text.startsWith('/look')) {
@@ -526,25 +586,31 @@ async function renderPlay(storyId) {
     document.body.append(modal);
   }
 
+  /** Try to send; returns false (with a visible reason) instead of silently dropping. */
   function submitText(text, isRetry) {
-    if (busy || ws.readyState !== WebSocket.OPEN) return;
+    if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return false; }
+    if (!wsOpen()) { addStatus('(not connected — your message is kept; tap the status dot for details)'); return false; }
     if (!isRetry && text) addBubble('player', text);
     lastInput = text;
     setBusy(true);
     ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text }));
+    return true;
   }
 
   const submit = async () => {
     const text = input.value.trim();
-    input.value = ''; input.style.height = 'auto';
-    if (text.startsWith('/')) { if (await handleSlash(text)) return; }
-    submitText(text, false);
+    if (text.startsWith('/')) {
+      if (await handleSlash(text)) { input.value = ''; input.style.height = 'auto'; return; }
+    }
+    // Clear the box only once the message is actually on its way.
+    if (submitText(text, false)) { input.value = ''; input.style.height = 'auto'; }
   };
   sendBtn.addEventListener('click', submit);
-  cancelBtn.addEventListener('click', () => ws.send(JSON.stringify({ t: 'turn.cancel', storyId })));
+  cancelBtn.addEventListener('click', () => { if (wsOpen()) ws.send(JSON.stringify({ t: 'turn.cancel', storyId })); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
 
+  connectWs();
   renderDrawer();
   refreshSceneHeader();
 }
