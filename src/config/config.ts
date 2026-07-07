@@ -11,6 +11,7 @@ export const RoleName = z.enum([
   'overseer',
   'context_planner',
   'adjudicator',
+  'player_intake',
 ]);
 export type RoleName = z.infer<typeof RoleName>;
 

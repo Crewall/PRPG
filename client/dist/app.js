@@ -101,15 +101,40 @@ async function renderPlay(storyId) {
   const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, '↶ Edit');
   const drawer = h('div', { class: 'drawer' });
 
-  // Feature 4: per-story context mode. 'summary' feeds the storyteller the
-  // summaries + planner-picked memory instead of the raw chat history.
-  let ctxSummary = !!(story.settings?.context?.summaryDriven);
-  const ctxBtn = h('button', { class: 'ghost small', title: 'What the storyteller reads: recent chat history, or summary + memory' }, ctxSummary ? 'Ctx: summary' : 'Ctx: history');
-  ctxBtn.addEventListener('click', async () => {
-    ctxSummary = !ctxSummary;
-    await api.patch(`/api/stories/${storyId}`, { settings: { context: { summaryDriven: ctxSummary } } });
-    ctxBtn.textContent = ctxSummary ? 'Ctx: summary' : 'Ctx: history';
-  });
+  // Story options popover — the settings you touch during play: verbosity
+  // slider, adjudicator on/off, context mode, salience.
+  const patchSettings = async (patch) => {
+    await api.patch(`/api/stories/${storyId}`, { settings: patch });
+    story.settings = { ...(story.settings || {}), ...patch };
+  };
+  const VERBOSITY_LABELS = ['', 'terse', 'brief', 'balanced', 'rich', 'expansive'];
+  function showStoryOptions() {
+    const s = story.settings || {};
+    // Verbosity slider (storyteller reply length, 1–5).
+    const vLabel = h('span', { class: 'sub' }, `${s.verbosity || 3} — ${VERBOSITY_LABELS[s.verbosity || 3]}`);
+    const vSlider = h('input', { type: 'range', min: '1', max: '5', step: '1', value: String(s.verbosity || 3) });
+    vSlider.addEventListener('input', () => { vLabel.textContent = `${vSlider.value} — ${VERBOSITY_LABELS[Number(vSlider.value)]}`; });
+    vSlider.addEventListener('change', () => patchSettings({ verbosity: Number(vSlider.value) }));
+
+    const toggle = (label, hint, checked, onChange) => {
+      const cb = h('input', { type: 'checkbox', ...(checked ? { checked: true } : {}) });
+      cb.addEventListener('change', () => onChange(cb.checked));
+      return h('label', { class: 'opt-row', title: hint }, cb, h('span', {}, label));
+    };
+    const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
+      h('div', { class: 'modal' },
+        h('h3', {}, 'Story options'),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
+        toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
+          s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
+        toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
+          !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
+        toggle('Salience system', 'Importance weighting & decay of memory objects.',
+          s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
+        h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
+    document.body.append(modal);
+  }
+  const optsBtn = h('button', { class: 'ghost small', onclick: showStoryOptions }, '⚙ Story');
 
   const debugBtn = h('button', { class: 'ghost small' }, debug ? 'Debug: on' : 'Debug: off');
   debugBtn.addEventListener('click', async () => {
@@ -131,7 +156,7 @@ async function renderPlay(storyId) {
   const sceneHeader = h('div', { class: 'scene-header' }, h('span', { class: 'sub' }, 'Present:'), npcChips);
 
   app.replaceChildren(
-    topbar(sceneLabel, newSceneBtn, ctxBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
+    topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
@@ -141,9 +166,62 @@ async function renderPlay(storyId) {
     try { agents = await api.get(`/api/stories/${storyId}/agents`); } catch {}
     const active = agents.filter((a) => a.role === 'npc' && a.state === 'active' && a.npc);
     activeNpcIds = new Set(active.map((a) => a.npcObjectId));
+    // The player's own character: a chip to its dossier, or the intake interview.
+    const pcId = story.settings?.playerObjectId;
+    let pcChip;
+    if (pcId) {
+      let name = 'You';
+      try { name = (await api.get(`/api/memory/objects/${pcId}?scope=player`))?.name || 'You'; } catch {}
+      pcChip = h('button', { class: 'chip pc', onclick: () => showDossier(pcId) }, `🎭 ${name}`);
+    } else {
+      pcChip = h('button', { class: 'chip pc', title: 'A short interview (max 3 questions) creates your character sheet' , onclick: openCharacterCreator }, '🎭 create your character');
+    }
     npcChips.replaceChildren(
+      pcChip,
       ...(active.length ? active.map((a) => h('button', { class: 'chip', onclick: () => showDossier(a.npcObjectId) }, a.npc)) : [h('span', { class: 'sub' }, 'no major characters yet')]),
     );
+  }
+
+  // Player dossier interview: 1–3 rounds of Q&A on its own AI thread.
+  function openCharacterCreator() {
+    const exchanges = [];
+    let currentQ = '';
+    const qEl = h('div', { class: 'mem-summary', style: 'padding:0' }, 'The interviewer is thinking…');
+    const aEl = h('textarea', { rows: '3', placeholder: 'Your answer…' });
+    const status = h('span', { class: 'sub' });
+    const nextBtn = h('button', { class: 'primary', disabled: true }, 'Answer');
+    const modal = h('div', { class: 'modal-bg' },
+      h('div', { class: 'modal' },
+        h('h3', {}, 'Who are you?'),
+        qEl, aEl,
+        h('div', { class: 'row', style: 'gap:10px' }, nextBtn, h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Cancel'), status)));
+    async function ask() {
+      nextBtn.disabled = true; status.textContent = '…';
+      try {
+        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges });
+        if (r.done) {
+          modal.remove();
+          story.settings = { ...(story.settings || {}), playerObjectId: r.objectId };
+          addStatus(`(character created: ${r.name})`);
+          refreshSceneHeader(); renderDrawer();
+          showDossier(r.objectId);
+          return;
+        }
+        currentQ = r.question;
+        qEl.textContent = r.question;
+        aEl.value = '';
+        status.textContent = `question ${r.round} of ${r.maxRounds}`;
+        nextBtn.disabled = false;
+        aEl.focus();
+      } catch (e) { status.textContent = '✗ ' + e.message; nextBtn.disabled = false; }
+    }
+    nextBtn.addEventListener('click', () => {
+      if (!aEl.value.trim()) return;
+      exchanges.push({ question: currentQ, answer: aEl.value.trim() });
+      ask();
+    });
+    document.body.append(modal);
+    ask();
   }
 
   // Character/object dossier: the full fact sheet with sorting and filtering
@@ -218,15 +296,25 @@ async function renderPlay(storyId) {
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
 
   // Load (or reload, after a rewind) the transcript from the server.
+  let turnCount = 0;
   async function redrawTranscript() {
     transcript.replaceChildren();
     try {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
-      if (!turns.length) transcript.append(h('div', { class: 'empty' }, 'Press Send (even empty) to open the story.'));
+      turnCount = turns.length;
       for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
     } catch {}
   }
   await redrawTranscript();
+
+  // A brand-new story opens itself: the storyteller sets the scene unprompted.
+  let autoOpened = false;
+  function maybeAutoOpen() {
+    if (autoOpened || turnCount > 0 || busy || !wsOpen()) return;
+    autoOpened = true;
+    addStatus('(the storyteller opens the story…)');
+    submitText('', false);
+  }
 
   // Feature 1: delete the latest exchange (halting any in-flight response) and
   // put the prompt back in the box for editing. State (summaries, memory, …)
@@ -485,7 +573,7 @@ async function renderPlay(storyId) {
   function connectWs() {
     if (disposed) return;
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-    ws.onopen = () => { wsDot.classList.add('on'); wsInfo.attempts = 0; wsInfo.since = Date.now(); wsInfo.lastClose = null; wsInfo.nextRetryAt = null; };
+    ws.onopen = () => { wsDot.classList.add('on'); wsInfo.attempts = 0; wsInfo.since = Date.now(); wsInfo.lastClose = null; wsInfo.nextRetryAt = null; maybeAutoOpen(); };
     ws.onclose = (ev) => {
       wsDot.classList.remove('on');
       wsInfo.lastClose = { code: ev.code, reason: ev.reason || '', at: Date.now() };
@@ -618,7 +706,7 @@ async function renderPlay(storyId) {
 }
 
 // ---------------- Settings ----------------
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer' };
 const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compatible (OpenRouter, etc.)' };
 
 async function renderSettings() {

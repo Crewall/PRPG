@@ -11,7 +11,16 @@ import type { ContextPlan } from '../agents/contextPlanner.ts';
 import type { Story } from '../domain.ts';
 
 // Placeholder marker used when the player submits an empty turn (auto-open).
-export const BEGIN_MARKER = '(Begin the story from the premise. Set the opening scene and invite the player to act.)';
+export const BEGIN_MARKER = '(Begin the story from the premise. BRIEFLY set the opening scene — a few short paragraphs at most — and end by inviting the player to act.)';
+
+// Storyteller reply-length instruction per verbosity step (settings.verbosity).
+const VERBOSITY_STYLE: Record<number, string> = {
+  1: 'Keep each reply TERSE: one short paragraph (2–4 sentences).',
+  2: 'Keep each reply brief: 1–2 short paragraphs.',
+  3: 'Keep each reply focused: 1–4 short paragraphs.',
+  4: 'Write rich replies: 3–5 paragraphs with sensory detail.',
+  5: 'Write expansive replies: 5+ paragraphs of lavish sensory and atmospheric detail.',
+};
 
 /** Truncate text to an approximate token budget (chars/4 heuristic). */
 export function truncateToTokens(text: string, maxTokens: number): string {
@@ -115,10 +124,21 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
 - List in "factors" every circumstance you know that helps or hinders. An impartial referee weighs them (with the character's recorded abilities and state) and fate decides; you will then be told the outcome to narrate. Never mention dice, chances or the referee in the story.`
         : '';
       const parts: string[] = [
-        renderPrompt('storyteller', { genre: story.settings.genre, tone: story.settings.tone, adjudication }),
+        renderPrompt('storyteller', {
+          genre: story.settings.genre,
+          tone: story.settings.tone,
+          adjudication,
+          verbosity: VERBOSITY_STYLE[story.settings.verbosity] ?? VERBOSITY_STYLE[3],
+        }),
       ];
       if (story.settings.premise.trim()) {
         parts.push(`## Premise\n${story.settings.premise.trim()}`);
+      }
+
+      // The player's own character (from the intake interview), storyteller scope.
+      if (story.settings.playerObjectId) {
+        const pc = memory.getObjectView(story.settings.playerObjectId, { kind: 'storyteller' }, { maxTokens: 300 });
+        if (pc) parts.push(`## The player's character\n${renderObjectView(pc)}`);
       }
 
       const digest = summaries.getStoryDigest(story.id);

@@ -36,6 +36,7 @@
     "scribe_story": "worker-cheap",
     "overseer": "worker-cheap",
     "context_planner": "worker-cheap",
-    "adjudicator": "worker-cheap"
+    "adjudicator": "worker-cheap",
+    "player_intake": "narrator-strong"
   }
 }

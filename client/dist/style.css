@@ -211,3 +211,10 @@ button.small { padding: 5px 9px; font-size: 12px; }
 .dossier-sort { width: auto; align-self: flex-start; padding: 5px 9px; font-size: 12px; }
 .dossier-list { display: flex; flex-direction: column; gap: 6px; }
 .knows { border-top: 1px solid var(--border); padding-top: 6px; }
+
+/* story options popover + player-character chip */
+.opt-block { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 10px; }
+.opt-block input[type=range] { width: 100%; padding: 0; }
+.opt-row { display: flex; gap: 10px; align-items: center; margin: 8px 0; font-size: 14px; color: var(--text); cursor: pointer; }
+.opt-row input[type=checkbox] { width: auto; }
+.chip.pc { border-color: var(--accent-2); }

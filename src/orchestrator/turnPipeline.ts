@@ -344,7 +344,11 @@ export class TurnPipeline {
       const adjudicator = new Adjudicator({ session, bound, threadLog, storyId: story.id });
 
       const factors = directive.factors ?? [];
-      const actorObj = memory.findByName(story.id, directive.actor);
+      let actorObj = memory.findByName(story.id, directive.actor);
+      // "the player" / "you" → the player character's recorded sheet, if one exists.
+      if (!actorObj && story.settings.playerObjectId && /\b(player|you|yourself)\b/i.test(directive.actor)) {
+        actorObj = memory.getObject(story.settings.playerObjectId);
+      }
       const actorView = actorObj ? memory.getObjectView(actorObj.id, { kind: 'storyteller' }, { maxTokens: 400 }) : undefined;
       const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, `${directive.action} ${factors.join(' ')}`, { maxTokens: 400 });
       const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
