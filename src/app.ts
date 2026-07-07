@@ -52,7 +52,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const events = new EventBus();
   const stories = createStoryStore(db);
   const agents = createAgentStore(db);
-  const threadLog = createThreadLog(db);
+  const threadLog = createThreadLog(db, events);
   const settings = createSettingsStore(db);
   const summaries = createSummaryStore(db);
   const jobs = createJobStore(db);

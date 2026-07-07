@@ -1,5 +1,6 @@
 import type { Db, Row } from '../db.ts';
 import { id } from '../../util/id.ts';
+import type { EventBus } from '../../util/events.ts';
 
 export interface ThreadLogEntry {
   id: string;
@@ -43,7 +44,7 @@ function rowToEntry(r: Row): ThreadLogEntry {
   };
 }
 
-export function createThreadLog(db: Db) {
+export function createThreadLog(db: Db, events?: EventBus) {
   return {
     log(entry: NewThreadLogEntry): ThreadLogEntry {
       const now = Date.now();
@@ -64,7 +65,16 @@ export function createThreadLog(db: Db) {
         entry.durationMs ?? null,
         now,
       );
-      return rowToEntry(db.prepare(`SELECT * FROM thread_log WHERE id = ?`).get<Row>(entryId)!);
+      const saved = rowToEntry(db.prepare(`SELECT * FROM thread_log WHERE id = ?`).get<Row>(entryId)!);
+      // Live agent-activity feed for the status bar (06-orchestration WS protocol).
+      // Emitting on every request/response lets the client show which agent is
+      // waiting vs. done, and count retries (each job re-run logs a fresh request).
+      events?.emit({
+        t: 'thread.activity',
+        storyId: saved.storyId,
+        entry: { agentRole: saved.agentRole, direction: saved.direction, turnId: saved.turnId, sessionId: saved.sessionId },
+      });
+      return saved;
     },
 
     query(storyId: string, opts: { turnId?: string; role?: string; limit?: number } = {}): ThreadLogEntry[] {
