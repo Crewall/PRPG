@@ -70,7 +70,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, registry, contexts, events, rng: opts.rng });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
-  const worker = new JobWorker(jobs, events);
+  const worker = new JobWorker(jobs, events, { concurrency: () => settingsService.performance().jobConcurrency });
   const handlerDeps = { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs };
   worker.register('scribe_story', createScribeStoryHandler(handlerDeps));
   worker.register('scribe_memory', createScribeMemoryHandler(handlerDeps));

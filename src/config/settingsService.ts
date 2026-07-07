@@ -37,6 +37,15 @@ export const RuntimeSettings = z.object({
   // use the shipped src/data/story-seeds.txt. Editable in Settings so users on
   // Termux don't have to hunt for the file.
   seeds: z.string().default(''),
+  // Throughput tuning. jobConcurrency = how many background scribe jobs run at
+  // once; requestTimeoutMs = how long to wait for a model reply before aborting
+  // (free/slow models need a generous value). Editable in Settings.
+  performance: z
+    .object({
+      jobConcurrency: z.number().int().min(1).max(16).default(2),
+      requestTimeoutMs: z.number().int().min(10_000).max(600_000).default(180_000),
+    })
+    .default({}),
 });
 export type RuntimeSettings = z.infer<typeof RuntimeSettings>;
 
@@ -92,6 +101,7 @@ function seedFromConfig(base: Config): RuntimeSettings {
     roles: roles as RuntimeSettings['roles'],
     prompts: {},
     seeds: '',
+    performance: { jobConcurrency: 2, requestTimeoutMs: base.llm.timeoutMs },
   };
 }
 
@@ -104,6 +114,7 @@ export interface SettingsUpdate {
   roles?: RuntimeSettings['roles'];
   prompts?: Record<string, string>;
   seeds?: string;
+  performance?: Partial<RuntimeSettings['performance']>;
 }
 
 export interface SettingsService {
@@ -113,6 +124,8 @@ export interface SettingsService {
   promptOverride(name: string): string | undefined;
   /** The user's seed-phrase override (one per line), or undefined to use the shipped file. */
   seedsOverride(): string | undefined;
+  /** Throughput tuning: job concurrency + request timeout. */
+  performance(): RuntimeSettings['performance'];
   onChange(listener: () => void): void;
   /** Masked view for the API (never leaks API keys). */
   publicView(): unknown;
@@ -161,7 +174,15 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
     }
 
     // Validate the compiled config (≥1 provider, roles resolve, providers exist).
-    return ConfigSchema.parse({ server: base.server, db: base.db, providers, modelProfiles, roles, llm: base.llm });
+    // The request timeout is runtime-tunable via performance settings.
+    return ConfigSchema.parse({
+      server: base.server,
+      db: base.db,
+      providers,
+      modelProfiles,
+      roles,
+      llm: { ...base.llm, timeoutMs: s.performance.requestTimeoutMs },
+    });
   }
 
   compiled = compile(settings);
@@ -176,6 +197,7 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
     effective: () => compiled,
     promptOverride: (name) => settings.prompts[name],
     seedsOverride: () => (settings.seeds && settings.seeds.trim() ? settings.seeds : undefined),
+    performance: () => settings.performance,
     onChange: (l) => listeners.push(l),
 
     update(patch: SettingsUpdate) {
@@ -198,6 +220,7 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
         roles: patch.roles ?? settings.roles,
         prompts: patch.prompts ?? settings.prompts,
         seeds: patch.seeds ?? settings.seeds,
+        performance: { ...settings.performance, ...(patch.performance ?? {}) },
       });
       // Compile eagerly so an invalid change is rejected before persisting.
       const nextCompiled = compile(merged);
@@ -219,6 +242,7 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
         favourites: settings.favourites,
         roles: settings.roles,
         prompts: EDITABLE_PROMPTS.map((p) => ({ ...p, overridden: settings.prompts[p.name] !== undefined })),
+        performance: settings.performance,
       };
     },
   };

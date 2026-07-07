@@ -436,6 +436,12 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       .optional(),
     favourites: z.array(z.object({ id: z.string(), label: z.string(), provider: z.enum(['anthropic', 'openai_compat']), model: z.string() })).optional(),
     roles: z.record(z.string(), z.object({ favouriteId: z.string(), temperature: z.number(), maxTokens: z.number().int() })).optional(),
+    performance: z
+      .object({
+        jobConcurrency: z.number().int().min(1).max(16).optional(),
+        requestTimeoutMs: z.number().int().min(10_000).max(600_000).optional(),
+      })
+      .optional(),
   });
 
   server.put('/api/settings/config', async (req, reply) => {

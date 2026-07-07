@@ -16,16 +16,17 @@ export class JobWorker {
   private readonly events: EventBus;
   private readonly handlers = new Map<JobType, JobHandler>();
   private readonly maxAttempts: number;
-  private readonly concurrency: number;
+  private readonly concurrency: () => number; // read live so Settings changes take effect
   private readonly pollMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active = 0;
 
-  constructor(jobs: JobStore, events: EventBus, opts: { maxAttempts?: number; concurrency?: number; pollMs?: number } = {}) {
+  constructor(jobs: JobStore, events: EventBus, opts: { maxAttempts?: number; concurrency?: number | (() => number); pollMs?: number } = {}) {
     this.jobs = jobs;
     this.events = events;
     this.maxAttempts = opts.maxAttempts ?? 3;
-    this.concurrency = opts.concurrency ?? 2;
+    const c = opts.concurrency ?? 2;
+    this.concurrency = typeof c === 'function' ? c : () => c;
     this.pollMs = opts.pollMs ?? 250;
   }
 
@@ -48,7 +49,8 @@ export class JobWorker {
   }
 
   private pump(): void {
-    while (this.active < this.concurrency) {
+    const limit = this.concurrency();
+    while (this.active < limit) {
       const job = this.jobs.claimNext();
       if (!job) break;
       this.active++;
