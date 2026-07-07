@@ -45,6 +45,16 @@ export interface ScribeMemoryInput {
   snapshot: string; // rendered current memory for mentioned entities
 }
 
+export interface DossierInput {
+  name: string;
+  objectId: string;
+  currentSheet: string; // rendered storyteller-scope view of the character
+  premise: string;
+  digest: string;
+  sceneSummary: string;
+  recentTurns: string;
+}
+
 /**
  * scribe_memory (Layer 3b). Cheap/fast model, async post-turn. Extracts a
  * MemoryDelta from a completed turn against the current memory snapshot so it
@@ -62,6 +72,30 @@ export class ScribeMemory extends Agent {
             `## Current memory (for entities that may be mentioned)\n${input.snapshot || '(empty — no objects yet)'}\n\n` +
             `## Present characters (ids you may list in knownBy)\n${input.presentNpcIds.length ? input.presentNpcIds.join(', ') : '(none tracked yet)'}\n\n` +
             `## The turn to extract from\nPlayer: ${input.playerInput || '(scene opens)'}\nNarration: ${input.narration}`,
+        },
+      ],
+    };
+    return this.invokeJson(ctx, MemoryDelta, opts);
+  }
+
+  /**
+   * Character dossier at NPC elevation (feature: promoted NPCs get a full
+   * sheet). Fills only the gaps — dedupe downstream drops anything that is
+   * already recorded.
+   */
+  async dossier(input: DossierInput, opts: { turnId?: string } = {}): Promise<MemoryDelta> {
+    const system = renderPrompt('npc-dossier', { name: input.name, objectId: input.objectId });
+    const ctx: BuiltContext = {
+      system,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `## What is already recorded about ${input.name} (do NOT repeat these)\n${input.currentSheet || '(nothing yet)'}\n\n` +
+            `## Story premise\n${input.premise || '(none)'}\n\n` +
+            `## Story so far\n${input.digest || '(the story just began)'}\n\n` +
+            `## Current scene\n${input.sceneSummary || '(scene just opened)'}\n\n` +
+            `## Recent turns\n${input.recentTurns || '(none)'}`,
         },
       ],
     };

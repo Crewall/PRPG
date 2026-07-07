@@ -71,7 +71,7 @@ export class TurnPipeline {
   }
 
   private npcDeps(): NpcServiceDeps {
-    return { stories: this.deps.stories, agents: this.deps.agents, memory: this.deps.memory, registry: this.deps.registry, events: this.deps.events };
+    return { stories: this.deps.stories, agents: this.deps.agents, memory: this.deps.memory, jobs: this.deps.jobs, registry: this.deps.registry, events: this.deps.events };
   }
 
   /** Cancel the in-flight turn for a story, if any. */

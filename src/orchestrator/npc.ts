@@ -1,6 +1,7 @@
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { AgentStore } from '../db/stores/agentStore.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
+import type { JobStore } from '../db/stores/jobStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
 import type { EventBus } from '../util/events.ts';
 import type { MemoryObject } from '../memory/model.ts';
@@ -9,6 +10,7 @@ export interface NpcServiceDeps {
   stories: StoryStore;
   agents: AgentStore;
   memory: MemoryStore;
+  jobs: JobStore;
   registry: LlmRegistry;
   events: EventBus;
 }
@@ -30,10 +32,15 @@ export function resolveNpc(deps: NpcServiceDeps, storyId: string, name: string):
 export function promoteNpc(deps: NpcServiceDeps, storyId: string, objectId: string): boolean {
   const obj = deps.memory.getObject(objectId);
   if (!obj || obj.storyId !== storyId) return false;
+  const isNew = !deps.agents.listSessions(storyId).some((s) => s.role === 'npc' && s.npcObjectId === objectId);
   const session = deps.agents.ensureSession(storyId, 'npc', npcProfile(deps, storyId), objectId);
   if (session.state !== 'active') deps.agents.setState(session.id, 'active');
   const story = deps.stories.getStory(storyId);
   if (story?.currentSceneId) deps.stories.addActiveNpc(story.currentSceneId, objectId);
+  // First elevation → build the character dossier (persona, looks, belongings,
+  // skills, state, goals) as memory facts on the object. Async, off the player
+  // path; the per-turn memory scribe keeps it updated afterwards.
+  if (isNew) deps.jobs.enqueue('npc_dossier', { storyId, payload: { objectId } });
   deps.events.emit({ t: 'scene.changed', storyId, sceneId: story?.currentSceneId ?? '' });
   return true;
 }

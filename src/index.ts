@@ -45,7 +45,15 @@ async function main(): Promise<void> {
 
   // Serve the built static client (no build step on the phone — see 01-tech-stack.md).
   if (existsSync(CLIENT_DIR)) {
-    await server.register(fastifyStatic, { root: CLIENT_DIR, prefix: '/' });
+    // no-cache: the client has no build/version step, so stale browser caches
+    // (especially on phones) would keep serving an old UI after an update.
+    // Files are tiny; ETag revalidation keeps reloads cheap.
+    await server.register(fastifyStatic, {
+      root: CLIENT_DIR,
+      prefix: '/',
+      cacheControl: false,
+      setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+    });
     // SPA fallback: unmatched non-API routes serve index.html.
     server.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {

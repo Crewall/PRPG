@@ -105,9 +105,10 @@ describe('summary-driven storyteller context (feature 4)', () => {
     const story = seedStory(false);
     await app.pipeline.run(story.id, 'Onward.', silentEmitter());
     expect(cap.plannerCalls).toBe(0);
-    // Last-K window (K=6, which includes the just-opened streaming turn):
-    // 5 completed pairs + the streaming turn's input + the new input.
-    expect(cap.storytellerReq!.messages).toHaveLength(12);
+    // Last-K completed exchanges (K=6 pairs) + the new input; the just-opened
+    // streaming turn must NOT leak in as history (it would duplicate the input).
+    expect(cap.storytellerReq!.messages).toHaveLength(13);
+    expect(cap.storytellerReq!.messages.filter((m) => m.content === 'Onward.')).toHaveLength(1);
     expect(cap.storytellerReq!.system).not.toContain('## Current goals');
   });
 });

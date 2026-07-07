@@ -37,6 +37,14 @@ export const StorySettings = z.object({
       plannerEnabled: z.boolean().default(true),
     })
     .default({}),
+  // The salience system (per-object importance: retrieval weighting, scribe
+  // updates, periodic decay). Optional — off means salience is frozen and
+  // ignored in ranking.
+  salience: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default({}),
   debug: z
     .object({
       showThreads: z.boolean().default(false),

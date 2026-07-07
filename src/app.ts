@@ -19,7 +19,7 @@ import { createContextBuilder } from './orchestrator/contextBuilder.ts';
 import { TurnPipeline } from './orchestrator/turnPipeline.ts';
 import { JobWorker } from './orchestrator/postTurn.ts';
 import { createScribeStoryHandler } from './orchestrator/handlers.ts';
-import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler } from './orchestrator/memoryHandlers.ts';
+import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler, createNpcDossierHandler } from './orchestrator/memoryHandlers.ts';
 import { EventBus } from './util/events.ts';
 
 // The wired application: stores + registry + orchestrator + job worker. Built
@@ -76,6 +76,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   worker.register('scribe_memory', createScribeMemoryHandler(handlerDeps));
   worker.register('memory_maintenance', createMemoryMaintenanceHandler(handlerDeps));
   worker.register('archive_faded', createArchiveFadedHandler(handlerDeps));
+  worker.register('npc_dossier', createNpcDossierHandler(handlerDeps));
 
   if (opts.startWorker !== false) worker.start();
 

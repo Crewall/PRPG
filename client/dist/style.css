@@ -141,7 +141,7 @@ button.small { padding: 5px 9px; font-size: 12px; }
 /* Settings form */
 .sub.ok { color: #7ee0a0; }
 .sub.err { color: var(--danger); }
-.fav-row { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.fav-row { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
 .role-row { display: grid; grid-template-columns: 1.2fr 2fr auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
 .role-name { font-weight: 600; font-size: 14px; }
 .mini { display: flex; flex-direction: column; gap: 2px; }
@@ -191,3 +191,6 @@ button.small { padding: 5px 9px; font-size: 12px; }
 .prompt-preview h3, .prompt-preview h4, .prompt-preview h5 { margin: 10px 0 4px; }
 .prompt-preview code { background: #2e2e3c; padding: 0 4px; border-radius: 4px; }
 .var { background: #4a2d55; color: #e2a8ff; padding: 0 5px; border-radius: 4px; font-size: 12px; }
+
+/* feature 7: provider limits readout */
+.limits { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 13px; }

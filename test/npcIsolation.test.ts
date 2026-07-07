@@ -80,7 +80,7 @@ describe('NPC isolation (Layer 4)', () => {
     const secretFact = app.memory.addFact({ objectId: vault.id, category: 'properties', detailLevel: 'secret', content: SECRET, confidence: 1 });
     app.memory.linkKnowledge(secretFact.id, { type: 'npc', npcObjectId: martaId }); // ONLY Marta knows
 
-    const npcDeps = { stories: app.stories, agents: app.agents, memory: app.memory, registry: app.registry, events: app.events };
+    const npcDeps = { stories: app.stories, agents: app.agents, memory: app.memory, jobs: app.jobs, registry: app.registry, events: app.events };
     promoteNpc(npcDeps, storyId, martaId);
     promoteNpc(npcDeps, storyId, tomId);
   });
@@ -117,7 +117,7 @@ describe('NPC isolation (Layer 4)', () => {
 
   it('a failed consult still yields a complete turn (graceful degradation)', async () => {
     const mute = app.memory.createObject({ storyId, type: 'character', name: 'Mute', aliases: [], summary: '', salience: 0.5, status: 'active' });
-    promoteNpc({ stories: app.stories, agents: app.agents, memory: app.memory, registry: app.registry, events: app.events }, storyId, mute.id);
+    promoteNpc({ stories: app.stories, agents: app.agents, memory: app.memory, jobs: app.jobs, registry: app.registry, events: app.events }, storyId, mute.id);
     const turn = await app.pipeline.run(storyId, 'TALK:Mute say something', noop);
     expect(turn?.status).toBe('complete');
     expect((turn?.narration ?? '').length).toBeGreaterThan(0);

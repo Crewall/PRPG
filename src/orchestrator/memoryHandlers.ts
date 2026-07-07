@@ -138,8 +138,10 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
       }
     }
 
-    // 4. Salience updates (clamped in updateObject).
-    for (const su of delta.salienceUpdates) {
+    // 4. Salience updates (clamped in updateObject). Skipped when the story
+    // has the salience system turned off.
+    const salienceOn = deps.stories?.getStory(storyId)?.settings.salience.enabled ?? true;
+    for (const su of salienceOn ? delta.salienceUpdates : []) {
       const objId = tempMap.get(su.objectId) ?? su.objectId;
       if (deps.memory.getObject(objId)) {
         deps.memory.updateObject(objId, { salience: su.salience });
@@ -194,6 +196,45 @@ export function createArchiveFadedHandler(deps: HandlerDeps): JobHandler {
 }
 
 /**
+ * npc_dossier handler. On first elevation, a promoted NPC gets a full
+ * character sheet — persona, looks, belongings, skills, current state,
+ * (possibly hidden) goals — recorded as memory facts on their object. The
+ * per-turn memory scribe keeps those facts updated (supersede) afterwards;
+ * dedupe drops anything already recorded.
+ */
+export function createNpcDossierHandler(deps: HandlerDeps): JobHandler {
+  return async (job: Job) => {
+    const storyId = job.storyId!;
+    const objectId = job.payload.objectId as string;
+    const story = deps.stories.getStory(storyId);
+    const obj = deps.memory.getObject(objectId);
+    if (!story || !obj) return;
+
+    const view = deps.memory.getObjectView(objectId, { kind: 'storyteller' }, { maxTokens: 600 });
+    const recentTurns = deps.stories
+      .recentTurns(storyId, 3)
+      .filter((t) => t.status === 'complete')
+      .map((t) => `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`)
+      .join('\n\n');
+
+    const agent = scribeMemoryAgent(deps, storyId);
+    const delta: MemoryDelta = await agent.dossier({
+      name: obj.name,
+      objectId,
+      currentSheet: view ? renderObjectView(view) : obj.name,
+      premise: story.settings.premise,
+      digest: deps.summaries.getStoryDigest(storyId)?.content ?? '',
+      sceneSummary: story.currentSceneId ? deps.summaries.getSceneSummary(story.currentSceneId)?.content ?? '' : '',
+      recentTurns,
+    });
+    if (!deps.memory.getObject(objectId)) return; // deleted/rewound while generating
+
+    const affected = applyMemoryDelta(deps, storyId, null, delta);
+    if (affected.length) deps.events.emit({ t: 'memory.updated', storyId, objectIds: affected });
+  };
+}
+
+/**
  * Maintenance job (Layer 3b): salience decay for long-unmentioned objects and a
  * summary refresh. Runs on the M-turn cadence. (Dedup/consolidation via the
  * scribe is a later enhancement; decay + summary keep memory tidy for now.)
@@ -201,6 +242,7 @@ export function createArchiveFadedHandler(deps: HandlerDeps): JobHandler {
 export function createMemoryMaintenanceHandler(deps: HandlerDeps): JobHandler {
   return async (job: Job) => {
     const storyId = job.storyId!;
+    if (!(deps.stories.getStory(storyId)?.settings.salience.enabled ?? true)) return; // salience off — no decay
     const objects = deps.memory.listObjects(storyId);
     const affected: string[] = [];
     for (const obj of objects) {

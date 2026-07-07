@@ -157,6 +157,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, queryText, {
         maxTokens: b.retrievedMemoryTokens,
         maxTier: summaryDriven ? plan?.depth : undefined,
+        // Salience off → rank purely by match + recency (+ tier).
+        scoreWeights: story.settings.salience.enabled ? undefined : { bm25: 1.0, salience: 0, recency: 0.4 },
       });
       const retrievedText = renderRetrieval(retrieval);
       if (retrievedText.trim()) {
@@ -173,10 +175,12 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       // input. Summary-driven mode: only the latest completed exchange (the
       // beat the player is replying to — the rolling scene summary lags one
       // scribe job behind) + the new player input.
+      // Only completed exchanges: the pipeline has already appended the current
+      // (streaming) turn, which must not appear as history — the fresh input is
+      // pushed below — and rejected/errored turns never got a reply.
       const messages: ChatMessage[] = [];
-      const recent = summaryDriven
-        ? stories.recentTurns(story.id, 4).filter((t) => t.status === 'complete').slice(-1)
-        : stories.recentTurns(story.id, b.recentTurns);
+      const completed = stories.recentTurns(story.id, b.recentTurns + 2).filter((t) => t.status === 'complete');
+      const recent = summaryDriven ? completed.slice(-1) : completed.slice(-b.recentTurns);
       for (const t of recent) {
         messages.push({ role: 'user', content: t.playerInput || BEGIN_MARKER });
         if (t.narration) messages.push({ role: 'assistant', content: t.narration });
@@ -210,12 +214,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
 
       const system = renderPrompt('npc', { name, knowledge });
 
-      // NPC-scoped recap: the current scene as this character has perceived it.
+      // NPC-scoped recap: the story's events (as plausibly known) + the current
+      // scene as this character has perceived it.
       const sceneSummary = story.currentSceneId ? summaries.getSceneSummary(story.currentSceneId) : undefined;
+      const digest = summaries.getStoryDigest(story.id);
       const recapParts: string[] = [];
-      if (consult.wasDormant) {
-        const digest = summaries.getStoryDigest(story.id);
-        recapParts.push(`Time has passed since you were last present. What you would plausibly know of events: ${truncateToTokens(digest?.content ?? 'little has changed.', 300)}`);
+      if (consult.wasDormant) recapParts.push('Time has passed since you were last present.');
+      if (digest?.content.trim()) {
+        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), consult.wasDormant ? 300 : 200)}`);
       }
       if (sceneSummary?.content.trim()) recapParts.push(`The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 300)}`);
 
