@@ -8,7 +8,9 @@ import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
-import { defaultPrompt } from '../agents/prompts.ts';
+import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
+import { callJson } from '../llm/jsonCall.ts';
+import { rollSeeds } from '../util/seeds.ts';
 import { anthropicDriver } from '../llm/anthropicDriver.ts';
 import { openaiDriver } from '../llm/openaiDriver.ts';
 
@@ -40,6 +42,28 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     profiles: Object.entries(config.modelProfiles).map(([name, p]) => ({ name, provider: p.provider, model: p.model })),
     roles: config.roles,
   }));
+
+  // Premise randomizer: the ENGINE rolls 5 of 100 seed phrases (true random),
+  // a storyteller-caliber model weaves them into a premise + genre + title.
+  const RandomStory = z.object({ title: z.string(), genre: z.string(), premise: z.string() });
+  server.post('/api/stories/randomize', async (req, reply) => {
+    try {
+      const seeds = rollSeeds(5);
+      const bound = registry.getForRole('storyteller');
+      const result = await callJson(
+        bound,
+        {
+          system: renderPrompt('story-randomizer', {}),
+          messages: [{ role: 'user', content: `The five rolled seeds:\n${seeds.map((s) => `- ${s}`).join('\n')}` }],
+        },
+        RandomStory,
+      );
+      return { seeds, ...result };
+    } catch (err) {
+      reply.code(500);
+      return { error: (err as Error).message };
+    }
+  });
 
   server.post('/api/stories', async (req, reply) => {
     const body = CreateStoryBody.parse(req.body);

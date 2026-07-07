@@ -82,7 +82,7 @@ export class JobWorker {
       const status = this.jobs.markFailedOrRetry(job.id, message, this.maxAttempts);
       logger.warn('job failed', { type: job.type, jobId: job.id, attempt: job.attempts, status, message });
       if (status === 'failed') {
-        this.events.emit({ t: 'job.failed', storyId: job.storyId, jobId: job.id, type: job.type });
+        this.events.emit({ t: 'job.failed', storyId: job.storyId, jobId: job.id, type: job.type, error: message });
       }
     }
   }

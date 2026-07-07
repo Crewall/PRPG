@@ -128,6 +128,49 @@ describe('adjudicated turns', () => {
     expect((req!.payload as { system: string }).system).not.toContain('resolve_action');
   });
 
+  it('a consult emitted BY the post-adjudication weave still fires (cascade)', async () => {
+    // Regression: adjudication round → weave emits consult_npc → the NPC must
+    // be asked and a final weave produced (was silently dropped before).
+    const cap: Capture = { adjudicatorCalls: 0, weaveReq: null };
+    dir = mkdtempSync(join(tmpdir(), 'prpg-adj-'));
+    const cascadeDriver: LlmDriver = {
+      kind: 'anthropic',
+      async chat(req) {
+        const lastUser = req.messages[req.messages.length - 1]?.content ?? '';
+        let text: string;
+        if (req.system.includes('You are the **Adjudicator**')) {
+          cap.adjudicatorCalls++;
+          text = JSON.stringify({ assessment: 'risky plant', successChance: 70, keyFactors: [], complication: 'she feels the coin drop' });
+        } else if (req.system.includes('isolation contract')) {
+          text = JSON.stringify({ dialogue: 'You planted this on me.', action: 'grabs your wrist' });
+        } else if (lastUser.includes('consulted responded')) {
+          text = 'FINAL: Tirea grabs your wrist. "You planted this on me."';
+        } else if (lastUser.includes('Fate has decided')) {
+          text = 'The coin drops — but she feels it.\n\n```directives\n{"directives":[{"type":"consult_npc","npcName":"Tirea","situation":"she caught the plant"}]}\n```';
+        } else {
+          text = 'You palm the coin.\n\n```directives\n{"directives":[{"type":"resolve_action","actor":"the player","action":"plant the coin unseen"}]}\n```';
+        }
+        return { text, usage: { inputTokens: 1, outputTokens: 1 }, model: req.model };
+      },
+    };
+    app = createApp(config, { driverFactory: () => cascadeDriver, dbPath: join(dir, 't.db'), startWorker: false, rng: () => 0.3 });
+    const story = app.stories.createStory({ title: 'E' });
+    // Tirea is a present major NPC (so consults are possible → buffered mode).
+    const tirea = app.memory.createObject({ storyId: story.id, type: 'character', name: 'Tirea', aliases: [], summary: 'A traveler.', salience: 0.8, status: 'active' });
+    app.stories.setActiveNpcs(app.stories.getStory(story.id)!.currentSceneId!, [tirea.id]);
+
+    const turn = await app.pipeline.run(story.id, 'I plant the coin in her bag.', silentEmitter());
+    expect(turn?.status).toBe('complete');
+    expect(cap.adjudicatorCalls).toBe(1);
+    // The NPC actually fired…
+    expect(app.threadLog.query(story.id).some((l) => l.agentRole === 'npc')).toBe(true);
+    // …and the final narration is the post-consult weave.
+    expect(turn?.narration).toContain('You planted this on me');
+    expect(turn?.meta.storytellerCalls).toBe(3);
+    expect(turn?.meta.consults).toBe(1);
+    expect((turn?.meta.rolls as unknown[]).length).toBe(1);
+  });
+
   it('referee failure degrades: storyteller decides, turn still completes', async () => {
     const cap: Capture = { adjudicatorCalls: 0, weaveReq: null };
     boot(cap, () => 0.3, { adjudicatorThrows: true });

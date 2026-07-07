@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 export type ServerEvent =
   | { t: 'summary.updated'; storyId: string; scope: 'scene' | 'story' }
   | { t: 'memory.updated'; storyId: string; objectIds: string[] }
-  | { t: 'job.failed'; storyId: string | null; jobId: string; type: string }
+  | { t: 'job.failed'; storyId: string | null; jobId: string; type: string; error: string }
   | { t: 'scene.changed'; storyId: string; sceneId: string }
   | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }
   | { t: 'thread.activity'; storyId: string | null; entry: unknown };
