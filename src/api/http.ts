@@ -6,6 +6,7 @@ import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model
 import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
+import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
 import { defaultPrompt } from '../agents/prompts.ts';
 import { anthropicDriver } from '../llm/anthropicDriver.ts';
@@ -350,6 +351,26 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
         distorted: k.content !== k.fact.content, // they believe a distortion
       }));
     return { available: true, world };
+  });
+
+  // Player-dossier interview: 1–3 rounds of Q&A on its own AI thread, ending
+  // in the player character being created in memory.
+  server.post('/api/stories/:id/player/interview', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({ exchanges: z.array(z.object({ question: z.string(), answer: z.string() })).max(6).default([]) })
+      .parse(req.body ?? {});
+    if (!stories.getStory(id)) {
+      reply.code(404);
+      return { error: 'not found' };
+    }
+    try {
+      const deps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
+      return await runPlayerInterview(deps, id, body.exchanges);
+    } catch (err) {
+      reply.code(500);
+      return { error: (err as Error).message };
+    }
   });
 
   server.post('/api/stories/:id/npcs/:oid/promote', async (req, reply) => {

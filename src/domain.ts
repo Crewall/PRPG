@@ -11,6 +11,11 @@ export const StorySettings = z.object({
   premise: z.string().default(''),
   genre: z.string().default('freeform'),
   tone: z.string().default('immersive, second-person present tense'),
+  // Storyteller reply length, 1 (terse) … 5 (expansive). Storyteller only —
+  // scribes/NPCs are unaffected.
+  verbosity: z.number().int().min(1).max(5).default(3),
+  // The player's own character object in memory (set by the intake interview).
+  playerObjectId: z.string().nullable().default(null),
   overseer: z
     .object({
       enabled: z.boolean().default(false),
