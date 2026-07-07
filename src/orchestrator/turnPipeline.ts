@@ -169,67 +169,82 @@ export class TurnPipeline {
       // A delta gate that never leaks the ```directives fence to the player.
       const gate = this.makeGate(out);
 
-      // Step 3 — storyteller pass 1.
+      // Step 3 — storyteller pass 1. Streams live when no NPCs are present
+      // (weaves then CONTINUE the text); buffered otherwise (weaves REWRITE it).
+      const live = !canConsult;
       out.status('the storyteller is writing…');
-      const draft1 = await storyteller.narrate(ctx, canConsult ? undefined : gate.onDelta, { turnId: turn.id, signal: aborter.signal });
-      let parsed = parseDirectives(draft1);
-      let finalNarration = parsed.narration;
-      let finalDirectives = parsed.directives;
+      let draft = await storyteller.narrate(ctx, live ? gate.onDelta : undefined, { turnId: turn.id, signal: aborter.signal });
+      let parsed = parseDirectives(draft);
       let storytellerCalls = 1;
+      const narrationParts: string[] = [parsed.narration];
+      const allRolls: ActionResolution[] = [];
+      let consultCount = 0;
+      let weaveCtx = ctx;
 
-      // Step 4 — NPC consults + adjudicated actions, Step 5 — re-weave.
-      const consults = canConsult ? parsed.directives.filter((d): d is Extract<Directive, { type: 'consult_npc' }> => d.type === 'consult_npc') : [];
-      const resolveDirectives = story.settings.adjudicator.enabled
-        ? parsed.directives.filter((d): d is Extract<Directive, { type: 'resolve_action' }> => d.type === 'resolve_action')
-        : [];
+      // Steps 4–6 — the directive cascade. Consults and adjudications can beget
+      // each other (an adjudicated outcome may demand an NPC's reaction, and a
+      // consult may trigger an uncertain action), so a weave pass is allowed to
+      // emit NEW directives, which we execute and weave again — capped.
+      const MAX_STORYTELLER_CALLS = 3;
+      while (storytellerCalls < MAX_STORYTELLER_CALLS) {
+        const consults = canConsult ? parsed.directives.filter((d): d is Extract<Directive, { type: 'consult_npc' }> => d.type === 'consult_npc') : [];
+        const resolveDirectives = story.settings.adjudicator.enabled
+          ? parsed.directives.filter((d): d is Extract<Directive, { type: 'resolve_action' }> => d.type === 'resolve_action')
+          : [];
+        if (!consults.length && !resolveDirectives.length) break;
 
-      // Adjudication: gather circumstances, judge, roll hidden dice (parallel).
-      let resolutions: ActionResolution[] = [];
-      let weaveResolutions: ResolutionForWeave[] = [];
-      if (resolveDirectives.length) {
-        stage = 'adjudicator';
-        out.status('fate weighs the attempt…');
-        const results = await Promise.all(resolveDirectives.map((d) => this.resolveAction(story, turn.id, d, aborter.signal)));
-        resolutions = results.map((r) => r.resolution).filter((r): r is ActionResolution => !!r);
-        weaveResolutions = results.map((r) => r.weave);
-      }
+        // Adjudication: gather circumstances, judge, roll hidden dice (parallel).
+        let weaveResolutions: ResolutionForWeave[] = [];
+        if (resolveDirectives.length) {
+          stage = 'adjudicator';
+          out.status('fate weighs the attempt…');
+          const results = await Promise.all(resolveDirectives.map((d) => this.resolveAction(story, turn.id, d, aborter.signal)));
+          for (const r of results) if (r.resolution) allRolls.push(r.resolution);
+          weaveResolutions = results.map((r) => r.weave);
+        }
 
-      if (consults.length || (canConsult && weaveResolutions.length)) {
-        // Buffered REWRITE path: pass 1 was never shown, so the weave replaces it.
-        let weave: NpcReplyForWeave[] = [];
+        let weaveReplies: NpcReplyForWeave[] = [];
         if (consults.length) {
           stage = 'npc consults';
           out.status('the characters are thinking…');
           const outcomes = await Promise.all(consults.map((c) => this.consultNpc(story, turn.id, c, playerInput, parsed.narration, aborter.signal)));
-          weave = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
+          weaveReplies = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
+          consultCount += consults.length;
         }
-        const ctx2 = contexts.withNpcReplies(ctx, draft1, weave, weaveResolutions);
 
         stage = `storyteller weave (${bound.profile.model})`;
-        out.status('the storyteller is weaving the reply…');
-        gate.reset();
-        const draft2 = await storyteller.narrate(ctx2, gate.onDelta, { turnId: turn.id, signal: aborter.signal });
-        storytellerCalls = 2;
-        parsed = parseDirectives(draft2);
-        finalNarration = parsed.narration;
-        finalDirectives = parsed.directives;
-      } else if (weaveResolutions.length) {
-        // Streamed CONTINUATION path: the lead-in already streamed live, so the
-        // storyteller continues from it with the decided outcome appended.
-        const ctx2 = contexts.withResolutions(ctx, draft1, weaveResolutions);
-        stage = `storyteller weave (${bound.profile.model})`;
-        out.status('the storyteller narrates the outcome…');
-        out.delta('\n\n');
-        const gate2 = this.makeGate(out);
-        const draft2 = await storyteller.narrate(ctx2, gate2.onDelta, { turnId: turn.id, signal: aborter.signal });
-        storytellerCalls = 2;
-        const parsed2 = parseDirectives(draft2);
-        finalNarration = `${parsed.narration}\n\n${parsed2.narration}`;
-        finalDirectives = [...parsed.directives.filter((d) => d.type !== 'resolve_action'), ...parsed2.directives];
-      } else if (canConsult) {
-        // Buffered pass-1 with no consult → replay the narration so the player sees it stream.
-        gate.replay(finalNarration);
+        if (live) {
+          // The previous text already streamed — append a continuation.
+          weaveCtx = contexts.withContinuation(weaveCtx, draft, { replies: weaveReplies, resolutions: weaveResolutions });
+          out.status('the storyteller continues…');
+          out.delta('\n\n');
+          const g = this.makeGate(out);
+          draft = await storyteller.narrate(weaveCtx, g.onDelta, { turnId: turn.id, signal: aborter.signal });
+          parsed = parseDirectives(draft);
+          narrationParts.push(parsed.narration);
+        } else {
+          // Buffered — nothing shown yet, so the weave replaces the draft wholesale.
+          weaveCtx = contexts.withNpcReplies(weaveCtx, draft, weaveReplies, weaveResolutions);
+          out.status('the storyteller is weaving the reply…');
+          gate.reset();
+          draft = await storyteller.narrate(weaveCtx, gate.onDelta, { turnId: turn.id, signal: aborter.signal });
+          parsed = parseDirectives(draft);
+          narrationParts.length = 0;
+          narrationParts.push(parsed.narration);
+        }
+        storytellerCalls++;
       }
+
+      const leftover = parsed.directives.filter((d) => d.type === 'consult_npc' || d.type === 'resolve_action');
+      if (leftover.length) {
+        logger.warn('directive cascade cap reached — dropping', { storyId, turnId: turn.id, dropped: leftover.map((d) => d.type) });
+      }
+      if (!live && storytellerCalls === 1) {
+        // Buffered pass-1 with nothing to weave → replay the narration so the player sees it stream.
+        gate.replay(parsed.narration);
+      }
+      const finalNarration = narrationParts.join('\n\n');
+      const finalDirectives = parsed.directives;
 
       // Step 7 — emit.
       const promptTokens = estimateTokens(ctx.system) + ctx.messages.reduce((n, m) => n + estimateTokens(m.content), 0);
@@ -242,9 +257,9 @@ export class TurnPipeline {
           outputTokensEst: estimateTokens(finalNarration),
           model: bound.profile.model,
           storytellerCalls,
-          consults: consults.length,
+          consults: consultCount,
           // Hidden dice: numbers live here (and the debug UI), never in the story.
-          ...(resolutions.length ? { rolls: resolutions.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome })) } : {}),
+          ...(allRolls.length ? { rolls: allRolls.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome })) } : {}),
         },
       });
       agents.appendMessage(session.id, { role: 'user', content: playerInput || '(begin)', turnId: turn.id });

@@ -59,6 +59,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'npc-dossier', label: 'Memory scribe — NPC dossier' },
   { name: 'adjudicator', label: 'Adjudicator — action resolution' },
   { name: 'player-intake', label: 'Character interviewer — player dossier' },
+  { name: 'story-randomizer', label: 'Story randomizer — premise from seeds' },
 ];
 
 /** Convert the boot config.json into the initial RuntimeSettings shape. */

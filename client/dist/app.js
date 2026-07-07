@@ -64,6 +64,22 @@ async function renderHome() {
     'You are a traveler arriving at the Rusty Flagon, a dimly lit tavern on the edge of a rain-soaked frontier town. Something is not right here.');
   const genreIn = h('input', { placeholder: 'Genre', value: 'dark fantasy' });
   const createBtn = h('button', { class: 'primary' }, 'Create & play');
+
+  // Premise randomizer: the engine rolls 5 of 100 seed phrases, the AI weaves
+  // a basic story from them and names/genres it — all fields stay editable.
+  const seedNote = h('div', { class: 'sub', style: 'margin-top:6px' });
+  const randomBtn = h('button', { class: 'ghost' }, '🎲 Randomize');
+  randomBtn.addEventListener('click', async () => {
+    randomBtn.disabled = true; randomBtn.textContent = '🎲 rolling…'; seedNote.textContent = '';
+    try {
+      const r = await api.post('/api/stories/randomize');
+      titleIn.value = r.title || titleIn.value;
+      genreIn.value = r.genre || genreIn.value;
+      seedIn.value = r.premise || seedIn.value;
+      seedNote.textContent = 'rolled seeds: ' + (r.seeds || []).join(' · ');
+    } catch (e) { seedNote.textContent = '✗ randomize failed: ' + e.message; }
+    randomBtn.disabled = false; randomBtn.textContent = '🎲 Randomize';
+  });
   createBtn.addEventListener('click', async () => {
     createBtn.disabled = true; createBtn.textContent = 'Creating…';
     try {
@@ -79,7 +95,8 @@ async function renderHome() {
       h('div', { class: 'card' },
         h('h3', { style: 'margin-top:0' }, 'New story'),
         h('label', {}, 'Title'), titleIn, h('label', {}, 'Genre'), genreIn, h('label', {}, 'Premise seed'), seedIn,
-        h('div', { style: 'margin-top:14px' }, createBtn),
+        h('div', { class: 'row', style: 'margin-top:14px; gap:10px' }, createBtn, randomBtn),
+        seedNote,
       ),
     )),
   );
@@ -649,6 +666,9 @@ async function renderPlay(storyId) {
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
+      // A background agent (scribe, archiver, dossier…) gave up after retries —
+      // surface the full error in the transcript instead of failing silently.
+      case 'job.failed': if (m.storyId === storyId) addBubble('error', `Background agent failed — ${m.type}: ${m.error || 'unknown error'} (retry from the failed-jobs list or ignore; play continues)`); break;
     }
   }
 

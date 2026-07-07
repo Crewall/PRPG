@@ -70,8 +70,25 @@ export interface ContextBuilder {
   forNpc(story: Story, npcObjectId: string, consult: NpcConsultContext): BuiltContext;
   /** Extend a storyteller context with NPC replies (and any resolved actions) for a full REWRITE pass. */
   withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[], resolutions?: ResolutionForWeave[]): BuiltContext;
-  /** Extend a storyteller context with resolved actions for a CONTINUATION pass (the lead-in already streamed to the player). */
-  withResolutions(base: BuiltContext, draft: string, resolutions: ResolutionForWeave[]): BuiltContext;
+  /** Extend a storyteller context with consult replies / resolved actions for a CONTINUATION pass (prior text already streamed to the player). */
+  withContinuation(base: BuiltContext, draft: string, events: { replies?: NpcReplyForWeave[]; resolutions?: ResolutionForWeave[] }): BuiltContext;
+}
+
+function weaveSections(replies: NpcReplyForWeave[], resolutions: ResolutionForWeave[]): string[] {
+  const sections: string[] = [];
+  if (replies.length) {
+    const lines = replies.map((r) => {
+      if (r.error) return `- ${r.name} is unavailable (${r.error}); voice them briefly yourself, consistent with their known character.`;
+      const bits = [r.dialogue ? `says: "${r.dialogue}"` : 'says nothing'];
+      if (r.action) bits.push(`(${r.action})`);
+      return `- ${r.name} ${bits.join(' ')}`;
+    });
+    sections.push(`The characters you consulted responded:\n${lines.join('\n')}`);
+  }
+  if (resolutions.length) {
+    sections.push(`Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice or chances):\n${resolutionLines(resolutions)}`);
+  }
+  return sections;
 }
 
 /** Render an object view with per-fact ids so an NPC can cite them in revealsFactIds. */
@@ -290,19 +307,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
     },
 
     withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[], resolutions?: ResolutionForWeave[]): BuiltContext {
-      const sections: string[] = [];
-      if (replies.length) {
-        const lines = replies.map((r) => {
-          if (r.error) return `- ${r.name} is unavailable (${r.error}); voice them briefly yourself, consistent with their known character.`;
-          const bits = [r.dialogue ? `says: "${r.dialogue}"` : 'says nothing'];
-          if (r.action) bits.push(`(${r.action})`);
-          return `- ${r.name} ${bits.join(' ')}`;
-        });
-        sections.push(`The characters you consulted responded:\n${lines.join('\n')}`);
-      }
-      if (resolutions?.length) {
-        sections.push(`Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice or chances):\n${resolutionLines(resolutions)}`);
-      }
+      const sections = weaveSections(replies, resolutions ?? []);
       const messages: ChatMessage[] = [
         ...base.messages,
         { role: 'assistant', content: draft },
@@ -310,21 +315,22 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
           role: 'user',
           content:
             `${sections.join('\n\n')}\n\n` +
-            `Now write the FINAL narration the player will read, weaving all of this in naturally and in your own narrative voice. Do not quote these instructions. Only include a \`\`\`directives block if you are declaring scene changes.`,
+            `Now write the FINAL narration the player will read, weaving all of this in naturally and in your own narrative voice. Vary your wording and structure — do not mirror the rhythm or reuse the imagery of your previous replies. Do not quote these instructions. You may emit a \`\`\`directives block if the situation now demands one (a consult, an adjudication, a scene change).`,
         },
       ];
       return { system: base.system, messages };
     },
 
-    withResolutions(base: BuiltContext, draft: string, resolutions: ResolutionForWeave[]): BuiltContext {
+    withContinuation(base: BuiltContext, draft: string, events: { replies?: NpcReplyForWeave[]; resolutions?: ResolutionForWeave[] }): BuiltContext {
+      const sections = weaveSections(events.replies ?? [], events.resolutions ?? []);
       const messages: ChatMessage[] = [
         ...base.messages,
         { role: 'assistant', content: draft },
         {
           role: 'user',
           content:
-            `Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice, chances or these instructions):\n${resolutionLines(resolutions)}\n\n` +
-            `CONTINUE the narration from exactly where your last reply stopped. Do NOT repeat or rewrite what you already wrote — write only the continuation describing how the attempt plays out and where it leaves the player. Only include a \`\`\`directives block if you are declaring scene changes.`,
+            `${sections.join('\n\n')}\n\n` +
+            `CONTINUE the narration from exactly where your last reply stopped. Do NOT repeat or rewrite what you already wrote — write only the continuation, in fresh language, describing how this plays out and where it leaves the player. You may emit a \`\`\`directives block if the situation now demands one (a consult, an adjudication, a scene change).`,
         },
       ];
       return { system: base.system, messages };
