@@ -133,19 +133,24 @@ export class TurnPipeline {
     const aborter = new AbortController();
     this.aborters.set(storyId, aborter);
     const t0 = Date.now();
+    // Which agent/model is at work — so a failure can say WHO failed and how.
+    let stage = 'setup';
 
     try {
       // Step 2 — context build. In summary-driven mode a cheap planner pass
       // decides which memories (and how deep) the storyteller needs (feature 4).
       let plan: ContextPlan | undefined;
       if (story.settings.context.summaryDriven && story.settings.context.plannerEnabled) {
+        stage = 'context planner';
         out.status('gathering memories…');
         plan = await this.planContext(story, playerInput, turn.id, aborter.signal);
       }
+      stage = 'context build';
       const ctx = contexts.forStoryteller(story, playerInput, plan ? { plan } : undefined);
 
       const profileName = story.settings.roles.storyteller ?? registry.getForRole('storyteller').name;
       const bound = registry.getProfile(profileName);
+      stage = `storyteller (${bound.profile.model})`;
       const session = agents.ensureSession(storyId, 'storyteller', profileName);
       const storyteller = new Storyteller({ session, bound, threadLog, storyId });
 
@@ -168,12 +173,14 @@ export class TurnPipeline {
       // Step 4 — NPC consults (parallel), Step 5 — re-weave.
       const consults = canConsult ? parsed.directives.filter((d): d is Extract<Directive, { type: 'consult_npc' }> => d.type === 'consult_npc') : [];
       if (consults.length) {
+        stage = 'npc consults';
         out.status('the characters are thinking…');
         const outcomes = await Promise.all(consults.map((c) => this.consultNpc(story, turn.id, c, playerInput, parsed.narration, aborter.signal)));
 
         const weave: NpcReplyForWeave[] = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
         const ctx2 = contexts.withNpcReplies(ctx, draft1, weave);
 
+        stage = `storyteller weave (${bound.profile.model})`;
         out.status('the storyteller is weaving the reply…');
         gate.reset();
         const draft2 = await storyteller.narrate(ctx2, gate.onDelta, { turnId: turn.id, signal: aborter.signal });
@@ -215,8 +222,8 @@ export class TurnPipeline {
 
       return finalTurn;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       const cancelled = aborter.signal.aborted;
+      const message = cancelled ? (err instanceof Error ? err.message : String(err)) : `${stage}: ${err instanceof Error ? err.message : String(err)}`;
       stories.updateTurn(turn.id, { status: cancelled ? 'rejected' : 'error', meta: { error: message } });
       logger.warn('turn failed', { storyId, turnId: turn.id, cancelled, message });
       if (cancelled) out.rejected(turn.id, 'cancelled');
