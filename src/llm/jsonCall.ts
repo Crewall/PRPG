@@ -51,58 +51,93 @@ export function extractJson(text: string): string {
 }
 
 /**
- * Schema-enforced JSON completion with one automatic repair-retry, as specified
- * in 04-agents.md. On the first validation failure we send the parser errors
- * back and ask for corrected JSON; a second failure throws JsonCallError.
+/** A stop reason meaning the model was cut off at its output-token limit. */
+function isTruncated(stopReason: string | undefined): boolean {
+  return stopReason === 'max_tokens' || stopReason === 'length';
+}
+
+/**
+ * Schema-enforced JSON completion with two independent recovery paths (04-agents.md):
+ *
+ * 1. **Repair retry** (×1) — when a reply is malformed or fails schema validation,
+ *    we send the errors back and ask for corrected JSON.
+ * 2. **Cap escalation** (×2) — when a reply was cut off at the model's output-token
+ *    limit (stop_reason `max_tokens`/`length`), asking it to "fix" an unfinishable
+ *    string is futile; instead we re-request with a larger `maxTokens` budget.
+ *    This is what prevents the `scribe_memory` "Unterminated string" failures on
+ *    large MemoryDeltas.
+ *
+ * `opts.maxTokens` overrides the profile's default budget for the first call (used
+ * to give the player-intake dossier a bigger allowance up front).
  */
 export async function callJson<S extends z.ZodTypeAny>(
   bound: BoundDriver,
   ctx: JsonCallContext,
   schema: S,
-  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta } = {},
+  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta; maxTokens?: number } = {},
 ): Promise<z.infer<S>> {
   const messages: ChatMessage[] = [...ctx.messages];
   let lastRaw = '';
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const baseMax = opts.maxTokens ?? bound.profile.maxTokens ?? 2048;
+  let currentMax = baseMax;
+  const CAP_CEILING = Math.max(baseMax * 4, 8192);
+  const MAX_REPAIRS = 1; // malformed/invalid JSON → one "fix it" round
+  const MAX_ESCALATIONS = 2; // truncated at the cap → up to two budget bumps
+  let repairs = 0;
+  let escalations = 0;
+
+  for (let attempt = 0; attempt < MAX_REPAIRS + MAX_ESCALATIONS + 1; attempt++) {
     const result = await bound.chat(
-      { system: ctx.system, messages, jsonSchema: { type: 'object' }, signal: ctx.signal },
+      { system: ctx.system, messages, jsonSchema: { type: 'object' }, signal: ctx.signal, maxTokens: currentMax },
       opts.onDelta,
     );
     lastRaw = result.text;
     opts.onRaw?.(result.text, attempt);
+    const truncated = isTruncated(result.stopReason);
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(extractJson(result.text));
     } catch (err) {
-      if (attempt === 1) throw new JsonCallError(`invalid JSON after retry: ${(err as Error).message}`, lastRaw, attempt + 1);
-      messages.push({ role: 'assistant', content: result.text });
-      messages.push({
-        role: 'user',
-        content: `Your reply was not valid JSON (${(err as Error).message}). Reply with only corrected JSON, no prose.`,
-      });
-      continue;
+      // Cut off at the token cap: give it more room rather than a doomed repair.
+      if (truncated && escalations < MAX_ESCALATIONS && currentMax < CAP_CEILING) {
+        escalations++;
+        currentMax = Math.min(currentMax * 2, CAP_CEILING);
+        continue; // same prompt, bigger budget
+      }
+      if (repairs < MAX_REPAIRS) {
+        repairs++;
+        messages.push({ role: 'assistant', content: result.text });
+        messages.push({
+          role: 'user',
+          content: `Your reply was not valid JSON (${(err as Error).message}). Reply with only corrected JSON, no prose.`,
+        });
+        continue;
+      }
+      throw new JsonCallError(`invalid JSON after retry: ${(err as Error).message}`, lastRaw, attempt + 1);
     }
 
     const validated = schema.safeParse(parsed);
     if (validated.success) return validated.data;
 
-    if (attempt === 1) {
-      throw new JsonCallError(
-        `schema validation failed after retry: ${validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
-        lastRaw,
-        attempt + 1,
-      );
+    if (repairs < MAX_REPAIRS) {
+      repairs++;
+      const errText = validated.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
+      messages.push({ role: 'assistant', content: result.text });
+      messages.push({
+        role: 'user',
+        content: `Your reply failed validation: ${errText}. Reply with only corrected JSON, no prose.`,
+      });
+      continue;
     }
-    const errText = validated.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
-    messages.push({ role: 'assistant', content: result.text });
-    messages.push({
-      role: 'user',
-      content: `Your reply failed validation: ${errText}. Reply with only corrected JSON, no prose.`,
-    });
+    throw new JsonCallError(
+      `schema validation failed after retry: ${validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+      lastRaw,
+      attempt + 1,
+    );
   }
 
   // Unreachable, but satisfies the type checker.
-  throw new JsonCallError('callJson exhausted attempts', lastRaw, 2);
+  throw new JsonCallError('callJson exhausted attempts', lastRaw, MAX_REPAIRS + MAX_ESCALATIONS + 1);
 }
