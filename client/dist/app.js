@@ -142,19 +142,73 @@ async function renderPlay(storyId) {
     const active = agents.filter((a) => a.role === 'npc' && a.state === 'active' && a.npc);
     activeNpcIds = new Set(active.map((a) => a.npcObjectId));
     npcChips.replaceChildren(
-      ...(active.length ? active.map((a) => h('button', { class: 'chip', onclick: () => showObjectCard(a.npcObjectId, debug ? 'storyteller' : 'player') }, a.npc)) : [h('span', { class: 'sub' }, 'no major characters yet')]),
+      ...(active.length ? active.map((a) => h('button', { class: 'chip', onclick: () => showDossier(a.npcObjectId) }, a.npc)) : [h('span', { class: 'sub' }, 'no major characters yet')]),
     );
   }
 
-  async function showObjectCard(oid, scope) {
+  // Character/object dossier: the full fact sheet with sorting and filtering
+  // by tier, visibility level and category — plus (debug) what this NPC KNOWS
+  // about the world, straight from the recorded knowledge links.
+  async function showDossier(oid) {
+    const scope = debug ? 'storyteller' : 'player';
     let view;
-    try { view = await api.get(`/api/memory/objects/${oid}?scope=${scope}`); } catch { return; }
+    try { view = await api.get(`/api/memory/objects/${oid}?scope=${scope}&maxFacts=500`); } catch { return; }
     const facts = (view?.facts) || [];
+    let knowledge = null;
+    try {
+      const k = await api.get(`/api/stories/${storyId}/npcs/${oid}/knowledge`);
+      if (k.available && k.world?.length) knowledge = k.world;
+    } catch {}
+
+    const TIER_ORD = { major: 0, mid: 1, minor: 2 };
+    const LVL_ORD = { visible: 0, known: 1, secret: 2, hidden: 3 };
+    const cats = [...new Set(facts.map((f) => f.category))].sort();
+    const active = { tier: new Set(), lvl: new Set(), cat: new Set() }; // empty set = no filter
+    let sortBy = 'tier';
+
+    const list = h('div', { class: 'dossier-list' });
+    function renderList() {
+      const kept = facts.filter((f) =>
+        (!active.tier.size || active.tier.has(f.tier || 'mid')) &&
+        (!active.lvl.size || active.lvl.has(f.detailLevel)) &&
+        (!active.cat.size || active.cat.has(f.category)));
+      const t = (f) => TIER_ORD[f.tier || 'mid'] ?? 1;
+      const l = (f) => LVL_ORD[f.detailLevel] ?? 0;
+      kept.sort((a, b) =>
+        sortBy === 'category' ? a.category.localeCompare(b.category) || t(a) - t(b)
+        : sortBy === 'level' ? l(a) - l(b) || t(a) - t(b)
+        : t(a) - t(b) || a.category.localeCompare(b.category));
+      list.replaceChildren(
+        h('div', { class: 'sub' }, `${kept.length} of ${facts.length} fact${facts.length === 1 ? '' : 's'}`),
+        ...(kept.length ? kept.map((f) => h('div', { class: 'fact' },
+          h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
+          h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
+          h('span', { class: 'fcat' }, f.category + (f.subcategory ? '/' + f.subcategory : '')),
+          h('span', {}, f.content))) : [h('div', { class: 'empty' }, facts.length ? 'Nothing matches the filters.' : 'Nothing known yet.')]));
+    }
+    function chipRow(values, key) {
+      return h('div', { class: 'filter-row' }, ...values.map((v) => {
+        const b = h('button', { class: 'chip filter-chip' }, v);
+        b.addEventListener('click', () => { active[key].has(v) ? active[key].delete(v) : active[key].add(v); b.classList.toggle('sel'); renderList(); });
+        return b;
+      }));
+    }
+    const sortSel = h('select', { class: 'dossier-sort', onchange: (e) => { sortBy = e.target.value; renderList(); } },
+      ...[['tier', 'sort: importance'], ['category', 'sort: category'], ['level', 'sort: visibility']].map(([v, lbl]) => h('option', { value: v }, lbl)));
+    renderList();
+
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
-      h('div', { class: 'modal' },
+      h('div', { class: 'modal dossier' },
         h('h3', {}, view?.name || 'Unknown'),
         view?.summary ? h('div', { class: 'mem-summary' }, view.summary) : null,
-        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
+        facts.length ? h('div', { class: 'filter-bar' }, chipRow(['major', 'mid', 'minor'], 'tier'), chipRow(['visible', 'known', 'secret', 'hidden'], 'lvl'), cats.length > 1 ? chipRow(cats, 'cat') : null, sortSel) : null,
+        list,
+        knowledge ? h('div', { class: 'knows' },
+          h('div', { class: 'mem-type' }, `What ${view?.name || 'they'} knows about the world`),
+          ...knowledge.map((k) => h('div', { class: 'fact' },
+            h('span', { class: `tier ${k.tier || 'mid'}` }, k.tier || 'mid'),
+            h('span', { class: 'fcat' }, k.objectName),
+            h('span', {}, k.content + (k.distorted ? '  ⚠ believes a distortion' : '')))) ) : null,
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -260,6 +314,10 @@ async function renderPlay(storyId) {
       const isActive = activeNpcIds.has(object.id);
       const btn = h('button', { class: 'link', onclick: async (ev) => {
         ev.stopPropagation();
+        const q = isActive
+          ? `Demote ${object.name}? They stop acting with their own mind; the storyteller voices them again.`
+          : `Promote ${object.name} to a major character? They get their own mind and a full dossier (persona, looks, belongings, skills, state, goals) written by the AI.`;
+        if (!confirm(q)) return;
         await api.post(`/api/stories/${storyId}/npcs/${object.id}/${isActive ? 'demote' : 'promote'}`);
         await refreshSceneHeader(); refresh();
       } }, isActive ? 'demote' : 'promote');
@@ -268,16 +326,17 @@ async function renderPlay(storyId) {
     const card = h('div', { class: 'mem-card' }, head, factList);
     if (object.summary) factList.append(h('div', { class: 'mem-summary' }, object.summary));
 
-    // Feature 5: edit / delete the object itself.
+    // Feature 5: edit / delete the object itself (+ full dossier view).
     const objTools = h('div', { class: 'row item-tools' },
-      h('button', { class: 'link', onclick: () => objForm.classList.toggle('hidden') }, 'edit'),
+      h('button', { class: 'link', onclick: () => showDossier(object.id) }, 'dossier'),
+      h('button', { class: 'link', onclick: () => objForm.classList.toggle('gone') }, 'edit'),
       h('button', { class: 'link danger', onclick: async () => {
         if (!confirm(`Delete "${object.name}" and all its facts?`)) return;
         await api.del(`/api/memory/objects/${object.id}`); refresh(); refreshSceneHeader();
       } }, 'delete'));
     const nameIn = h('input', { value: object.name });
     const sumIn = h('input', { value: object.summary || '', placeholder: 'Summary' });
-    const objForm = h('div', { class: 'form hidden' }, nameIn, sumIn,
+    const objForm = h('div', { class: 'form gone' }, nameIn, sumIn,
       h('button', { class: 'small primary', onclick: async () => {
         await api.patch(`/api/memory/objects/${object.id}`, { name: nameIn.value, summary: sumIn.value }); refresh();
       } }, 'Save'));
@@ -352,6 +411,17 @@ async function renderPlay(storyId) {
       if (!val.length) return h('span', { class: 'kv-val sub' }, '(none)');
       return h('div', { class: 'kv-list' }, ...val.map((v) => h('div', { class: 'kv-item' }, kvNode(v))));
     }
+    // Fact-like objects → one readable row: category 25% | subcategory 25% |
+    // content 50%, with the remaining fields in a muted meta line below.
+    if ('content' in val && 'category' in val) {
+      const rest = Object.entries(val).filter(([k, v]) => !['category', 'subcategory', 'content'].includes(k) && v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length));
+      return h('div', { class: 'kv-fact' },
+        h('div', { class: 'fact-grid' },
+          h('span', { class: 'fcat' }, String(val.category ?? '')),
+          h('span', { class: 'fcat sub' }, String(val.subcategory ?? '')),
+          h('span', { class: 'fg-content' }, String(val.content ?? ''))),
+        rest.length ? h('div', { class: 'sub fg-meta' }, rest.map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ')) : null);
+    }
     return h('div', { class: 'kv-obj' }, ...Object.entries(val).map(([k, v]) => h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, k), kvNode(v))));
   }
 
@@ -395,10 +465,10 @@ async function renderPlay(storyId) {
     try { logs = await api.get(`/api/stories/${storyId}/threadlog?limit=60`); } catch {}
     if (!logs.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
     for (const l of logs) {
-      const detail = h('div', { class: 'hidden' });
+      const detail = h('div', { class: 'gone' });
       let built = false;
       body.append(h('div', { class: 'mem-card' },
-        h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('hidden'); } },
+        h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('gone'); } },
           h('span', { class: `role-badge ${l.agentRole}` }, l.agentRole),
           h('span', { class: 'sub' }, `${l.direction} · ${l.tokensOut ?? l.tokensIn ?? 0}tk · ${l.durationMs ?? 0}ms`)),
         detail));
@@ -613,7 +683,7 @@ async function renderPromptEditor(name) {
 
   // Feature 7: a readable preview of the template (markdown-lite, placeholders
   // highlighted) so prompts can be reviewed without parsing the source.
-  const preview = h('div', { class: 'prompt-preview prose hidden' });
+  const preview = h('div', { class: 'prompt-preview prose gone' });
   function renderPreview() {
     const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let html = esc(ta.value);
@@ -629,9 +699,9 @@ async function renderPromptEditor(name) {
   }
   const previewBtn = h('button', { class: 'ghost' }, 'Preview');
   previewBtn.addEventListener('click', () => {
-    const showing = !preview.classList.contains('hidden');
-    if (showing) { preview.classList.add('hidden'); ta.classList.remove('hidden'); previewBtn.textContent = 'Preview'; }
-    else { renderPreview(); preview.classList.remove('hidden'); ta.classList.add('hidden'); previewBtn.textContent = 'Edit'; }
+    const showing = !preview.classList.contains('gone');
+    if (showing) { preview.classList.add('gone'); ta.classList.remove('gone'); previewBtn.textContent = 'Preview'; }
+    else { renderPreview(); preview.classList.remove('gone'); ta.classList.add('gone'); previewBtn.textContent = 'Edit'; }
   });
 
   const status = h('span', { class: 'sub' });
