@@ -43,4 +43,25 @@ describe('callJson repair-retry', () => {
     const bound = asBound(scriptedDriver(['garbage', 'still garbage']));
     await expect(callJson(bound, { system: 's', messages: [{ role: 'user', content: 'go' }] }, Schema)).rejects.toBeInstanceOf(JsonCallError);
   });
+
+  it('escalates the token cap when a reply is truncated at the limit', async () => {
+    const caps: (number | undefined)[] = [];
+    const driver = scriptedDriver([
+      { text: '{"ok": true, "name": "trunca', usage: { inputTokens: 0, outputTokens: 0 }, model: 'm', stopReason: 'max_tokens' },
+      '{"ok": true, "name": "complete"}',
+    ]);
+    const wrapped = { kind: driver.kind, chat: (req: any, onDelta: any) => { caps.push(req.maxTokens); return driver.chat(req, onDelta); } };
+    const out = await callJson(asBound(wrapped as any), { system: 's', messages: [{ role: 'user', content: 'go' }] }, Schema);
+    expect(out.name).toBe('complete');
+    expect(caps[0]).toBe(1024); // asBound profile default
+    expect(caps[1]).toBe(2048); // doubled after the truncated reply
+  });
+
+  it('uses the maxTokens override for the first call', async () => {
+    const caps: (number | undefined)[] = [];
+    const driver = scriptedDriver(['{"ok": true, "name": "ok"}']);
+    const wrapped = { kind: driver.kind, chat: (req: any, onDelta: any) => { caps.push(req.maxTokens); return driver.chat(req, onDelta); } };
+    await callJson(asBound(wrapped as any), { system: 's', messages: [{ role: 'user', content: 'go' }] }, Schema, { maxTokens: 3072 });
+    expect(caps[0]).toBe(3072);
+  });
 });

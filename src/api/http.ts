@@ -388,9 +388,16 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'not found' };
     }
+    // Abort the (potentially slow) model call if the client cancels/disconnects,
+    // so a hung interview can't keep generating after the player gave up. The
+    // client's Cancel button aborts its fetch, which closes this request.
+    const ac = new AbortController();
+    req.raw.on('close', () => {
+      if (!reply.raw.writableEnded) ac.abort(new Error('client cancelled the interview'));
+    });
     try {
       const deps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
-      return await runPlayerInterview(deps, id, body.exchanges);
+      return await runPlayerInterview(deps, id, body.exchanges, { signal: ac.signal });
     } catch (err) {
       reply.code(500);
       return { error: (err as Error).message };

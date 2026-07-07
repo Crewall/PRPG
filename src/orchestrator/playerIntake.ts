@@ -20,6 +20,7 @@ export async function runPlayerInterview(
   deps: HandlerDeps,
   storyId: string,
   exchanges: { question: string; answer: string }[],
+  opts: { signal?: AbortSignal } = {},
 ): Promise<InterviewResult> {
   const story = deps.stories.getStory(storyId);
   if (!story) throw new Error(`story '${storyId}' not found`);
@@ -38,12 +39,15 @@ export async function runPlayerInterview(
   const agent = new PlayerIntake({ session, bound, threadLog: deps.threadLog, storyId });
 
   const mustFinish = exchanges.length >= MAX_INTERVIEW_ROUNDS;
-  const reply = await agent.step({
-    premise: story.settings.premise,
-    digest: deps.summaries.getStoryDigest(storyId)?.content ?? '',
-    exchanges,
-    mustFinish,
-  });
+  const reply = await agent.step(
+    {
+      premise: story.settings.premise,
+      digest: deps.summaries.getStoryDigest(storyId)?.content ?? '',
+      exchanges,
+      mustFinish,
+    },
+    { signal: opts.signal },
+  );
 
   if (!reply.done || !reply.delta) {
     if (mustFinish) throw new Error('the interviewer failed to produce a dossier — try again');

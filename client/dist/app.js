@@ -21,7 +21,7 @@ const h = (tag, attrs = {}, ...kids) => {
 
 const api = {
   async get(p) { const r = await fetch(p); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
-  async post(p, b) { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
+  async post(p, b, opts = {}) { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}), signal: opts.signal }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async patch(p, b) { const r = await fetch(p, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
   async put(p, b) { const r = await fetch(p, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async del(p) { const r = await fetch(p, { method: 'DELETE' }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
@@ -257,15 +257,21 @@ async function renderPlay(storyId) {
     const aEl = h('textarea', { rows: '3', placeholder: 'Your answer…' });
     const status = h('span', { class: 'sub' });
     const nextBtn = h('button', { class: 'primary', disabled: true }, 'Answer');
+    let pending = null; // AbortController for the in-flight interview request
+    const cancel = () => { if (pending) pending.abort(new DOMException('cancelled', 'AbortError')); modal.remove(); };
     const modal = h('div', { class: 'modal-bg' },
       h('div', { class: 'modal' },
         h('h3', {}, 'Who are you?'),
         qEl, aEl,
-        h('div', { class: 'row', style: 'gap:10px' }, nextBtn, h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Cancel'), status)));
+        h('div', { class: 'row', style: 'gap:10px' }, nextBtn, h('button', { class: 'ghost', onclick: cancel }, 'Cancel'), status)));
     async function ask() {
-      nextBtn.disabled = true; status.textContent = '…';
+      nextBtn.disabled = true; status.textContent = 'the interviewer is thinking…';
+      // The dossier reply can be slow; abort rather than hang forever, and let
+      // Cancel abort it immediately (the server stops generating when we do).
+      pending = new AbortController();
+      const timeout = setTimeout(() => pending.abort(new DOMException('timeout', 'AbortError')), 90_000);
       try {
-        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges });
+        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges }, { signal: pending.signal });
         if (r.done) {
           modal.remove();
           story.settings = { ...(story.settings || {}), playerObjectId: r.objectId };
@@ -280,7 +286,12 @@ async function renderPlay(storyId) {
         status.textContent = `question ${r.round} of ${r.maxRounds}`;
         nextBtn.disabled = false;
         aEl.focus();
-      } catch (e) { status.textContent = '✗ ' + e.message; nextBtn.disabled = false; }
+      } catch (e) {
+        status.textContent = e.name === 'AbortError' ? '✗ cancelled — press Answer to try again' : '✗ ' + e.message;
+        nextBtn.disabled = false;
+      } finally {
+        clearTimeout(timeout); pending = null;
+      }
     }
     nextBtn.addEventListener('click', () => {
       if (!aEl.value.trim()) return;

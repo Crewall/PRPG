@@ -44,6 +44,11 @@ export class PlayerIntake extends Agent {
         },
       ],
     };
-    return this.invokeJson(ctx, IntakeReply, opts);
+    // The interviewer's terminal reply is a full character dossier (a large
+    // MemoryDelta), which is exactly the payload that overruns the default cap
+    // and truncates. Triple the memory budget for the questionnaire so the
+    // dossier finishes in one piece; callJson still escalates further if needed.
+    const maxTokens = (this.bound.profile.maxTokens ?? 2048) * 3;
+    return this.invokeJson(ctx, IntakeReply, { ...opts, maxTokens });
   }
 }
