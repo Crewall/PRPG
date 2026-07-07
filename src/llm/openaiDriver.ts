@@ -1,10 +1,12 @@
 import type { ChatRequest, ChatResult, LlmDriver, OnDelta } from './types.ts';
 import { LlmError, parseSse } from './types.ts';
+import { requestWithRetry } from './http.ts';
 
 export interface OpenAiOptions {
   apiKey: string;
   baseUrl: string; // e.g. https://openrouter.ai/api/v1 or http://127.0.0.1:11434/v1
   timeoutMs?: number;
+  maxRetries?: number;
 }
 
 /**
@@ -14,6 +16,7 @@ export interface OpenAiOptions {
 export function openaiDriver(opts: OpenAiOptions): LlmDriver {
   const baseUrl = opts.baseUrl.replace(/\/$/, '');
   const timeoutMs = opts.timeoutMs ?? 120_000;
+  const maxRetries = opts.maxRetries ?? 2;
 
   return {
     kind: 'openai_compat',
@@ -42,15 +45,19 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
 
       let res: Response;
       try {
-        res = await fetch(`${baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${opts.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+        res = await requestWithRetry(
+          () =>
+            fetch(`${baseUrl}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${opts.apiKey}`,
+              },
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            }),
+          { signal: controller.signal, maxRetries },
+        );
       } catch (err) {
         clearTimeout(timer);
         throw new LlmError(`openai request failed: ${(err as Error).message}`, undefined, true);

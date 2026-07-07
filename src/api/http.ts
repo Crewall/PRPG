@@ -10,7 +10,7 @@ import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
 import { callJson } from '../llm/jsonCall.ts';
-import { rollSeeds } from '../util/seeds.ts';
+import { rollSeeds, parseSeeds, defaultSeedsText } from '../util/seeds.ts';
 import { anthropicDriver } from '../llm/anthropicDriver.ts';
 import { openaiDriver } from '../llm/openaiDriver.ts';
 
@@ -48,7 +48,8 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   const RandomStory = z.object({ title: z.string(), genre: z.string(), premise: z.string() });
   server.post('/api/stories/randomize', async (req, reply) => {
     try {
-      const seeds = rollSeeds(5);
+      const override = app.settingsService.seedsOverride();
+      const seeds = rollSeeds(5, override ? { seeds: parseSeeds(override) } : {});
       const bound = registry.getForRole('storyteller');
       const result = await callJson(
         bound,
@@ -435,6 +436,12 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       .optional(),
     favourites: z.array(z.object({ id: z.string(), label: z.string(), provider: z.enum(['anthropic', 'openai_compat']), model: z.string() })).optional(),
     roles: z.record(z.string(), z.object({ favouriteId: z.string(), temperature: z.number(), maxTokens: z.number().int() })).optional(),
+    performance: z
+      .object({
+        jobConcurrency: z.number().int().min(1).max(16).optional(),
+        requestTimeoutMs: z.number().int().min(10_000).max(600_000).optional(),
+      })
+      .optional(),
   });
 
   server.put('/api/settings/config', async (req, reply) => {
@@ -534,5 +541,27 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     delete prompts[name];
     svc.update({ prompts });
     return { ok: true };
+  });
+
+  // Story-beginning randomizer: the editable seed phrases (one per line). The
+  // shipped src/data/story-seeds.txt is the default; an override lives in
+  // settings so it's editable in-app (no file hunting on Termux).
+  server.get('/api/settings/seeds', async () => {
+    const def = defaultSeedsText();
+    const override = svc.get().seeds;
+    const overridden = !!(override && override.trim());
+    return { content: overridden ? override : def, default: def, overridden, count: parseSeeds(overridden ? override : def).length };
+  });
+
+  server.put('/api/settings/seeds', async (req, reply) => {
+    const { content } = z.object({ content: z.string() }).parse(req.body);
+    // Blank (or identical to the shipped default) clears the override.
+    const seeds = content.trim() && content !== defaultSeedsText() ? content : '';
+    if (content.trim() && parseSeeds(content).length === 0) {
+      reply.code(400);
+      return { error: 'need at least one seed phrase' };
+    }
+    svc.update({ seeds });
+    return { ok: true, count: parseSeeds(seeds || defaultSeedsText()).length };
   });
 }

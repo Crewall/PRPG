@@ -67,7 +67,7 @@ export const ConfigSchema = z
     roles: z.record(RoleName, z.string()),
     llm: z
       .object({
-        timeoutMs: z.number().int().positive().default(120_000),
+        timeoutMs: z.number().int().positive().default(180_000),
         maxRetries: z.number().int().min(0).default(2),
       })
       .default({}),

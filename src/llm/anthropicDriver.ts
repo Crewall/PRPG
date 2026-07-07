@@ -1,5 +1,6 @@
 import type { ChatRequest, ChatResult, LlmDriver, OnDelta } from './types.ts';
 import { LlmError, parseSse } from './types.ts';
+import { requestWithRetry } from './http.ts';
 
 const API_VERSION = '2023-06-01';
 
@@ -7,6 +8,7 @@ export interface AnthropicOptions {
   apiKey: string;
   baseUrl?: string;
   timeoutMs?: number;
+  maxRetries?: number;
 }
 
 /**
@@ -17,6 +19,7 @@ export interface AnthropicOptions {
 export function anthropicDriver(opts: AnthropicOptions): LlmDriver {
   const baseUrl = (opts.baseUrl ?? 'https://api.anthropic.com').replace(/\/$/, '');
   const timeoutMs = opts.timeoutMs ?? 120_000;
+  const maxRetries = opts.maxRetries ?? 2;
 
   return {
     kind: 'anthropic',
@@ -38,23 +41,27 @@ export function anthropicDriver(opts: AnthropicOptions): LlmDriver {
 
       let res: Response;
       try {
-        res = await fetch(`${baseUrl}/v1/messages`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': opts.apiKey,
-            'anthropic-version': API_VERSION,
-          },
-          body: JSON.stringify({
-            model: req.model,
-            system,
-            messages,
-            max_tokens: req.maxTokens ?? 2048,
-            temperature: req.temperature ?? 0.8,
-            stream: true,
-          }),
-          signal: controller.signal,
-        });
+        res = await requestWithRetry(
+          () =>
+            fetch(`${baseUrl}/v1/messages`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': opts.apiKey,
+                'anthropic-version': API_VERSION,
+              },
+              body: JSON.stringify({
+                model: req.model,
+                system,
+                messages,
+                max_tokens: req.maxTokens ?? 2048,
+                temperature: req.temperature ?? 0.8,
+                stream: true,
+              }),
+              signal: controller.signal,
+            }),
+          { signal: controller.signal, maxRetries },
+        );
       } catch (err) {
         clearTimeout(timer);
         throw new LlmError(`anthropic request failed: ${(err as Error).message}`, undefined, true);

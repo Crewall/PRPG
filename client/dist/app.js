@@ -31,6 +31,7 @@ function route() {
   const hash = location.hash.slice(1) || '/';
   if (hash.startsWith('/play/')) return renderPlay(hash.slice('/play/'.length));
   if (hash.startsWith('/settings/prompts/')) return renderPromptEditor(decodeURIComponent(hash.slice('/settings/prompts/'.length)));
+  if (hash === '/settings/seeds') return renderSeedsEditor();
   if (hash === '/settings') return renderSettings();
   return renderHome();
 }
@@ -135,27 +136,38 @@ async function renderPlay(storyId) {
     agentBar.classList.toggle('gone', !show);
     agentBarBtn.classList.toggle('on', show);
   }
+  let agentTimer = null;
   function renderAgentBar() {
     const extra = [...agentStatus.keys()].filter((r) => !AGENT_BAR_ROLES.includes(r));
+    let anyWaiting = false;
     agentChips.replaceChildren(...[...AGENT_BAR_ROLES, ...extra].map((role) => {
       const s = agentStatus.get(role);
       const label = ROLE_LABELS[role] || role;
       let txt = 'none', cls = 'none';
       if (s) {
         cls = s.status;
-        txt = s.status === 'waiting' ? `req ${s.attempt} · waiting` : s.status === 'ok' ? `req ${s.attempt} · OK` : `req ${s.attempt} · error`;
+        if (s.status === 'waiting') { anyWaiting = true; txt = `req ${s.attempt} · waiting ${Math.round((Date.now() - s.startedAt) / 1000)}s`; }
+        else if (s.status === 'ok') txt = `req ${s.attempt} · OK ${s.ms != null ? '· ' + (s.ms / 1000).toFixed(1) + 's' : ''}`.trim();
+        else txt = `req ${s.attempt} · error`;
       }
       return h('span', { class: `agent-chip ${cls}` }, `${label}: ${txt}`);
     }));
+    // While anything is waiting, tick the elapsed counters once a second.
+    if (anyWaiting && !agentTimer) agentTimer = setInterval(() => {
+      if (!agentBar.isConnected) { clearInterval(agentTimer); agentTimer = null; return; }
+      renderAgentBar();
+    }, 1000);
+    if (!anyWaiting && agentTimer) { clearInterval(agentTimer); agentTimer = null; }
   }
   function noteAgentActivity(entry) {
     if (!entry || !entry.agentRole) return;
     const role = entry.agentRole, cur = agentStatus.get(role);
     if (entry.direction === 'request') {
       // A fresh request while still 'waiting' means a retry (jobs re-run on failure).
-      agentStatus.set(role, { attempt: cur && cur.status === 'waiting' ? cur.attempt + 1 : 1, status: 'waiting' });
+      agentStatus.set(role, { attempt: cur && cur.status === 'waiting' ? cur.attempt + 1 : 1, status: 'waiting', startedAt: Date.now() });
     } else {
-      agentStatus.set(role, { attempt: cur ? cur.attempt : 1, status: 'ok' });
+      const ms = cur && cur.startedAt ? Date.now() - cur.startedAt : null;
+      agentStatus.set(role, { attempt: cur ? cur.attempt : 1, status: 'ok', ms });
     }
     renderAgentBar();
   }
@@ -637,7 +649,11 @@ async function renderPlay(storyId) {
       body.append(h('div', { class: 'mem-card' },
         h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('gone'); } },
           h('span', { class: `role-badge ${l.agentRole}` }, l.agentRole),
-          h('span', { class: 'sub' }, `${l.direction} · ${l.tokensOut ?? l.tokensIn ?? 0}tk · ${l.durationMs ?? 0}ms`)),
+          // Requests carry no duration; show the input size and how long ago it
+          // was sent instead of a misleading "0ms". Responses show real latency.
+          h('span', { class: 'sub' }, l.direction === 'response'
+            ? `response · ${l.tokensOut ?? 0}tk · ${((l.durationMs ?? 0) / 1000).toFixed(1)}s`
+            : `request · ${l.tokensIn ?? 0}tk · sent ${Math.max(0, Math.round((Date.now() - l.createdAt) / 1000))}s ago`)),
         detail));
     }
   }
@@ -794,12 +810,14 @@ const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compati
 
 async function renderSettings() {
   app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
-  let view, prompts;
-  try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); }
+  let view, prompts, seedMeta;
+  try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); seedMeta = await api.get('/api/settings/seeds'); }
   catch (e) { app.replaceChildren(topbar(), h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Failed to load settings: ' + e.message))); return; }
+  const seedNote = `${seedMeta.count} phrases · ${seedMeta.overridden ? 'customised' : 'default'} ›`;
 
   const favs = view.favourites.map((f) => ({ ...f }));
   const roles = JSON.parse(JSON.stringify(view.roles));
+  const perf = { jobConcurrency: 2, requestTimeoutMs: 180000, ...(view.performance || {}) };
   const provInputs = {};
 
   function providerCard(kind) {
@@ -886,7 +904,17 @@ async function renderSettings() {
   const promptCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Prompts'),
     h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Edit the instructions for each AI role.'),
     ...prompts.map((p) => h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/prompts/' + encodeURIComponent(p.name)) },
-      h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))));
+      h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))),
+    h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/seeds') },
+      h('span', {}, 'Story-beginning randomizer — seed phrases'), h('span', { class: 'sub' }, seedNote)));
+
+  // Throughput tuning — matters most on slow/free models (see agent bar).
+  const concInput = h('input', { type: 'number', step: '1', min: '1', max: '16', value: perf.jobConcurrency, oninput: (e) => (perf.jobConcurrency = parseInt(e.target.value, 10)) });
+  const toInput = h('input', { type: 'number', step: '5', min: '10', max: '600', value: Math.round(perf.requestTimeoutMs / 1000), oninput: (e) => (perf.requestTimeoutMs = Math.round(parseFloat(e.target.value) * 1000)) });
+  const perfCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Performance'),
+    h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Background scribe jobs that run at once, and how long to wait for a model reply. Raise the timeout for slow/free models; lower concurrency if you hit rate limits.'),
+    h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, 'Concurrent background jobs'), concInput),
+    h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, 'Request timeout (seconds)'), toInput));
 
   const status = h('span', { class: 'sub' });
   const saveBtn = h('button', { class: 'primary' }, 'Save settings');
@@ -897,7 +925,7 @@ async function renderSettings() {
       const { baseUrl, apiKey } = provInputs[kind];
       providers[kind] = { baseUrl: baseUrl.value, ...(apiKey.value ? { apiKey: apiKey.value } : {}) };
     }
-    try { await api.put('/api/settings/config', { providers, favourites: favs, roles }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
+    try { await api.put('/api/settings/config', { providers, favourites: favs, roles, performance: perf }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
     catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
     saveBtn.disabled = false;
   });
@@ -907,7 +935,7 @@ async function renderSettings() {
     h('div', { class: 'scroll' }, h('div', { class: 'container' },
       h('h2', {}, 'Settings'),
       providerCard('anthropic'), providerCard('openai_compat'),
-      dynHost, promptCard,
+      dynHost, perfCard, promptCard,
       h('div', { class: 'row', style: 'margin-top:16px; gap:12px' }, saveBtn, status),
     )),
   );
@@ -966,6 +994,46 @@ async function renderPromptEditor(name) {
       h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, previewBtn, status),
     )),
   );
+}
+
+// Story-beginning randomizer: edit the seed phrases the engine rolls from to
+// build a random premise. One phrase per line. Lives in settings so it's
+// editable in-app (the shipped file is awkward to reach on Termux).
+async function renderSeedsEditor() {
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  let data;
+  try { data = await api.get('/api/settings/seeds'); }
+  catch { location.hash = '/settings'; return; }
+  const ta = h('textarea', { rows: '24', style: 'font-family:ui-monospace,monospace; font-size:13px' }, data.content);
+
+  const status = h('span', { class: 'sub' });
+  const countOf = (v) => v.split('\n').map((l) => l.trim()).filter(Boolean).length;
+  const setCount = () => { status.className = 'sub'; status.textContent = `${countOf(ta.value)} phrases`; };
+  ta.addEventListener('input', setCount);
+
+  const saveBtn = h('button', { class: 'primary' }, 'Save phrases');
+  saveBtn.addEventListener('click', async () => {
+    status.className = 'sub'; status.textContent = 'saving…';
+    try { const r = await api.put('/api/settings/seeds', { content: ta.value }); status.className = 'sub ok'; status.textContent = `✓ saved (${r.count} phrases)`; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+  const resetBtn = h('button', { class: 'ghost' }, 'Reset to default');
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset the seed phrases to the built-in default list?')) return;
+    try { await api.put('/api/settings/seeds', { content: '' }); ta.value = data.default; setCount(); status.className = 'sub'; status.textContent = 'reset to default'; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+
+  app.replaceChildren(
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/settings') }, '← Settings')),
+    h('div', { class: 'scroll' }, h('div', { class: 'container' },
+      h('h2', {}, 'Story-beginning randomizer'),
+      h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'One seed phrase per line. The engine rolls 5 at random and a model weaves them into a premise. Blank lines are ignored; leave empty and reset to use the built-in list.'),
+      ta,
+      h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, status),
+    )),
+  );
+  setCount();
 }
 
 route();

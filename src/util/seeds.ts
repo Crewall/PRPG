@@ -7,11 +7,21 @@ import { fileURLToPath } from 'node:url';
 // restart. True randomness comes from the engine's roll, not the LLM.
 const SEEDS_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'story-seeds.txt');
 
-export function loadSeeds(path = SEEDS_PATH): string[] {
-  return readFileSync(path, 'utf8')
+/** Split seed text (one phrase per line) into a trimmed, blank-free list. */
+export function parseSeeds(text: string): string[] {
+  return text
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
+}
+
+/** The raw text of the shipped seed file — the editor's default / reset target. */
+export function defaultSeedsText(path = SEEDS_PATH): string {
+  return readFileSync(path, 'utf8');
+}
+
+export function loadSeeds(path = SEEDS_PATH): string[] {
+  return parseSeeds(readFileSync(path, 'utf8'));
 }
 
 /** Roll `n` distinct seeds (Fisher–Yates partial shuffle). */

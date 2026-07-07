@@ -30,11 +30,11 @@ export function defaultDriverFactory(kind: ProviderKind, config: Config): LlmDri
   if (kind === 'anthropic') {
     const p = config.providers.anthropic;
     if (!p) throw new Error('anthropic provider requested but not configured');
-    return anthropicDriver({ apiKey: p.apiKey, baseUrl: p.baseUrl, timeoutMs: config.llm.timeoutMs });
+    return anthropicDriver({ apiKey: p.apiKey, baseUrl: p.baseUrl, timeoutMs: config.llm.timeoutMs, maxRetries: config.llm.maxRetries });
   }
   const p = config.providers.openai_compat;
   if (!p) throw new Error('openai_compat provider requested but not configured');
-  return openaiDriver({ apiKey: p.apiKey, baseUrl: p.baseUrl, timeoutMs: config.llm.timeoutMs });
+  return openaiDriver({ apiKey: p.apiKey, baseUrl: p.baseUrl, timeoutMs: config.llm.timeoutMs, maxRetries: config.llm.maxRetries });
 }
 
 /**
@@ -47,7 +47,7 @@ export function createRegistry(getConfig: () => Config, factory: DriverFactory =
   const driverCache = new Map<string, { key: string; driver: LlmDriver }>();
 
   function driverFor(kind: ProviderKind, config: Config): LlmDriver {
-    const key = JSON.stringify(config.providers[kind] ?? null) + `|${config.llm.timeoutMs}`;
+    const key = JSON.stringify(config.providers[kind] ?? null) + `|${config.llm.timeoutMs}|${config.llm.maxRetries}`;
     const cached = driverCache.get(kind);
     if (cached && cached.key === key) return cached.driver;
     const driver = factory(kind, config);
