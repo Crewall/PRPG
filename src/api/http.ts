@@ -165,7 +165,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
 
   server.get('/api/memory/objects/:oid', async (req, reply) => {
     const { oid } = req.params as { oid: string };
-    const q = req.query as { scope?: string; npcObjectId?: string; categories?: string };
+    const q = req.query as { scope?: string; npcObjectId?: string; categories?: string; maxFacts?: string };
     const obj = memory.getObject(oid);
     if (!obj) {
       reply.code(404);
@@ -173,7 +173,8 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     }
     const scope = resolveScope(obj.storyId, q.scope, q.npcObjectId);
     const categories = q.categories ? q.categories.split(',') : undefined;
-    return memory.getObjectView(oid, scope, { categories });
+    const maxFacts = q.maxFacts ? Math.min(1000, Number(q.maxFacts) || 0) || undefined : undefined;
+    return memory.getObjectView(oid, scope, { categories, maxFacts });
   });
 
   server.post('/api/stories/:id/memory/objects', async (req, reply) => {
@@ -322,6 +323,33 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       messageCount: app.agents.countMessages(s.id),
       npc: s.npcObjectId ? memory.getObject(s.npcObjectId)?.name : undefined,
     }));
+  });
+
+  // What this NPC knows about the world — the RECORDED knowledge links
+  // (fact ↔ knower, with distortions), not an on-the-fly guess. Debug-gated:
+  // an NPC's knowledge includes secrets the player must not see.
+  server.get('/api/stories/:id/npcs/:oid/knowledge', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    const story = stories.getStory(id);
+    if (!story || !memory.getObject(oid)) {
+      reply.code(404);
+      return { error: 'not found' };
+    }
+    if (!story.settings.debug.showThreads) {
+      return { available: false, reason: 'enable Debug to inspect NPC knowledge (it can include secrets)' };
+    }
+    const world = memory
+      .npcKnowledge(id, oid)
+      .map((k) => ({
+        objectId: k.objectId,
+        objectName: k.objectName,
+        category: k.fact.category,
+        detailLevel: k.fact.detailLevel,
+        tier: k.fact.tier,
+        content: k.content,
+        distorted: k.content !== k.fact.content, // they believe a distortion
+      }));
+    return { available: true, world };
   });
 
   server.post('/api/stories/:id/npcs/:oid/promote', async (req, reply) => {

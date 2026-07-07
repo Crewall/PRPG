@@ -17,7 +17,11 @@ atomic facts in these categories:
 Rules:
 - The character's object id is `{{objectId}}` — use it as `objectId` on every fact.
 - Do NOT repeat anything already recorded (the current sheet is provided).
-  Only fill the gaps. 6–12 facts total is plenty.
+  Only fill the gaps.
+- Scale the dossier to the character's weight in the story: a pivotal figure in
+  the current arc deserves a rich sheet (12–18 facts, layered goals, telling
+  nuances); a background character needs only a brief, sparse one (5–8 facts).
+  Let what is in focus in the story decide where the detail goes.
 - Choose `detailLevel` carefully (visible for overt looks/behavior; known for
   learnable background; secret/hidden for concealed truths) and `tier`
   (major = defining features, mid = focused knowledge, minor = nuances).

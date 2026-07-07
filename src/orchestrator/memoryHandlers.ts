@@ -17,6 +17,18 @@ function scribeMemoryAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
   return new ScribeMemory({ session, bound, threadLog: deps.threadLog, storyId });
 }
 
+/**
+ * Dossier writing is creative characterization, not extraction — bind it to
+ * the npc-role model (storyteller-caliber) rather than the cheap scribe model.
+ * The session stays under scribe_memory (it's still memory-writing work).
+ */
+function dossierAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
+  const profileName = deps.stories.getStory(storyId)?.settings.roles.npc ?? deps.registry.getForRole('npc').name;
+  const bound = deps.registry.getProfile(profileName);
+  const session = deps.agents.ensureSession(storyId, 'scribe_memory', profileName);
+  return new ScribeMemory({ session, bound, threadLog: deps.threadLog, storyId });
+}
+
 /** Build a storyteller-scope snapshot of objects whose names/aliases appear in the turn. */
 function buildSnapshot(deps: HandlerDeps, storyId: string, text: string): { snapshot: string; mentionedIds: string[] } {
   const norm = ` ${normalizeName(text)} `;
@@ -217,7 +229,7 @@ export function createNpcDossierHandler(deps: HandlerDeps): JobHandler {
       .map((t) => `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`)
       .join('\n\n');
 
-    const agent = scribeMemoryAgent(deps, storyId);
+    const agent = dossierAgent(deps, storyId);
     const delta: MemoryDelta = await agent.dossier({
       name: obj.name,
       objectId,

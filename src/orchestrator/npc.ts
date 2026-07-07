@@ -32,15 +32,18 @@ export function resolveNpc(deps: NpcServiceDeps, storyId: string, name: string):
 export function promoteNpc(deps: NpcServiceDeps, storyId: string, objectId: string): boolean {
   const obj = deps.memory.getObject(objectId);
   if (!obj || obj.storyId !== storyId) return false;
-  const isNew = !deps.agents.listSessions(storyId).some((s) => s.role === 'npc' && s.npcObjectId === objectId);
   const session = deps.agents.ensureSession(storyId, 'npc', npcProfile(deps, storyId), objectId);
   if (session.state !== 'active') deps.agents.setState(session.id, 'active');
   const story = deps.stories.getStory(storyId);
   if (story?.currentSceneId) deps.stories.addActiveNpc(story.currentSceneId, objectId);
-  // First elevation → build the character dossier (persona, looks, belongings,
-  // skills, state, goals) as memory facts on the object. Async, off the player
-  // path; the per-turn memory scribe keeps it updated afterwards.
-  if (isNew) deps.jobs.enqueue('npc_dossier', { storyId, payload: { objectId } });
+  // Elevation with an incomplete character sheet → build the dossier (persona,
+  // looks, belongings, skills, state, goals) as memory facts on the object, so
+  // the NPC plays as a complete character, never a blank sheet. Async, off the
+  // player path; the per-turn memory scribe keeps it updated afterwards, and
+  // dedupe keeps re-runs from duplicating anything.
+  const CORE_CATEGORIES = ['personality', 'appearance', 'inventory', 'abilities', 'state', 'goals'];
+  const have = new Set(deps.memory.listFacts(objectId).map((f) => f.category));
+  if (CORE_CATEGORIES.some((c) => !have.has(c))) deps.jobs.enqueue('npc_dossier', { storyId, payload: { objectId } });
   deps.events.emit({ t: 'scene.changed', storyId, sceneId: story?.currentSceneId ?? '' });
   return true;
 }
