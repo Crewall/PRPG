@@ -31,6 +31,7 @@ function route() {
   const hash = location.hash.slice(1) || '/';
   if (hash.startsWith('/play/')) return renderPlay(hash.slice('/play/'.length));
   if (hash.startsWith('/settings/prompts/')) return renderPromptEditor(decodeURIComponent(hash.slice('/settings/prompts/'.length)));
+  if (hash === '/settings/seeds') return renderSeedsEditor();
   if (hash === '/settings') return renderSettings();
   return renderHome();
 }
@@ -794,9 +795,10 @@ const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compati
 
 async function renderSettings() {
   app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
-  let view, prompts;
-  try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); }
+  let view, prompts, seedMeta;
+  try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); seedMeta = await api.get('/api/settings/seeds'); }
   catch (e) { app.replaceChildren(topbar(), h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Failed to load settings: ' + e.message))); return; }
+  const seedNote = `${seedMeta.count} phrases · ${seedMeta.overridden ? 'customised' : 'default'} ›`;
 
   const favs = view.favourites.map((f) => ({ ...f }));
   const roles = JSON.parse(JSON.stringify(view.roles));
@@ -886,7 +888,9 @@ async function renderSettings() {
   const promptCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Prompts'),
     h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Edit the instructions for each AI role.'),
     ...prompts.map((p) => h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/prompts/' + encodeURIComponent(p.name)) },
-      h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))));
+      h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))),
+    h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/seeds') },
+      h('span', {}, 'Story-beginning randomizer — seed phrases'), h('span', { class: 'sub' }, seedNote)));
 
   const status = h('span', { class: 'sub' });
   const saveBtn = h('button', { class: 'primary' }, 'Save settings');
@@ -966,6 +970,46 @@ async function renderPromptEditor(name) {
       h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, previewBtn, status),
     )),
   );
+}
+
+// Story-beginning randomizer: edit the seed phrases the engine rolls from to
+// build a random premise. One phrase per line. Lives in settings so it's
+// editable in-app (the shipped file is awkward to reach on Termux).
+async function renderSeedsEditor() {
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  let data;
+  try { data = await api.get('/api/settings/seeds'); }
+  catch { location.hash = '/settings'; return; }
+  const ta = h('textarea', { rows: '24', style: 'font-family:ui-monospace,monospace; font-size:13px' }, data.content);
+
+  const status = h('span', { class: 'sub' });
+  const countOf = (v) => v.split('\n').map((l) => l.trim()).filter(Boolean).length;
+  const setCount = () => { status.className = 'sub'; status.textContent = `${countOf(ta.value)} phrases`; };
+  ta.addEventListener('input', setCount);
+
+  const saveBtn = h('button', { class: 'primary' }, 'Save phrases');
+  saveBtn.addEventListener('click', async () => {
+    status.className = 'sub'; status.textContent = 'saving…';
+    try { const r = await api.put('/api/settings/seeds', { content: ta.value }); status.className = 'sub ok'; status.textContent = `✓ saved (${r.count} phrases)`; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+  const resetBtn = h('button', { class: 'ghost' }, 'Reset to default');
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset the seed phrases to the built-in default list?')) return;
+    try { await api.put('/api/settings/seeds', { content: '' }); ta.value = data.default; setCount(); status.className = 'sub'; status.textContent = 'reset to default'; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+
+  app.replaceChildren(
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/settings') }, '← Settings')),
+    h('div', { class: 'scroll' }, h('div', { class: 'container' },
+      h('h2', {}, 'Story-beginning randomizer'),
+      h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'One seed phrase per line. The engine rolls 5 at random and a model weaves them into a premise. Blank lines are ignored; leave empty and reset to use the built-in list.'),
+      ta,
+      h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, status),
+    )),
+  );
+  setCount();
 }
 
 route();

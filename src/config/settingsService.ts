@@ -33,6 +33,10 @@ export const RuntimeSettings = z.object({
   favourites: z.array(Favourite).default([]),
   roles: z.record(RoleName, RoleBinding),
   prompts: z.record(z.string(), z.string()).default({}),
+  // Override for the premise randomizer's seed phrases (one per line). Empty =
+  // use the shipped src/data/story-seeds.txt. Editable in Settings so users on
+  // Termux don't have to hunt for the file.
+  seeds: z.string().default(''),
 });
 export type RuntimeSettings = z.infer<typeof RuntimeSettings>;
 
@@ -87,6 +91,7 @@ function seedFromConfig(base: Config): RuntimeSettings {
     favourites,
     roles: roles as RuntimeSettings['roles'],
     prompts: {},
+    seeds: '',
   };
 }
 
@@ -98,6 +103,7 @@ export interface SettingsUpdate {
   favourites?: Favourite[];
   roles?: RuntimeSettings['roles'];
   prompts?: Record<string, string>;
+  seeds?: string;
 }
 
 export interface SettingsService {
@@ -105,6 +111,8 @@ export interface SettingsService {
   effective(): Config;
   update(patch: SettingsUpdate): RuntimeSettings;
   promptOverride(name: string): string | undefined;
+  /** The user's seed-phrase override (one per line), or undefined to use the shipped file. */
+  seedsOverride(): string | undefined;
   onChange(listener: () => void): void;
   /** Masked view for the API (never leaks API keys). */
   publicView(): unknown;
@@ -167,6 +175,7 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
     get: () => settings,
     effective: () => compiled,
     promptOverride: (name) => settings.prompts[name],
+    seedsOverride: () => (settings.seeds && settings.seeds.trim() ? settings.seeds : undefined),
     onChange: (l) => listeners.push(l),
 
     update(patch: SettingsUpdate) {
@@ -188,6 +197,7 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
         favourites: patch.favourites ?? settings.favourites,
         roles: patch.roles ?? settings.roles,
         prompts: patch.prompts ?? settings.prompts,
+        seeds: patch.seeds ?? settings.seeds,
       });
       // Compile eagerly so an invalid change is rejected before persisting.
       const nextCompiled = compile(merged);
