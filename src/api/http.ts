@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { App } from '../app.ts';
 import { StorySettings } from '../domain.ts';
-import { NewMemoryObject, NewFact, DetailLevel } from '../memory/model.ts';
+import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
+import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
@@ -109,6 +110,19 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return { ok: true, scene: story.currentSceneId ? stories.getScene(story.currentSceneId) : null };
   });
 
+  // Feature 1: delete the latest exchange (halting any in-flight generation)
+  // and restore the pre-message state; returns the prompt for editing.
+  server.post('/api/stories/:id/rewind', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const result = await pipeline.rewind(id);
+      return { ok: true, ...result };
+    } catch (err) {
+      reply.code(400);
+      return { error: (err as Error).message };
+    }
+  });
+
   server.get('/api/stories/:id/summaries', async (req) => {
     const { id } = req.params as { id: string };
     return summaries.listForStory(id);
@@ -202,6 +216,9 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'object not found' };
     }
+    // Feature 6: something (very) similar already recorded → return it instead.
+    const dup = findNearDuplicate(memory.listFacts(oid), body.content);
+    if (dup) return { ...dup, duplicate: true };
     reply.code(201);
     return memory.addFact({ ...body, objectId: oid });
   });
@@ -209,7 +226,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   server.patch('/api/memory/facts/:fid', async (req, reply) => {
     const { fid } = req.params as { fid: string };
     const body = z
-      .object({ category: z.string().optional(), subcategory: z.string().optional(), detailLevel: DetailLevel.optional(), content: z.string().optional(), confidence: z.number().optional(), superseded: z.boolean().optional() })
+      .object({ category: z.string().optional(), subcategory: z.string().optional(), detailLevel: DetailLevel.optional(), tier: FactTier.optional(), content: z.string().optional(), confidence: z.number().optional(), superseded: z.boolean().optional() })
       .parse(req.body);
     const updated = memory.updateFact(fid, body);
     if (!updated) {
@@ -219,10 +236,15 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return updated;
   });
 
+  // Default: soft-delete (mark superseded, keeps history). ?hard=true removes it.
   server.delete('/api/memory/facts/:fid', async (req) => {
     const { fid } = req.params as { fid: string };
+    const hard = (req.query as { hard?: string }).hard === 'true';
     const fact = memory.getFact(fid);
-    if (fact) memory.updateFact(fid, { superseded: true });
+    if (fact) {
+      if (hard) memory.deleteFact(fid);
+      else memory.updateFact(fid, { superseded: true });
+    }
     return { ok: true };
   });
 
@@ -264,7 +286,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       const merge = memory.getObject(sug.mergeId);
       if (keep && merge) {
         for (const f of memory.listFacts(merge.id, { includeSuperseded: true })) {
-          memory.addFact({ objectId: keep.id, category: f.category, subcategory: f.subcategory ?? undefined, detailLevel: f.detailLevel, content: f.content, confidence: f.confidence });
+          memory.addFact({ objectId: keep.id, category: f.category, subcategory: f.subcategory ?? undefined, detailLevel: f.detailLevel, tier: f.tier, content: f.content, confidence: f.confidence });
         }
         memory.updateObject(keep.id, { aliases: Array.from(new Set([...keep.aliases, merge.name, ...merge.aliases])) });
         memory.deleteObject(merge.id);

@@ -5,9 +5,13 @@ import type { AgentStore } from '../db/stores/agentStore.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
 import type { JobStore } from '../db/stores/jobStore.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
+import type { SummaryStore } from '../db/stores/summaryStore.ts';
+import type { SnapshotStore } from '../db/stores/snapshotStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
 import type { EventBus } from '../util/events.ts';
 import { Storyteller } from '../agents/storyteller.ts';
+import { ContextPlanner } from '../agents/contextPlanner.ts';
+import type { ContextPlan } from '../agents/contextPlanner.ts';
 import { NpcAgent } from '../agents/npcAgent.ts';
 import type { NpcReply } from '../agents/npcAgent.ts';
 import { estimateTokens } from '../util/tokens.ts';
@@ -36,9 +40,18 @@ export interface PipelineDeps {
   threadLog: ThreadLog;
   jobs: JobStore;
   memory: MemoryStore;
+  summaries: SummaryStore;
+  snapshots: SnapshotStore;
   registry: LlmRegistry;
   contexts: ContextBuilder;
   events: EventBus;
+}
+
+export interface RewindResult {
+  turnId: string;
+  playerInput: string;
+  /** false = no snapshot existed (pre-feature turn); only the turn+messages were dropped. */
+  restored: boolean;
 }
 
 interface ConsultOutcome {
@@ -71,6 +84,34 @@ export class TurnPipeline {
     breakScene({ stories: this.deps.stories, jobs: this.deps.jobs, events: this.deps.events }, storyId, opts);
   }
 
+  /**
+   * Feature 1: delete the latest exchange and hand the player their prompt
+   * back for editing. Halts any in-flight generation for the story first, then
+   * (under the story lock, so the halt has settled) restores the pre-turn
+   * snapshot — summaries, memory, scenes, sessions, transcript — and deletes
+   * the turn. Throws when the story has no turns.
+   */
+  async rewind(storyId: string): Promise<RewindResult> {
+    this.cancel(storyId); // halt any ongoing response; its turn becomes the one we delete
+    return this.locks.withStory(storyId, async () => {
+      const { stories, agents, snapshots, events } = this.deps;
+      if (!stories.getStory(storyId)) throw new Error(`story '${storyId}' not found`);
+      const last = stories.lastTurn(storyId);
+      if (!last) throw new Error('nothing to rewind — the story has no turns yet');
+
+      const restored = snapshots.restore(storyId, last.id);
+      if (!restored) {
+        // Pre-snapshot turn (older story): degrade to dropping the turn and its
+        // transcript messages; summaries/memory keep whatever the scribes wrote,
+        // and still-queued scribes no-op on the missing turn.
+        stories.deleteTurn(last.id);
+        agents.deleteMessagesForTurn(last.id);
+      }
+      events.emit({ t: 'story.rewound', storyId, turnId: last.id, playerInput: last.playerInput });
+      return { turnId: last.id, playerInput: last.playerInput, restored };
+    });
+  }
+
   async run(storyId: string, playerInput: string, out: TurnEmitter): Promise<Turn | undefined> {
     return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out));
   }
@@ -83,7 +124,10 @@ export class TurnPipeline {
     if (!story) return void out.error('', `story '${storyId}' not found`), undefined;
     if (story.status !== 'active') return void out.error('', `story '${storyId}' is not active`), undefined;
 
+    // Step 1 — backup (feature 1a): capture everything mutable BEFORE this turn
+    // writes anything, so a rewind can restore the exact pre-message state.
     const turn = stories.appendTurn({ storyId, playerInput, status: 'streaming' });
+    this.deps.snapshots.capture(storyId, turn.id, turn.index);
     out.accepted(turn.id);
 
     const aborter = new AbortController();
@@ -91,8 +135,14 @@ export class TurnPipeline {
     const t0 = Date.now();
 
     try {
-      // Step 2 — context build.
-      const ctx = contexts.forStoryteller(story, playerInput);
+      // Step 2 — context build. In summary-driven mode a cheap planner pass
+      // decides which memories (and how deep) the storyteller needs (feature 4).
+      let plan: ContextPlan | undefined;
+      if (story.settings.context.summaryDriven && story.settings.context.plannerEnabled) {
+        out.status('gathering memories…');
+        plan = await this.planContext(story, playerInput, turn.id, aborter.signal);
+      }
+      const ctx = contexts.forStoryteller(story, playerInput, plan ? { plan } : undefined);
 
       const profileName = story.settings.roles.storyteller ?? registry.getForRole('storyteller').name;
       const bound = registry.getProfile(profileName);
@@ -174,6 +224,46 @@ export class TurnPipeline {
       return stories.getTurn(turn.id);
     } finally {
       this.aborters.delete(storyId);
+    }
+  }
+
+  /**
+   * Run the context_planner (feature 4). Never throws: any failure (no model
+   * bound, bad JSON, abort) degrades to plain lexical retrieval off the input.
+   */
+  private async planContext(story: Story, playerInput: string, turnId: string, signal: AbortSignal): Promise<ContextPlan | undefined> {
+    const { registry, agents, threadLog, stories, summaries, memory } = this.deps;
+    try {
+      let bound;
+      const override = story.settings.roles.context_planner;
+      if (override) bound = registry.getProfile(override);
+      else {
+        try {
+          bound = registry.getForRole('context_planner');
+        } catch {
+          bound = registry.getForRole('scribe_memory'); // configs from before the role existed
+        }
+      }
+      const session = agents.ensureSession(story.id, 'context_planner', bound.name);
+      const planner = new ContextPlanner({ session, bound, threadLog, storyId: story.id });
+
+      const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
+      const presentCharacters = (scene?.activeNpcIds ?? [])
+        .map((npcId) => memory.getObject(npcId)?.name)
+        .filter((n): n is string => !!n);
+      return await planner.plan(
+        {
+          digest: summaries.getStoryDigest(story.id)?.content ?? '',
+          sceneSummary: story.currentSceneId ? summaries.getSceneSummary(story.currentSceneId)?.content ?? '' : '',
+          presentCharacters,
+          playerInput,
+        },
+        { turnId, signal },
+      );
+    } catch (err) {
+      if (signal.aborted) throw err; // a user cancel must still cancel the turn
+      logger.warn('context planner failed — falling back to lexical retrieval', { storyId: story.id, err: (err as Error).message });
+      return undefined;
     }
   }
 

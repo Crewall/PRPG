@@ -11,8 +11,16 @@ Structure the digest as:
 3. **Recent events** — what has happened lately, most recent last.
 4. **Current situation** — where things stand right now.
 
-Target length: at most {{maxTokens}} tokens. Drop stale detail that is no longer
-load-bearing; keep anything a narrator would need to stay consistent. Do not
-invent events.
+Target length: at most {{maxTokens}} tokens. Old events must fade out
+GRADUALLY: first compress them to a clause, keep them afloat for a few folds,
+and only then drop them. Keep anything a narrator would need to stay
+consistent. Do not invent events.
 
-Reply with a single JSON object: {"storyDigest": "..."}
+Everything that fades out of the digest must be preserved elsewhere: when you
+drop (or compress away) a concrete event, relationship, promise, or detail that
+was present in the previous digest, list it in `fadedOut` as a short
+self-contained statement (past tense, with names) so it can be archived into
+long-term memory. Leave `fadedOut` empty if nothing was lost.
+
+Reply with a single JSON object:
+{"storyDigest": "...", "fadedOut": ["...", "..."]}

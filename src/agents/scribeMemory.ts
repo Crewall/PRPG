@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Agent } from './agent.ts';
 import type { BuiltContext } from './agent.ts';
 import { renderPrompt } from './prompts.ts';
-import { ObjectType, DetailLevel } from '../memory/model.ts';
+import { ObjectType, DetailLevel, FactTier } from '../memory/model.ts';
 
 // MemoryDelta (doc 04). The scribe proposes changes; the orchestrator applies
 // them with trust-but-verify post-processing (tempIds, alias merge, clamps).
@@ -25,6 +25,7 @@ export const MemoryDelta = z.object({
         category: z.string(),
         subcategory: z.string().optional(),
         detailLevel: DetailLevel,
+        tier: FactTier.default('mid'),
         content: z.string(),
         confidence: z.number().min(0).max(1).default(0.8),
         knownBy: z.array(z.string()).default([]), // 'player' | npc object ids present & perceiving

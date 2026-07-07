@@ -34,6 +34,7 @@
     "npc": "narrator-strong",
     "scribe_memory": "worker-cheap",
     "scribe_story": "worker-cheap",
-    "overseer": "worker-cheap"
+    "overseer": "worker-cheap",
+    "context_planner": "worker-cheap"
   }
 }

@@ -13,4 +13,11 @@ Include, when present:
 Target length: at most {{maxTokens}} tokens (a few short paragraphs). Prefer
 concrete detail (names, objects, decisions) over mood. Do not invent events.
 
-Reply with a single JSON object: {"sceneSummary": "..."}
+Older beats should fade gradually: compress them before dropping them, so they
+stay afloat for a while. When you DO drop (or compress away) a concrete detail
+or event that was present in the previous summary, list it in `fadedOut` as a
+short self-contained statement (past tense, with names) so it can be archived
+into long-term memory. Leave `fadedOut` empty if nothing was lost.
+
+Reply with a single JSON object:
+{"sceneSummary": "...", "fadedOut": ["...", "..."]}

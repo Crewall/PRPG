@@ -16,6 +16,14 @@ appearance · personality · voice · state · inventory · abilities · relatio
 history · goals · location · properties · layout · contents · ownership ·
 participants · consequences
 
+## Importance tiers — how prominent each fact is (choose one per fact)
+- **major** — conspicuous; the most important, defining features. What anyone
+  would notice immediately, or what matters most about this object.
+- **mid** — things that come to mind when thinking about the object or looking
+  at it with focus.
+- **minor** — nuances that only appear under close inspection, or that only
+  matter in specific situations.
+
 ## Detail levels — who is allowed to learn each fact (choose carefully)
 - **visible** — anyone looking would perceive it (overt appearance, obvious behavior).
 - **known** — learnable, non-obvious; disclosed only to those who learned it.
@@ -37,7 +45,7 @@ fact replaces an old one (e.g. a character changed clothes), set
 ## Output — a single JSON object matching exactly this shape
 {
   "newObjects":   [{ "tempId": "t1", "type": "character", "name": "...", "aliases": ["..."], "summary": "..." }],
-  "newFacts":     [{ "objectId": "t1 or real-id", "category": "...", "subcategory": "...", "detailLevel": "visible|known|secret|hidden", "content": "...", "confidence": 0.9, "knownBy": ["player","<npc-id>"], "supersedesFactId": "..." }],
+  "newFacts":     [{ "objectId": "t1 or real-id", "category": "...", "subcategory": "...", "detailLevel": "visible|known|secret|hidden", "tier": "major|mid|minor", "content": "...", "confidence": 0.9, "knownBy": ["player","<npc-id>"], "supersedesFactId": "..." }],
   "salienceUpdates": [{ "objectId": "real-id", "salience": 0.8 }],
   "mergeSuggestions": [{ "keepId": "...", "mergeId": "...", "reason": "..." }]
 }

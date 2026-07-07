@@ -25,6 +25,18 @@ export const StorySettings = z.object({
       retrievedMemoryTokens: z.number().int().positive().default(1500),
     })
     .default({}),
+  // How the storyteller's context is assembled (feature 4).
+  // - summaryDriven=false (default): digest + scene summary + last-K raw turns.
+  // - summaryDriven=true: summary + prompt + scene characters + goals +
+  //   planner-guided memory retrieval instead of the chat history.
+  context: z
+    .object({
+      summaryDriven: z.boolean().default(false),
+      // A cheap AI pass that decides which memories (and at which tier depth)
+      // the storyteller needs this turn. Falls back to lexical retrieval off.
+      plannerEnabled: z.boolean().default(true),
+    })
+    .default({}),
   debug: z
     .object({
       showThreads: z.boolean().default(false),

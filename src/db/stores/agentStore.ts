@@ -71,6 +71,11 @@ export function createAgentStore(db: Db) {
       return rowToMessage(db.prepare(`SELECT * FROM agent_messages WHERE id = ?`).get<Row>(msgId)!);
     },
 
+    /** Remove all transcript messages tied to a turn (rewind fallback for pre-snapshot stories). */
+    deleteMessagesForTurn(turnId: string): void {
+      db.prepare(`DELETE FROM agent_messages WHERE turn_id = ?`).run(turnId);
+    },
+
     countMessages(sessionId: string): number {
       const r = db.prepare(`SELECT count(*) AS n FROM agent_messages WHERE session_id = ?`).get<{ n: number }>(sessionId);
       return r?.n ?? 0;

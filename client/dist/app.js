@@ -98,7 +98,18 @@ async function renderPlay(storyId) {
   const input = h('textarea', { rows: '1', placeholder: 'What do you do?  (/look <name>, /scene, /retry)' });
   const sendBtn = h('button', { class: 'primary' }, 'Send');
   const cancelBtn = h('button', { class: 'ghost', disabled: true }, 'Stop');
+  const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, '↶ Edit');
   const drawer = h('div', { class: 'drawer' });
+
+  // Feature 4: per-story context mode. 'summary' feeds the storyteller the
+  // summaries + planner-picked memory instead of the raw chat history.
+  let ctxSummary = !!(story.settings?.context?.summaryDriven);
+  const ctxBtn = h('button', { class: 'ghost small', title: 'What the storyteller reads: recent chat history, or summary + memory' }, ctxSummary ? 'Ctx: summary' : 'Ctx: history');
+  ctxBtn.addEventListener('click', async () => {
+    ctxSummary = !ctxSummary;
+    await api.patch(`/api/stories/${storyId}`, { settings: { context: { summaryDriven: ctxSummary } } });
+    ctxBtn.textContent = ctxSummary ? 'Ctx: summary' : 'Ctx: history';
+  });
 
   const debugBtn = h('button', { class: 'ghost small' }, debug ? 'Debug: on' : 'Debug: off');
   debugBtn.addEventListener('click', async () => {
@@ -120,8 +131,8 @@ async function renderPlay(storyId) {
   const sceneHeader = h('div', { class: 'scene-header' }, h('span', { class: 'sub' }, 'Present:'), npcChips);
 
   app.replaceChildren(
-    topbar(sceneLabel, newSceneBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn))), drawer),
+    topbar(sceneLabel, newSceneBtn, ctxBtn, debugBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   let activeNpcIds = new Set();
@@ -143,7 +154,7 @@ async function renderPlay(storyId) {
       h('div', { class: 'modal' },
         h('h3', {}, view?.name || 'Unknown'),
         view?.summary ? h('div', { class: 'mem-summary' }, view.summary) : null,
-        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
+        ...(facts.length ? facts.map((f) => h('div', { class: 'fact' }, h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel), h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'), h('span', { class: 'fcat' }, f.category), h('span', {}, f.content))) : [h('div', { class: 'empty' }, 'Nothing known yet.')]),
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -152,12 +163,35 @@ async function renderPlay(storyId) {
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
 
-  // Load history.
-  try {
-    const turns = await api.get(`/api/stories/${storyId}/turns`);
-    if (!turns.length) transcript.append(h('div', { class: 'empty' }, 'Press Send (even empty) to open the story.'));
-    for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
-  } catch {}
+  // Load (or reload, after a rewind) the transcript from the server.
+  async function redrawTranscript() {
+    transcript.replaceChildren();
+    try {
+      const turns = await api.get(`/api/stories/${storyId}/turns`);
+      if (!turns.length) transcript.append(h('div', { class: 'empty' }, 'Press Send (even empty) to open the story.'));
+      for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
+    } catch {}
+  }
+  await redrawTranscript();
+
+  // Feature 1: delete the latest exchange (halting any in-flight response) and
+  // put the prompt back in the box for editing. State (summaries, memory, …)
+  // is restored server-side to before the message was sent.
+  let rewinding = false;
+  rewindBtn.addEventListener('click', async () => {
+    if (rewinding) return;
+    rewinding = true; rewindBtn.disabled = true;
+    try {
+      const r = await api.post(`/api/stories/${storyId}/rewind`);
+      current = null; setBusy(false);
+      await redrawTranscript();
+      if (r.playerInput) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
+      addStatus('(rewound — edit your message and send again)');
+      input.focus();
+      renderDrawer(); refreshSceneHeader();
+    } catch (e) { addStatus('rewind failed: ' + e.message); }
+    rewinding = false; rewindBtn.disabled = false;
+  });
 
   // ---- Drawer tabs (Memory always; Summaries/Threads under debug) ----
   let activeTab = 'memory';
@@ -220,11 +254,51 @@ async function renderPlay(storyId) {
     }
     const card = h('div', { class: 'mem-card' }, head, factList);
     if (object.summary) factList.append(h('div', { class: 'mem-summary' }, object.summary));
-    for (const f of facts) factList.append(h('div', { class: 'fact' },
-      h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
-      h('span', { class: 'fcat' }, f.category), h('span', {}, f.content)));
+
+    // Feature 5: edit / delete the object itself.
+    const objTools = h('div', { class: 'row item-tools' },
+      h('button', { class: 'link', onclick: () => objForm.classList.toggle('hidden') }, 'edit'),
+      h('button', { class: 'link danger', onclick: async () => {
+        if (!confirm(`Delete "${object.name}" and all its facts?`)) return;
+        await api.del(`/api/memory/objects/${object.id}`); refresh(); refreshSceneHeader();
+      } }, 'delete'));
+    const nameIn = h('input', { value: object.name });
+    const sumIn = h('input', { value: object.summary || '', placeholder: 'Summary' });
+    const objForm = h('div', { class: 'form hidden' }, nameIn, sumIn,
+      h('button', { class: 'small primary', onclick: async () => {
+        await api.patch(`/api/memory/objects/${object.id}`, { name: nameIn.value, summary: sumIn.value }); refresh();
+      } }, 'Save'));
+    factList.append(objTools, objForm);
+
+    for (const f of facts) factList.append(factRow(f, refresh));
     factList.append(h('details', { class: 'quickadd' }, h('summary', {}, '+ fact'), quickAddFact(object.id, refresh)));
     return card;
+  }
+
+  // Feature 5: a fact row with inline edit (content/category/level/tier) and delete.
+  function factRow(f, refresh) {
+    const row = h('div', { class: 'fact' },
+      h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
+      h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
+      h('span', { class: 'fcat' }, f.category), h('span', {}, f.content),
+      h('button', { class: 'link', onclick: () => startEdit() }, '✎'),
+      h('button', { class: 'link danger', onclick: async () => {
+        if (!confirm('Delete this fact?')) return;
+        await api.del(`/api/memory/facts/${f.id}?hard=true`); refresh();
+      } }, '✕'));
+    function startEdit() {
+      const content = h('input', { value: f.content });
+      const cat = h('input', { value: f.category });
+      const lvl = h('select', {}, ...['visible', 'known', 'secret', 'hidden'].map((l) => h('option', { ...(l === f.detailLevel ? { selected: true } : {}) }, l)));
+      const tier = h('select', {}, ...['major', 'mid', 'minor'].map((t) => h('option', { ...(t === (f.tier || 'mid') ? { selected: true } : {}) }, t)));
+      const form = h('div', { class: 'form' }, content, cat, lvl, tier,
+        h('button', { class: 'small primary', onclick: async () => {
+          await api.patch(`/api/memory/facts/${f.id}`, { content: content.value, category: cat.value, detailLevel: lvl.value, tier: tier.value }); refresh();
+        } }, 'Save'),
+        h('button', { class: 'small', onclick: () => { form.replaceWith(row); } }, 'Cancel'));
+      row.replaceWith(form);
+    }
+    return row;
   }
 
   function quickAddObject(refresh) {
@@ -240,9 +314,10 @@ async function renderPlay(storyId) {
     const content = h('input', { placeholder: 'Fact content' });
     const cat = h('input', { placeholder: 'category', value: 'state' });
     const lvl = h('select', {}, ...['visible', 'known', 'secret', 'hidden'].map((l) => h('option', {}, l)));
+    const tier = h('select', {}, ...['major', 'mid', 'minor'].map((t) => h('option', { ...(t === 'mid' ? { selected: true } : {}) }, t)));
     const btn = h('button', { class: 'small primary' }, 'Add');
-    btn.addEventListener('click', async () => { if (!content.value) return; await api.post(`/api/memory/objects/${objectId}/facts`, { content: content.value, category: cat.value, detailLevel: lvl.value }); refresh(); });
-    return h('div', { class: 'form' }, content, cat, lvl, btn);
+    btn.addEventListener('click', async () => { if (!content.value) return; await api.post(`/api/memory/objects/${objectId}/facts`, { content: content.value, category: cat.value, detailLevel: lvl.value, tier: tier.value }); refresh(); });
+    return h('div', { class: 'form' }, content, cat, lvl, tier, btn);
   }
 
   async function renderSummaries(body) {
@@ -255,18 +330,65 @@ async function renderPlay(storyId) {
       h('div', { class: 'mem-summary' }, s.content || '(empty)')));
   }
 
+  // Feature 7: parsed, human-readable view of agent threads (prompts &
+  // replies), with the raw JSON tucked behind a toggle.
+  function kvNode(val) {
+    if (val === null || val === undefined) return h('span', { class: 'kv-val sub' }, '—');
+    if (typeof val !== 'object') return h('span', { class: 'kv-val' }, String(val));
+    if (Array.isArray(val)) {
+      if (!val.length) return h('span', { class: 'kv-val sub' }, '(none)');
+      return h('div', { class: 'kv-list' }, ...val.map((v) => h('div', { class: 'kv-item' }, kvNode(v))));
+    }
+    return h('div', { class: 'kv-obj' }, ...Object.entries(val).map(([k, v]) => h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, k), kvNode(v))));
+  }
+
+  function parsedPayload(l) {
+    const p = l.payload || {};
+    const box = h('div', { class: 'thread-parsed' });
+    if (l.direction === 'request') {
+      if (p.model) box.append(h('div', { class: 'sub' }, `model: ${p.model}`));
+      if (p.system) box.append(h('details', {}, h('summary', { class: 'sub' }, 'system prompt'), h('div', { class: 'prose' }, p.system)));
+      for (const m of p.messages || []) {
+        box.append(h('div', { class: 'msg' }, h('span', { class: `role-chip ${m.role}` }, m.role), h('div', { class: 'prose' }, m.content)));
+      }
+    } else {
+      // Response: prefer the structured result; otherwise readable text with
+      // any code/JSON fences pulled out into their own blocks.
+      if (p.parsed && typeof p.parsed === 'object') box.append(kvNode(p.parsed));
+      else {
+        const text = String(p.text ?? '');
+        let plain = text;
+        const fences = [];
+        plain = plain.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => { fences.push({ lang, code }); return ''; });
+        plain = plain.trim();
+        if (!plain && !fences.length) {
+          try { box.append(kvNode(JSON.parse(text))); } catch { box.append(h('div', { class: 'prose' }, text)); }
+        } else {
+          if (plain) {
+            try { box.append(kvNode(JSON.parse(plain))); } catch { box.append(h('div', { class: 'prose' }, plain)); }
+          }
+          for (const f of fences) box.append(h('details', {}, h('summary', { class: 'sub' }, f.lang || 'code'), h('pre', { class: 'thread-payload' }, f.code.trim())));
+        }
+      }
+      if (p.stopReason) box.append(h('div', { class: 'sub' }, `stop: ${p.stopReason}`));
+    }
+    box.append(h('details', {}, h('summary', { class: 'sub' }, 'raw JSON'), h('pre', { class: 'thread-payload' }, JSON.stringify(p, null, 2))));
+    return box;
+  }
+
   async function renderThreads(body) {
     body.replaceChildren();
     let logs = [];
     try { logs = await api.get(`/api/stories/${storyId}/threadlog?limit=60`); } catch {}
     if (!logs.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
     for (const l of logs) {
-      const pre = h('pre', { class: 'thread-payload hidden' }, JSON.stringify(l.payload, null, 2));
+      const detail = h('div', { class: 'hidden' });
+      let built = false;
       body.append(h('div', { class: 'mem-card' },
-        h('div', { class: 'mem-head', onclick: () => pre.classList.toggle('hidden') },
+        h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('hidden'); } },
           h('span', { class: `role-badge ${l.agentRole}` }, l.agentRole),
           h('span', { class: 'sub' }, `${l.direction} · ${l.tokensOut ?? l.tokensIn ?? 0}tk · ${l.durationMs ?? 0}ms`)),
-        pre));
+        detail));
     }
   }
 
@@ -292,6 +414,7 @@ async function renderPlay(storyId) {
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
+      case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (activeTab === 'threads') renderDrawer(); break;
     }
   };
@@ -344,7 +467,7 @@ async function renderPlay(storyId) {
 }
 
 // ---------------- Settings ----------------
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner' };
 const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compatible (OpenRouter, etc.)' };
 
 async function renderSettings() {
@@ -437,6 +560,30 @@ async function renderPromptEditor(name) {
   try { data = await api.get('/api/settings/prompts/' + encodeURIComponent(name)); }
   catch { location.hash = '/settings'; return; }
   const ta = h('textarea', { rows: '24', style: 'font-family:ui-monospace,monospace; font-size:13px' }, data.content);
+
+  // Feature 7: a readable preview of the template (markdown-lite, placeholders
+  // highlighted) so prompts can be reviewed without parsing the source.
+  const preview = h('div', { class: 'prompt-preview prose hidden' });
+  function renderPreview() {
+    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let html = esc(ta.value);
+    html = html
+      .replace(/^###\s+(.+)$/gm, '<h5>$1</h5>')
+      .replace(/^##\s+(.+)$/gm, '<h4>$1</h4>')
+      .replace(/^#\s+(.+)$/gm, '<h3>$1</h3>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/^-\s+/gm, '• ')
+      .replace(/\{\{(\w+)\}\}/g, '<span class="var">$1</span>');
+    preview.innerHTML = html;
+  }
+  const previewBtn = h('button', { class: 'ghost' }, 'Preview');
+  previewBtn.addEventListener('click', () => {
+    const showing = !preview.classList.contains('hidden');
+    if (showing) { preview.classList.add('hidden'); ta.classList.remove('hidden'); previewBtn.textContent = 'Preview'; }
+    else { renderPreview(); preview.classList.remove('hidden'); ta.classList.add('hidden'); previewBtn.textContent = 'Edit'; }
+  });
+
   const status = h('span', { class: 'sub' });
   const saveBtn = h('button', { class: 'primary' }, 'Save prompt');
   saveBtn.addEventListener('click', async () => {
@@ -456,8 +603,8 @@ async function renderPromptEditor(name) {
     h('div', { class: 'scroll' }, h('div', { class: 'container' },
       h('h2', {}, 'Prompt: ' + name),
       h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Placeholders like {{genre}} are filled by the engine — leave them intact.'),
-      ta,
-      h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, status),
+      ta, preview,
+      h('div', { class: 'row', style: 'margin-top:12px; gap:12px' }, saveBtn, resetBtn, previewBtn, status),
     )),
   );
 }
