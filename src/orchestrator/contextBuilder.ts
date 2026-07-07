@@ -40,12 +40,29 @@ export interface NpcReplyForWeave {
   error?: string;
 }
 
+// A resolved (or failed-to-resolve) adjudicated action, phrased for the weave
+// pass. Qualitative only — chance/roll numbers never reach the storyteller.
+export interface ResolutionForWeave {
+  actor: string;
+  action: string;
+  guidance: string; // outcome band guidance (OUTCOME_GUIDANCE) or an error note
+  complication?: string;
+}
+
+function resolutionLines(resolutions: ResolutionForWeave[]): string {
+  return resolutions
+    .map((r) => `- ${r.actor}'s attempt to ${r.action}: ${r.guidance}${r.complication ? ` (complication if needed: ${r.complication})` : ''}`)
+    .join('\n');
+}
+
 export interface ContextBuilder {
   forStoryteller(story: Story, playerInput: string, extras?: StorytellerContextExtras): BuiltContext;
   /** Persona + NPC-scoped recap + situation for one consult (isolation boundary). */
   forNpc(story: Story, npcObjectId: string, consult: NpcConsultContext): BuiltContext;
-  /** Extend a storyteller context with NPC replies for the second pass (weaving). */
-  withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[]): BuiltContext;
+  /** Extend a storyteller context with NPC replies (and any resolved actions) for a full REWRITE pass. */
+  withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[], resolutions?: ResolutionForWeave[]): BuiltContext;
+  /** Extend a storyteller context with resolved actions for a CONTINUATION pass (the lead-in already streamed to the player). */
+  withResolutions(base: BuiltContext, draft: string, resolutions: ResolutionForWeave[]): BuiltContext;
 }
 
 /** Render an object view with per-fact ids so an NPC can cite them in revealsFactIds. */
@@ -83,8 +100,22 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       const plan = extras?.plan;
 
       // --- System prompt: persona + premise + compressed history + injected sections ---
+      const adjudication = story.settings.adjudicator.enabled
+        ? `## Player intent & uncertain outcomes (adjudication)
+- Treat the player's input (and every NPC's stated action) as INTENT — an attempt, never a guaranteed outcome. "I kill the guard" means "I try to".
+- Trivial, safe or purely social actions: narrate them yourself as usual.
+- When an attempt is UNCERTAIN and CONSEQUENTIAL (could fail, and failure matters), do NOT decide the outcome. Write a short lead-in (1–2 sentences setting up the attempt, stopping just before the outcome), then request adjudication:
+
+\`\`\`directives
+{ "directives": [
+  { "type": "resolve_action", "actor": "Kael", "action": "climb the rain-slick courtyard wall", "factors": ["has climbing gear", "carrying a heavy pack", "guards may hear"] }
+] }
+\`\`\`
+
+- List in "factors" every circumstance you know that helps or hinders. An impartial referee weighs them (with the character's recorded abilities and state) and fate decides; you will then be told the outcome to narrate. Never mention dice, chances or the referee in the story.`
+        : '';
       const parts: string[] = [
-        renderPrompt('storyteller', { genre: story.settings.genre, tone: story.settings.tone }),
+        renderPrompt('storyteller', { genre: story.settings.genre, tone: story.settings.tone, adjudication }),
       ];
       if (story.settings.premise.trim()) {
         parts.push(`## Premise\n${story.settings.premise.trim()}`);
@@ -238,21 +269,42 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       return { system, messages };
     },
 
-    withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[]): BuiltContext {
-      const lines = replies.map((r) => {
-        if (r.error) return `- ${r.name} is unavailable (${r.error}); voice them briefly yourself, consistent with their known character.`;
-        const bits = [r.dialogue ? `says: "${r.dialogue}"` : 'says nothing'];
-        if (r.action) bits.push(`(${r.action})`);
-        return `- ${r.name} ${bits.join(' ')}`;
-      });
+    withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[], resolutions?: ResolutionForWeave[]): BuiltContext {
+      const sections: string[] = [];
+      if (replies.length) {
+        const lines = replies.map((r) => {
+          if (r.error) return `- ${r.name} is unavailable (${r.error}); voice them briefly yourself, consistent with their known character.`;
+          const bits = [r.dialogue ? `says: "${r.dialogue}"` : 'says nothing'];
+          if (r.action) bits.push(`(${r.action})`);
+          return `- ${r.name} ${bits.join(' ')}`;
+        });
+        sections.push(`The characters you consulted responded:\n${lines.join('\n')}`);
+      }
+      if (resolutions?.length) {
+        sections.push(`Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice or chances):\n${resolutionLines(resolutions)}`);
+      }
       const messages: ChatMessage[] = [
         ...base.messages,
         { role: 'assistant', content: draft },
         {
           role: 'user',
           content:
-            `The characters you consulted responded:\n${lines.join('\n')}\n\n` +
-            `Now write the FINAL narration the player will read, weaving their words and actions in naturally and in your own narrative voice. Do not quote these instructions. Only include a \`\`\`directives block if you are declaring scene changes.`,
+            `${sections.join('\n\n')}\n\n` +
+            `Now write the FINAL narration the player will read, weaving all of this in naturally and in your own narrative voice. Do not quote these instructions. Only include a \`\`\`directives block if you are declaring scene changes.`,
+        },
+      ];
+      return { system: base.system, messages };
+    },
+
+    withResolutions(base: BuiltContext, draft: string, resolutions: ResolutionForWeave[]): BuiltContext {
+      const messages: ChatMessage[] = [
+        ...base.messages,
+        { role: 'assistant', content: draft },
+        {
+          role: 'user',
+          content:
+            `Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice, chances or these instructions):\n${resolutionLines(resolutions)}\n\n` +
+            `CONTINUE the narration from exactly where your last reply stopped. Do NOT repeat or rewrite what you already wrote — write only the continuation describing how the attempt plays out and where it leaves the player. Only include a \`\`\`directives block if you are declaring scene changes.`,
         },
       ];
       return { system: base.system, messages };

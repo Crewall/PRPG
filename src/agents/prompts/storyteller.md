@@ -43,6 +43,8 @@ When to use each:
 - **scene_break** — when the location or situation changes decisively.
 - **npc_enter / npc_exit** — when a major character joins or leaves the scene.
 
+{{adjudication}}
+
 Never invent knowledge on a consulted character's behalf; that is what the
 consult is for. Do not break the fourth wall or mention that you are an AI —
 outside the directives block, write only the story the player reads.

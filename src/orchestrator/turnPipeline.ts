@@ -1,5 +1,10 @@
 import { StoryLocks } from './locks.ts';
-import type { ContextBuilder, NpcReplyForWeave } from './contextBuilder.ts';
+import type { ContextBuilder, NpcReplyForWeave, ResolutionForWeave } from './contextBuilder.ts';
+import { Adjudicator } from '../agents/adjudicator.ts';
+import { clampChance, outcomeFromRoll, OUTCOME_GUIDANCE } from './resolution.ts';
+import type { ActionResolution } from './resolution.ts';
+import { searchFacts, renderRetrieval } from '../memory/retrieval.ts';
+import { renderObjectView } from '../memory/model.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { AgentStore } from '../db/stores/agentStore.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
@@ -45,6 +50,8 @@ export interface PipelineDeps {
   registry: LlmRegistry;
   contexts: ContextBuilder;
   events: EventBus;
+  /** Dice source for adjudicated actions — injectable for deterministic tests. */
+  rng?: () => number;
 }
 
 export interface RewindResult {
@@ -170,15 +177,33 @@ export class TurnPipeline {
       let finalDirectives = parsed.directives;
       let storytellerCalls = 1;
 
-      // Step 4 — NPC consults (parallel), Step 5 — re-weave.
+      // Step 4 — NPC consults + adjudicated actions, Step 5 — re-weave.
       const consults = canConsult ? parsed.directives.filter((d): d is Extract<Directive, { type: 'consult_npc' }> => d.type === 'consult_npc') : [];
-      if (consults.length) {
-        stage = 'npc consults';
-        out.status('the characters are thinking…');
-        const outcomes = await Promise.all(consults.map((c) => this.consultNpc(story, turn.id, c, playerInput, parsed.narration, aborter.signal)));
+      const resolveDirectives = story.settings.adjudicator.enabled
+        ? parsed.directives.filter((d): d is Extract<Directive, { type: 'resolve_action' }> => d.type === 'resolve_action')
+        : [];
 
-        const weave: NpcReplyForWeave[] = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
-        const ctx2 = contexts.withNpcReplies(ctx, draft1, weave);
+      // Adjudication: gather circumstances, judge, roll hidden dice (parallel).
+      let resolutions: ActionResolution[] = [];
+      let weaveResolutions: ResolutionForWeave[] = [];
+      if (resolveDirectives.length) {
+        stage = 'adjudicator';
+        out.status('fate weighs the attempt…');
+        const results = await Promise.all(resolveDirectives.map((d) => this.resolveAction(story, turn.id, d, aborter.signal)));
+        resolutions = results.map((r) => r.resolution).filter((r): r is ActionResolution => !!r);
+        weaveResolutions = results.map((r) => r.weave);
+      }
+
+      if (consults.length || (canConsult && weaveResolutions.length)) {
+        // Buffered REWRITE path: pass 1 was never shown, so the weave replaces it.
+        let weave: NpcReplyForWeave[] = [];
+        if (consults.length) {
+          stage = 'npc consults';
+          out.status('the characters are thinking…');
+          const outcomes = await Promise.all(consults.map((c) => this.consultNpc(story, turn.id, c, playerInput, parsed.narration, aborter.signal)));
+          weave = outcomes.map((o) => ({ name: o.name, dialogue: o.reply?.dialogue ?? '', action: o.reply?.action, error: o.error }));
+        }
+        const ctx2 = contexts.withNpcReplies(ctx, draft1, weave, weaveResolutions);
 
         stage = `storyteller weave (${bound.profile.model})`;
         out.status('the storyteller is weaving the reply…');
@@ -188,6 +213,19 @@ export class TurnPipeline {
         parsed = parseDirectives(draft2);
         finalNarration = parsed.narration;
         finalDirectives = parsed.directives;
+      } else if (weaveResolutions.length) {
+        // Streamed CONTINUATION path: the lead-in already streamed live, so the
+        // storyteller continues from it with the decided outcome appended.
+        const ctx2 = contexts.withResolutions(ctx, draft1, weaveResolutions);
+        stage = `storyteller weave (${bound.profile.model})`;
+        out.status('the storyteller narrates the outcome…');
+        out.delta('\n\n');
+        const gate2 = this.makeGate(out);
+        const draft2 = await storyteller.narrate(ctx2, gate2.onDelta, { turnId: turn.id, signal: aborter.signal });
+        storytellerCalls = 2;
+        const parsed2 = parseDirectives(draft2);
+        finalNarration = `${parsed.narration}\n\n${parsed2.narration}`;
+        finalDirectives = [...parsed.directives.filter((d) => d.type !== 'resolve_action'), ...parsed2.directives];
       } else if (canConsult) {
         // Buffered pass-1 with no consult → replay the narration so the player sees it stream.
         gate.replay(finalNarration);
@@ -205,6 +243,8 @@ export class TurnPipeline {
           model: bound.profile.model,
           storytellerCalls,
           consults: consults.length,
+          // Hidden dice: numbers live here (and the debug UI), never in the story.
+          ...(resolutions.length ? { rolls: resolutions.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome })) } : {}),
         },
       });
       agents.appendMessage(session.id, { role: 'user', content: playerInput || '(begin)', turnId: turn.id });
@@ -271,6 +311,71 @@ export class TurnPipeline {
       if (signal.aborted) throw err; // a user cancel must still cancel the turn
       logger.warn('context planner failed — falling back to lexical retrieval', { storyId: story.id, err: (err as Error).message });
       return undefined;
+    }
+  }
+
+  /**
+   * Adjudicate one uncertain attempt (feature: the resolution AI). The ENGINE
+   * gathers the circumstances mechanically — the actor's recorded sheet,
+   * retrieval over the action text, the location — so the storyteller doesn't
+   * have to remember everything. The adjudicator judges a success chance; a
+   * hidden d100 decides. Never throws (except on user cancel): a failed
+   * adjudication degrades to "storyteller resolves narratively".
+   */
+  private async resolveAction(
+    story: Story,
+    turnId: string,
+    directive: Extract<Directive, { type: 'resolve_action' }>,
+    signal: AbortSignal,
+  ): Promise<{ resolution?: ActionResolution; weave: ResolutionForWeave }> {
+    const { memory, registry, agents, threadLog, stories } = this.deps;
+    try {
+      let bound;
+      const override = story.settings.roles.adjudicator;
+      if (override) bound = registry.getProfile(override);
+      else {
+        try {
+          bound = registry.getForRole('adjudicator');
+        } catch {
+          bound = registry.getForRole('scribe_memory'); // configs from before the role existed
+        }
+      }
+      const session = agents.ensureSession(story.id, 'adjudicator', bound.name);
+      const adjudicator = new Adjudicator({ session, bound, threadLog, storyId: story.id });
+
+      const factors = directive.factors ?? [];
+      const actorObj = memory.findByName(story.id, directive.actor);
+      const actorView = actorObj ? memory.getObjectView(actorObj.id, { kind: 'storyteller' }, { maxTokens: 400 }) : undefined;
+      const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, `${directive.action} ${factors.join(' ')}`, { maxTokens: 400 });
+      const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
+      const location = scene?.locationObjectId ? memory.getObjectView(scene.locationObjectId, { kind: 'storyteller' }, { maxTokens: 200 }) : undefined;
+
+      const reply = await adjudicator.judge(
+        {
+          actor: directive.actor,
+          action: directive.action,
+          factors,
+          actorSheet: actorView ? renderObjectView(actorView) : '',
+          circumstances: renderRetrieval(retrieval),
+          sceneState: location ? renderObjectView(location) : '',
+        },
+        { turnId, signal },
+      );
+
+      const chance = clampChance(reply.successChance);
+      const roll = 1 + Math.floor((this.deps.rng ?? Math.random)() * 100);
+      const outcome = outcomeFromRoll(chance, roll);
+      logger.info('action adjudicated', { storyId: story.id, turnId, actor: directive.actor, action: directive.action, chance, roll, outcome });
+      return {
+        resolution: { actor: directive.actor, action: directive.action, chance, roll, outcome, assessment: reply.assessment, complication: reply.complication, keyFactors: reply.keyFactors },
+        weave: { actor: directive.actor, action: directive.action, guidance: OUTCOME_GUIDANCE[outcome], complication: reply.complication || undefined },
+      };
+    } catch (err) {
+      if (signal.aborted) throw err; // a user cancel must still cancel the turn
+      logger.warn('adjudication failed — storyteller resolves narratively', { storyId: story.id, actor: directive.actor, err: (err as Error).message });
+      return {
+        weave: { actor: directive.actor, action: directive.action, guidance: 'the referee is unavailable — decide this outcome yourself, fairly, without guaranteeing success' },
+      };
     }
   }
 
