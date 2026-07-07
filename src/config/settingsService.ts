@@ -47,6 +47,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'scribe-story-digest', label: 'Story scribe — digest fold' },
   { name: 'scribe-memory', label: 'Memory scribe — extraction' },
   { name: 'context-planner', label: 'Context planner — memory selection' },
+  { name: 'npc-dossier', label: 'Memory scribe — NPC dossier' },
 ];
 
 /** Convert the boot config.json into the initial RuntimeSettings shape. */

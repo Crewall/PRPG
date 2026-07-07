@@ -211,6 +211,19 @@ async function renderPlay(storyId) {
   async function renderMemory(body) {
     body.replaceChildren();
     const scope = debug ? 'storyteller' : 'player';
+
+    // Feature: the salience system is optional per story.
+    let salienceOn = story.settings?.salience?.enabled !== false;
+    const salBtn = h('button', { class: 'link' }, salienceOn ? 'on' : 'off');
+    salBtn.addEventListener('click', async () => {
+      salienceOn = !salienceOn;
+      await api.patch(`/api/stories/${storyId}`, { settings: { salience: { enabled: salienceOn } } });
+      story.settings = { ...(story.settings || {}), salience: { enabled: salienceOn } };
+      salBtn.textContent = salienceOn ? 'on' : 'off';
+    });
+    body.append(h('div', { class: 'row item-tools' },
+      h('span', { class: 'sub', title: 'Importance weighting & decay of memory objects. Off = salience frozen and ignored in ranking.' }, 'Salience system:'), salBtn));
+
     // Suggestion inbox.
     let suggestions = [];
     try { suggestions = await api.get(`/api/stories/${storyId}/memory/suggestions`); } catch {}
@@ -495,9 +508,36 @@ async function renderSettings() {
       } catch (e) { result.className = 'sub err'; result.textContent = '✗ ' + e.message; }
     });
     provInputs[kind] = { baseUrl, apiKey };
+
+    // Feature 7: rate-limit / credits check (OpenRouter `GET /key`), with the
+    // result displayed inside the provider card.
+    const extras = [];
+    if (kind === 'openai_compat') {
+      const limitsBox = h('div', { class: 'limits' });
+      const limitsBtn = h('button', { class: 'small' }, 'Check limits');
+      limitsBtn.addEventListener('click', async () => {
+        limitsBox.replaceChildren(h('span', { class: 'sub' }, 'checking…'));
+        try {
+          const r = await api.get('/api/settings/limits/openai_compat');
+          if (!r.ok) { limitsBox.replaceChildren(h('span', { class: 'sub err' }, '✗ ' + (r.error || 'failed'))); return; }
+          const k = r.key || {};
+          const fmt = (n) => (typeof n === 'number' ? '$' + n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : String(n));
+          const rows = [
+            ['key', k.label || '—'],
+            ['credits', k.limit == null ? `${fmt(k.usage)} used · no limit` : `${fmt(k.limit_remaining)} remaining of ${fmt(k.limit)}${k.limit_reset ? ` (resets: ${k.limit_reset})` : ''}`],
+            ['usage', `today ${fmt(k.usage_daily)} · week ${fmt(k.usage_weekly)} · month ${fmt(k.usage_monthly)}`],
+            ['tier', k.is_free_tier ? 'free tier' : 'paid'],
+          ];
+          limitsBox.replaceChildren(...rows.map(([a, b]) => h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, a), h('span', { class: 'kv-val' }, b))));
+        } catch (e) { limitsBox.replaceChildren(h('span', { class: 'sub err' }, '✗ ' + e.message)); }
+      });
+      extras.push(limitsBtn, limitsBox);
+    }
+
     return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, PROVIDER_LABELS[kind]),
       h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
-      h('div', { class: 'row', style: 'margin-top:10px; gap:10px' }, testBtn, result));
+      h('div', { class: 'row', style: 'margin-top:10px; gap:10px; flex-wrap:wrap' }, testBtn, result, ...extras.slice(0, 1)),
+      ...extras.slice(1));
   }
 
   const dynHost = h('div');
@@ -506,8 +546,18 @@ async function renderSettings() {
       const label = h('input', { value: f.label, placeholder: 'label', oninput: (e) => (f.label = e.target.value) });
       const prov = h('select', { onchange: (e) => (f.provider = e.target.value) }, ...Object.keys(PROVIDER_LABELS).map((k) => h('option', { value: k, ...(k === f.provider ? { selected: true } : {}) }, k)));
       const model = h('input', { value: f.model, placeholder: 'model id (e.g. anthropic/claude-sonnet-4.5)', oninput: (e) => (f.model = e.target.value) });
+      // Feature 6: live-test this specific model with the saved provider key.
+      const testRes = h('span', { class: 'sub' });
+      const test = h('button', { class: 'link', onclick: async () => {
+        testRes.className = 'sub'; testRes.textContent = '…';
+        try {
+          const r = await api.post('/api/settings/test', { provider: f.provider, model: f.model });
+          testRes.className = r.ok ? 'sub ok' : 'sub err';
+          testRes.textContent = r.ok ? `✓ ${r.latencyMs}ms` : `✗ ${r.error}`;
+        } catch (e) { testRes.className = 'sub err'; testRes.textContent = '✗ ' + e.message; }
+      } }, 'test');
       const rm = h('button', { class: 'link', onclick: () => { favs.splice(i, 1); paint(); } }, 'remove');
-      return h('div', { class: 'fav-row' }, label, prov, model, rm);
+      return h('div', { class: 'fav-row' }, label, prov, model, test, testRes, rm);
     });
     const addFav = h('button', { class: 'small', onclick: () => { favs.push({ id: 'f' + Math.random().toString(36).slice(2, 8), label: 'New model', provider: 'openai_compat', model: '' }); paint(); } }, '+ Add model');
     const favCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model favourites'), h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Curate the models you use; pick from these per role below.'), ...favRows, addFav);

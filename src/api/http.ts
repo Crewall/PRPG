@@ -313,7 +313,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   });
 
   // ---- Layer 4: NPC agents (promote/demote, session list) ----
-  const npcDeps = { stories, agents: app.agents, memory, registry, events: app.events };
+  const npcDeps = { stories, agents: app.agents, memory, jobs, registry, events: app.events };
 
   server.get('/api/stories/:id/agents', async (req) => {
     const { id } = req.params as { id: string };
@@ -396,6 +396,29 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       return { ok: true, latencyMs: Date.now() - t0, model, sample: res.text.trim().slice(0, 40) };
     } catch (err) {
       return { ok: false, latencyMs: Date.now() - t0, model, error: (err as Error).message };
+    }
+  });
+
+  // Rate-limit / credits check (OpenRouter-style `GET {baseUrl}/key`).
+  // Anthropic has no equivalent endpoint, so this is openai_compat only.
+  server.get('/api/settings/limits/:provider', async (req) => {
+    const { provider } = req.params as { provider: string };
+    if (provider !== 'openai_compat') {
+      return { supported: false, error: 'Limit check is only available for the OpenAI-compatible provider (OpenRouter).' };
+    }
+    const saved = svc.get().providers.openai_compat;
+    if (!saved?.apiKey) return { supported: true, ok: false, error: 'no API key saved for this provider' };
+    const base = (saved.baseUrl?.trim() || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${base}/key`, {
+        headers: { authorization: `Bearer ${saved.apiKey}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return { supported: true, ok: false, error: `HTTP ${res.status} from ${base}/key` };
+      const json = (await res.json()) as { data?: Record<string, unknown> };
+      return { supported: true, ok: true, key: json.data ?? json };
+    } catch (err) {
+      return { supported: true, ok: false, error: (err as Error).message };
     }
   });
 

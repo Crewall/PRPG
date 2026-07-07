@@ -1,7 +1,7 @@
 import type { Db, Row } from '../db.ts';
 import { id } from '../../util/id.ts';
 
-export type JobType = 'scribe_story' | 'scribe_memory' | 'memory_maintenance' | 'archive_faded';
+export type JobType = 'scribe_story' | 'scribe_memory' | 'memory_maintenance' | 'archive_faded' | 'npc_dossier';
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
 
 export interface Job {
