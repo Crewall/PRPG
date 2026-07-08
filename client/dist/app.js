@@ -60,25 +60,36 @@ async function renderHome() {
       )
     : [h('div', { class: 'empty' }, 'No stories yet. Create one below to begin.')];
 
-  const titleIn = h('input', { placeholder: 'Story title', value: 'A Night at the Rusty Flagon' });
-  const seedIn = h('textarea', { rows: '4', placeholder: 'Premise / opening seed…' },
-    'You are a traveler arriving at the Rusty Flagon, a dimly lit tavern on the edge of a rain-soaked frontier town. Something is not right here.');
-  const genreIn = h('input', { placeholder: 'Genre', value: 'dark fantasy' });
+  const titleIn = h('input', { placeholder: 'Story title (optional)' });
+  const seedIn = h('textarea', { rows: '4', placeholder: 'Premise / opening seed… (optional)' });
+  const genreIn = h('input', { placeholder: 'Genre (optional)' });
   const createBtn = h('button', { class: 'primary' }, 'Create & play');
 
-  // Premise randomizer: the engine rolls 5 of 100 seed phrases, the AI weaves
-  // a basic story from them and names/genres it — all fields stay editable.
+  // Premise randomizer: the engine rolls N (1–12) atomic seed elements and a
+  // model weaves them into a premise + title + genre. A filled title and/or
+  // genre is kept fixed and woven into the result; all fields stay editable.
+  const seedCount = h('input', { type: 'number', min: '1', max: '12', step: '1', value: '5', style: 'width:60px' });
   const seedNote = h('div', { class: 'sub', style: 'margin-top:6px' });
   const randomBtn = h('button', { class: 'ghost' }, '🎲 Randomize');
+  let rollTimer = null;
   randomBtn.addEventListener('click', async () => {
-    randomBtn.disabled = true; randomBtn.textContent = '🎲 rolling…'; seedNote.textContent = '';
+    let n = parseInt(seedCount.value, 10); if (!(n >= 1 && n <= 12)) n = 5; seedCount.value = String(n);
+    randomBtn.disabled = true; seedNote.className = 'sub'; seedNote.textContent = '';
+    const t0 = Date.now();
+    const tick = () => { randomBtn.textContent = `🎲 rolling… ${Math.round((Date.now() - t0) / 1000)}s`; };
+    tick(); rollTimer = setInterval(tick, 1000);
+    // A filled title/genre is sent as a fixed constraint the premise weaves in.
+    const body = { count: n };
+    if (titleIn.value.trim()) body.title = titleIn.value.trim();
+    if (genreIn.value.trim()) body.genre = genreIn.value.trim();
     try {
-      const r = await api.post('/api/stories/randomize');
+      const r = await api.post('/api/stories/randomize', body);
       titleIn.value = r.title || titleIn.value;
       genreIn.value = r.genre || genreIn.value;
       seedIn.value = r.premise || seedIn.value;
-      seedNote.textContent = 'rolled seeds: ' + (r.seeds || []).join(' · ');
-    } catch (e) { seedNote.textContent = '✗ randomize failed: ' + e.message; }
+      seedNote.className = 'sub ok'; seedNote.textContent = `✓ rolled ${(r.seeds || []).length}: ${(r.seeds || []).join(' · ')}`;
+    } catch (e) { seedNote.className = 'sub err'; seedNote.textContent = '✗ randomize failed: ' + e.message; }
+    clearInterval(rollTimer); rollTimer = null;
     randomBtn.disabled = false; randomBtn.textContent = '🎲 Randomize';
   });
   createBtn.addEventListener('click', async () => {
@@ -96,7 +107,7 @@ async function renderHome() {
       h('div', { class: 'card' },
         h('h3', { style: 'margin-top:0' }, 'New story'),
         h('label', {}, 'Title'), titleIn, h('label', {}, 'Genre'), genreIn, h('label', {}, 'Premise seed'), seedIn,
-        h('div', { class: 'row', style: 'margin-top:14px; gap:10px' }, createBtn, randomBtn),
+        h('div', { class: 'row', style: 'margin-top:14px; gap:10px; flex-wrap:wrap' }, createBtn, randomBtn, h('span', { class: 'sub' }, 'seeds'), seedCount),
         seedNote,
       ),
     )),

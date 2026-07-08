@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { loadSeeds, rollSeeds } from '../src/util/seeds.ts';
 
 describe('story seed roller', () => {
-  it('ships 100 seed phrases', () => {
-    expect(loadSeeds().length).toBe(100);
+  it('ships 250 seed phrases', () => {
+    expect(loadSeeds().length).toBe(250);
   });
 
   it('rolls 5 distinct seeds from the pool', () => {
