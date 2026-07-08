@@ -6,6 +6,11 @@ import type { JsonCallContext } from '../llm/jsonCall.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
 import type { AgentSession } from '../domain.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { logger } from '../util/logger.ts';
+
+// An empty (0-token) reply is a model failure, not a finished response: retry
+// this many times before giving up and failing the call (and thus the turn).
+const MAX_EMPTY_RETRIES = 2;
 
 // A fully-assembled context for one agent call: the isolation boundary — an
 // agent never builds this itself, the orchestrator's contextBuilder does.
@@ -65,19 +70,32 @@ export abstract class Agent {
     });
   }
 
-  /** Free-text call with streaming (storyteller, NPC dialogue). */
+  /**
+   * Free-text call with streaming (storyteller, NPC dialogue). An empty reply
+   * is treated as a failed attempt and retried (an empty reply never emitted a
+   * delta, so a retry cannot duplicate streamed text); after the retries are
+   * exhausted the call throws so the turn is marked as an error, not complete.
+   */
   protected async invoke(ctx: BuiltContext, onDelta?: OnDelta, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<string> {
-    this.logRequest(ctx, opts.turnId);
-    const t0 = Date.now();
-    const res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal }, onDelta);
-    this.logResponse(res.text, {
-      durationMs: Date.now() - t0,
-      tokensIn: res.usage.inputTokens,
-      tokensOut: res.usage.outputTokens,
-      turnId: opts.turnId,
-      extra: { stopReason: res.stopReason },
-    });
-    return res.text;
+    for (let attempt = 0; ; attempt++) {
+      this.logRequest(ctx, opts.turnId);
+      const t0 = Date.now();
+      const res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal }, onDelta);
+      const empty = res.text.trim().length === 0;
+      this.logResponse(res.text, {
+        durationMs: Date.now() - t0,
+        tokensIn: res.usage.inputTokens,
+        tokensOut: res.usage.outputTokens,
+        turnId: opts.turnId,
+        extra: { stopReason: res.stopReason, ...(empty ? { empty: true, attempt: attempt + 1 } : {}) },
+      });
+      if (!empty) return res.text;
+      if (opts.signal?.aborted) throw new Error('cancelled');
+      if (attempt >= MAX_EMPTY_RETRIES) {
+        throw new Error(`the model returned an empty reply (${attempt + 1} attempts)`);
+      }
+      logger.warn('empty model reply — retrying', { role: this.session.role, storyId: this.storyId, attempt: attempt + 1 });
+    }
   }
 
   /** Schema-enforced JSON call with auto repair-retry and cap-escalation (scribes, overseer, NPC replies). */

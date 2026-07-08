@@ -105,6 +105,19 @@ describe('post-turn scribes integration (Layers 2 + 3b)', () => {
     expect(app.stories.getScene(fresh.currentSceneId!)?.title).toBe('The Cellar');
   });
 
+  it('a long scene that never closes still folds checkpoint digests', async () => {
+    const story = app.stories.createStory({ title: 'Flagon4', settings: { premise: 'A rainy tavern.' } });
+    // 8 turns, no scene break: the digest must not stay empty forever.
+    for (let i = 0; i < 8; i++) {
+      await app.pipeline.run(story.id, `I chat with Marta (round ${i}).`, noopEmitter);
+      await app.worker.drain();
+    }
+    const digest = app.summaries.getStoryDigest(story.id);
+    expect(digest).toBeDefined();
+    expect(digest!.content).toContain('ledger');
+    expect(digest!.coversToTurnIndex).toBeGreaterThanOrEqual(6);
+  });
+
   it('the extracted memory feeds the next storyteller prompt (retrieval loop closes)', async () => {
     const story = app.stories.createStory({ title: 'Flagon3', settings: { premise: 'A rainy tavern.' } });
     await app.pipeline.run(story.id, 'I greet Marta the innkeeper.', noopEmitter);

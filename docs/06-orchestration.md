@@ -17,10 +17,15 @@ Player ──input──▶ ws.ts ──▶ TurnPipeline.run(storyId, input)
  4. npc consults     for each consult_npc directive (parallel): build NPC ctx → invokeJson
  5. storyteller #2   re-invoke with NPC replies → final narration   [only if step 4 ran]
  6. (opt) overseer   verdict on final narration; hard violation → regenerate (≤2×)
- 7. emit             persist Turn(complete), stream/flush to client
+ 7. emit             advance the hidden in-game clock (advance_time directive, else
+                     ~5 min default), persist Turn(complete, meta.clockMin), stream/flush
  8. scene effects    apply scene_break / npc_enter / npc_exit directives
  9. post-turn async  enqueue scribe_memory + scribe_story jobs → workers run them
 ```
+
+An empty (0-token) storyteller reply is never accepted as a finished turn: the
+agent layer retries it up to 2 times and then fails the turn (status `error`)
+so the player can resend, instead of silently completing with nothing.
 
 Latency profile: common case (no consults, overseer off) = **one** streamed LLM
 call. Worst case = storyteller + parallel NPC batch + storyteller + overseer +
@@ -81,12 +86,13 @@ declares its inputs explicitly:
 | # | block | source | budget |
 |---|---|---|---|
 | 1 | system prompt | `prompts/storyteller.md` + story settings (tone, genre) + hard rules | — |
-| 2 | story digest | `story_summaries(scope=story)` | ≤800 tk |
-| 3 | scene summary | `story_summaries(scope=scene, current)` | ≤300 tk |
-| 4 | scene state | location view (`perception`+`known`), present-NPC one-liners | ≤400 tk |
-| 5 | retrieved memory | `searchFacts({kind:'storyteller'}, playerInput)` | ≤1500 tk |
-| 6 | recent turns | last K=6 turns verbatim (player+narration) | ~2000 tk |
-| 7 | player input | raw | — |
+| 2 | in-game clock | `stories.clock_min` ("It is Day 2, 14:30…", hidden from the player) | — |
+| 3 | story digest | `story_summaries(scope=story)` | ≤1200 tk (config) |
+| 4 | scene summary | `story_summaries(scope=scene, current)` | ≤500 tk (config) |
+| 5 | scene state | location view (`perception`+`known`), present-NPC one-liners | ≤400 tk |
+| 6 | retrieved memory | `searchFacts({kind:'storyteller'}, playerInput)` | ≤1500 tk (config) |
+| 7 | recent turns | last K=6 turns verbatim (player+narration) | ~2000 tk |
+| 8 | player input | raw | — |
 
 ### `forNpc(story, turn, consult)`
 | # | block | source |
@@ -150,6 +156,10 @@ With the overseer enabled, streaming to the player is deferred until `pass`
 
 - `scene_break` directive → close current scene (`scribe_story` finalize job),
   open new scene with `carryNpcs` active, others → `dormant`.
+- **Digest checkpoints:** the story digest normally folds on scene close; when a
+  scene runs long, the scene-summary job also enqueues a mid-scene digest fold
+  whenever the digest lags ≥8 turns behind play (`DIGEST_CHECKPOINT_EVERY`), so
+  the whole-story summary never goes stale inside an unbroken scene.
 - `npc_enter` → resolve name → ensure/activate session, add to
   `scenes.active_npc_ids`; unknown name → scribe_memory will typically create the
   object on this turn's pass, and activation is retried next turn.

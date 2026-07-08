@@ -26,10 +26,18 @@ abstract class Agent {
   `contextBuilder` for this specific agent and turn (agents never build their own
   context from global state — this is the isolation boundary).
 - Both invoke paths write full request/response into `thread_log`.
+- **Empty-reply retry:** a 0-token/whitespace-only reply is a model failure, not
+  a finished response. `invoke` retries it up to 2 times (an empty reply never
+  streamed a delta, so retrying cannot duplicate player-visible text) and then
+  throws — the turn is marked `error`, never `complete`-with-nothing.
+  `invokeJson` likewise re-requests on an empty reply without burning its
+  repair round.
 - `invokeJson` embeds the JSON schema in the prompt, parses with Zod, and on
   failure sends one repair message ("Your reply failed validation: <errors>.
   Reply with only corrected JSON."). Second failure → job failure (scribes) or
-  fallback behavior (documented per agent below).
+  fallback behavior (documented per agent below). A reply truncated at the
+  output-token cap escalates the cap (×2, up to twice) instead of a doomed
+  repair.
 
 Prompts live in `src/agents/prompts/*.md` as versioned templates with
 `{{placeholders}}` — never inline strings — so they can be diffed, tested, and
@@ -69,6 +77,7 @@ orchestrator strips before display:
   { "type": "scene_break", "title": "Cellar of the Flagon", "carryNpcs": ["Marta"] },
   { "type": "npc_enter", "name": "Guard Captain Held" },
   { "type": "npc_exit",  "name": "Old Tom" },
+  { "type": "advance_time", "minutes": 90 },                       // hidden in-game clock
   { "type": "roll", "kind": "persuasion", "difficulty": "hard" }   // optional dice/uncertainty hook, post-MVP
 ] }
 ```
@@ -80,6 +89,11 @@ orchestrator strips before display:
   Max 1 consult round per turn by default (latency), configurable.
 - `scene_break` / `npc_enter` / `npc_exit` — scene lifecycle; orchestrator updates
   `scenes`, activates/dormants NPC sessions.
+- `advance_time` — declares how many in-game minutes the reply spans. The
+  engine keeps a hidden clock (`stories.clock_min`, starting Day 1 08:00), tells
+  the storyteller the current time each turn, advances by the directive (or a
+  ~5-minute default when absent), and stamps extracted memory facts with the
+  clock of their source turn.
 - Unknown/invalid directives are logged and ignored (fail-open to plain narration).
 
 **Session policy:** persistent session per story, but its message window is
@@ -143,10 +157,13 @@ Cheap/fast model. Runs asynchronously after every completed turn (via `jobs`).
 **Input:**
 1. System prompt: extraction instructions + the category/detail-level taxonomy +
    JSON schema.
-2. The finished turn: player input + final narration (+ NPC `innerState`s).
-3. Current memory snapshot *for entities mentioned*: object list
-   (id/name/aliases/type) + their existing facts (so it updates instead of
-   duplicating).
+2. A compact roster of **all** the story's objects (id/type/name/aliases/one-line
+   summary, salience-capped) — so an entity referred to by a NEW name ("the
+   woman" who is already recorded as Kate) resolves to its existing id instead
+   of spawning a duplicate object.
+3. The finished turn: player input + final narration (+ NPC `innerState`s).
+4. Current memory snapshot *for entities mentioned by name*: their existing
+   facts (so it updates instead of duplicating).
 
 **Output (JSON):**
 ```ts
@@ -174,9 +191,19 @@ const MemoryDelta = z.object({
 - write facts + knowledge links in one transaction,
 - clamp: max N new facts per turn (default 20) to bound growth.
 
-**"Expansion":** every M turns (default 10) a maintenance job re-reads an
-object's fact list and asks the scribe to consolidate near-duplicates
-(supersede) and improve `summary`. This keeps memory clean as it grows.
+**Cleanup (maintenance job):** every M turns (default 10), or on demand from
+the memory UI ("clean up"), a maintenance job runs three passes:
+1. *salience decay* for long-unmentioned objects (when salience is enabled),
+2. *entity unification* (`scribe-memory-unify.md`): the scribe scans the full
+   roster for the same entity recorded under different names. Merges it marks
+   `certain` are applied automatically (lossless merge — see 05); `likely` ones
+   go to the suggestion inbox for the player to confirm,
+3. *fact consolidation* (`scribe-memory-consolidate.md`): for the objects with
+   the most live facts (≥8, up to 4 objects per run) the scribe removes
+   duplicates, unifies fragments into single clear statements (supersede — old
+   versions kept as history, knowledge links carried over) and refreshes the
+   object `summary`.
+A failed cleanup pass is logged and skipped; maintenance never blocks play.
 
 ---
 
@@ -187,14 +214,22 @@ Cheap/fast model. Two triggers:
 **(a) Rolling scene summary** — after each turn (async): update the current
 scene's summary to cover through the latest turn.
 - Input: previous scene summary + the new turn's text.
-- Output: `{ sceneSummary: string }` (target ≤ 300 tokens), incremental — it
-  rewrites the summary, it does not append.
+- Output: `{ sceneSummary: string, fadedOut: string[] }` (target ≤ 500 tokens,
+  config), incremental — it rewrites the summary, it does not append, and it is
+  instructed to cover the scene's whole span in proportion (the newest turn
+  must not dominate). Anything dropped/compressed away is listed in `fadedOut`
+  and archived into memory (`archive_faded` job).
 
-**(b) Scene close / story digest** — on `scene_break`: finalize the closed
-scene's summary, then fold it into the story-level digest.
-- Input: current story digest + finalized scene summary.
-- Output: `{ storyDigest: string }` (target ≤ 800 tokens, config), structured as:
-  premise → major arcs/threads still open → recent events → current situation.
+**(b) Story digest fold** — on `scene_break` (fold the finalized scene summary)
+**and as a mid-scene checkpoint**: whenever the digest lags ≥8 turns behind
+play, the still-open scene's summary is folded in too, so a scene that never
+breaks cannot leave the digest empty and lose the story's beginning.
+- Input: current story digest + scene summary (+ a checkpoint marker telling
+  the scribe to merge-not-duplicate, since the scene will fold again later).
+- Output: `{ storyDigest: string, fadedOut: string[] }` (target ≤ 1200 tokens,
+  config), structured as: premise → story so far (whole timeline, in
+  proportion — the opening never drops entirely) → open threads → current
+  situation.
 
 **Guarantee:** the storyteller's prompt size is bounded:
 `digest + scene summary + K raw turns + retrieved memory`, independent of total
@@ -257,8 +292,4 @@ show" path; make it a setting later).
 | NPC agents | only woven dialogue | full persona, consults, innerState |
 | scribe_memory | ✖ (memory browser shows *results*) | full deltas + prompts |
 | scribe_story | ✖ | summaries + prompts |
-| Overseer | soft-violation notices (optional) | verdicts + prompts |
-
-
-"v1-3a17ac9d9dafe9d7294558726ba3daaa84b6b01eae51519205b595a832e6ed72"
-"skor" 
+| Overseer | soft-violation notices (optional) | verdicts + prompts | 

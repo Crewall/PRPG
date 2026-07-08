@@ -39,6 +39,7 @@ function rowToFact(r: Row): MemoryFact {
     supersedesId: (r.supersedes_id as string) ?? null,
     superseded: !!(r.superseded as number),
     confidence: r.confidence as number,
+    gameTimeMin: (r.game_time_min as number) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };
@@ -114,9 +115,9 @@ export function createMemoryStore(db: Db) {
       const now = Date.now();
       const fid = id();
       db.prepare(
-        `INSERT INTO memory_facts (id, object_id, category, subcategory, detail_level, tier, content, source_turn_id, supersedes_id, superseded, confidence, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-      ).run(fid, f.objectId, f.category, f.subcategory ?? null, f.detailLevel, f.tier ?? 'mid', f.content, f.sourceTurnId ?? null, f.supersedesId ?? null, f.confidence ?? 1, now, now);
+        `INSERT INTO memory_facts (id, object_id, category, subcategory, detail_level, tier, content, source_turn_id, supersedes_id, superseded, confidence, game_time_min, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      ).run(fid, f.objectId, f.category, f.subcategory ?? null, f.detailLevel, f.tier ?? 'mid', f.content, f.sourceTurnId ?? null, f.supersedesId ?? null, f.confidence ?? 1, f.gameTimeMin ?? null, now, now);
       db.prepare(`UPDATE memory_objects SET updated_at = ? WHERE id = ?`).run(now, f.objectId);
       return store.getFact(fid)!;
     },
@@ -228,6 +229,7 @@ export function createMemoryStore(db: Db) {
             detailLevel: f.detailLevel,
             tier: f.tier,
             confidence: f.confidence,
+            gameTimeMin: f.gameTimeMin,
             updatedAt: f.updatedAt,
           };
         })
@@ -257,7 +259,7 @@ export function createMemoryStore(db: Db) {
         name: obj.name,
         aliases: obj.aliases,
         summary: obj.summary,
-        facts: disclosed.map((f) => ({ id: f.id, category: f.category, subcategory: f.subcategory, content: f.content, detailLevel: f.detailLevel, tier: f.tier })),
+        facts: disclosed.map((f) => ({ id: f.id, category: f.category, subcategory: f.subcategory, content: f.content, detailLevel: f.detailLevel, tier: f.tier, gameTimeMin: f.gameTimeMin })),
       };
     },
 

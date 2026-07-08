@@ -6,6 +6,38 @@ import { ObjectType, DetailLevel, FactTier } from '../memory/model.ts';
 
 // MemoryDelta (doc 04). The scribe proposes changes; the orchestrator applies
 // them with trust-but-verify post-processing (tempIds, alias merge, clamps).
+// Cleanup pass replies (memory_maintenance job).
+export const UnifyReply = z.object({
+  merges: z
+    .array(
+      z.object({
+        keepId: z.string(),
+        mergeId: z.string(),
+        certainty: z.enum(['certain', 'likely']).default('likely'),
+        reason: z.string().default(''),
+      }),
+    )
+    .default([]),
+});
+export type UnifyReply = z.infer<typeof UnifyReply>;
+
+export const ConsolidateReply = z.object({
+  removeFactIds: z.array(z.string()).default([]),
+  rewrites: z
+    .array(
+      z.object({
+        factId: z.string(),
+        content: z.string(),
+        category: z.string().optional(),
+        subcategory: z.string().optional(),
+        tier: FactTier.optional(),
+      }),
+    )
+    .default([]),
+  summary: z.string().optional(),
+});
+export type ConsolidateReply = z.infer<typeof ConsolidateReply>;
+
 export const MemoryDelta = z.object({
   newObjects: z
     .array(
@@ -43,6 +75,7 @@ export interface ScribeMemoryInput {
   narration: string;
   presentNpcIds: string[];
   snapshot: string; // rendered current memory for mentioned entities
+  roster?: string; // compact list of ALL objects (id/type/name/aliases) — for entity resolution
 }
 
 export interface DossierInput {
@@ -69,6 +102,7 @@ export class ScribeMemory extends Agent {
         {
           role: 'user',
           content:
+            `## All known objects (check here BEFORE creating a new object — an entity may appear under a new name)\n${input.roster || '(none yet)'}\n\n` +
             `## Current memory (for entities that may be mentioned)\n${input.snapshot || '(empty — no objects yet)'}\n\n` +
             `## Present characters (ids you may list in knownBy)\n${input.presentNpcIds.length ? input.presentNpcIds.join(', ') : '(none tracked yet)'}\n\n` +
             `## The turn to extract from\nPlayer: ${input.playerInput || '(scene opens)'}\nNarration: ${input.narration}`,
@@ -100,5 +134,23 @@ export class ScribeMemory extends Agent {
       ],
     };
     return this.invokeJson(ctx, MemoryDelta, opts);
+  }
+
+  /** Cleanup pass 1: spot duplicate entities in the full object roster. */
+  async unify(input: { roster: string }, opts: { turnId?: string } = {}): Promise<UnifyReply> {
+    const ctx: BuiltContext = {
+      system: renderPrompt('scribe-memory-unify', {}),
+      messages: [{ role: 'user', content: `## Object roster\n${input.roster}` }],
+    };
+    return this.invokeJson(ctx, UnifyReply, opts);
+  }
+
+  /** Cleanup pass 2: dedupe/unify one object's facts and refresh its summary. */
+  async consolidate(input: { objectBlock: string }, opts: { turnId?: string } = {}): Promise<ConsolidateReply> {
+    const ctx: BuiltContext = {
+      system: renderPrompt('scribe-memory-consolidate', {}),
+      messages: [{ role: 'user', content: input.objectBlock }],
+    };
+    return this.invokeJson(ctx, ConsolidateReply, opts);
   }
 }

@@ -36,10 +36,19 @@ For each new fact, list who just perceived/learned it: the string `player` if th
 player now knows it, and the object-ids of any present characters who witnessed
 it. Leave empty for `hidden` facts. `visible` facts don't strictly need knowers.
 
-## Updating vs duplicating
-The current memory snapshot is provided. If an object already exists, reference it
-by its real id and add/adjust facts — do NOT create a duplicate object. If a new
-fact replaces an old one (e.g. a character changed clothes), set
+## Updating vs duplicating — resolve entities FIRST
+A roster of ALL known objects (ids, names, aliases) is provided, plus a detailed
+snapshot of the ones mentioned by name. Before creating any new object, check
+the roster: characters are often referred to by role, epithet or description
+("the woman", "the voice behind the door", "your companion") when they are
+already recorded under a proper name. If the text plausibly refers to a
+rostered object, use its real id — and when the text establishes a NEW name or
+alias for it, record that via `newObjects` with the SAME name (alias auto-merge)
+or a `mergeSuggestion`, never as a fresh object. Create a new object only when
+you are confident the entity is genuinely new. If unsure between two rostered
+objects, pick the likelier one and add a `mergeSuggestion` explaining the doubt.
+
+If a new fact replaces an old one (e.g. a character changed clothes), set
 `supersedesFactId` to the old fact's id.
 
 ## Output — a single JSON object matching exactly this shape

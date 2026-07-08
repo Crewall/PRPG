@@ -34,7 +34,8 @@ Emit it ONLY when needed; most turns need none. Write your narration first, then
   { "type": "consult_npc", "npcName": "Marta", "situation": "the player asks about the ledger" },
   { "type": "scene_break", "title": "The Cellar", "carryNpcs": ["Marta"] },
   { "type": "npc_enter", "name": "Guard Captain Held" },
-  { "type": "npc_exit",  "name": "Old Tom" }
+  { "type": "npc_exit",  "name": "Old Tom" },
+  { "type": "advance_time", "minutes": 90 }
 ] }
 ```
 
@@ -46,6 +47,9 @@ When to use each:
   may consult several at once. Minor background characters you voice yourself.
 - **scene_break** — when the location or situation changes decisively.
 - **npc_enter / npc_exit** — when a major character joins or leaves the scene.
+- **advance_time** — when this reply spans more than a few minutes of story
+  time (travel, rest, waiting, "later that evening"): declare how many in-game
+  minutes passed. Omit it for quick exchanges (~minutes pass automatically).
 
 {{adjudication}}
 

@@ -14,6 +14,9 @@ export const Directive = z.discriminatedUnion('type', [
   // Adjudication: an uncertain, consequential attempt whose outcome the
   // storyteller must NOT decide — the adjudicator weighs it, the engine rolls.
   z.object({ type: z.literal('resolve_action'), actor: z.string(), action: z.string(), factors: z.array(z.string()).optional() }),
+  // Hidden in-game clock: how many in-fiction minutes this reply spans.
+  // Without one the engine advances a few minutes per exchange.
+  z.object({ type: z.literal('advance_time'), minutes: z.number().min(0) }),
 ]);
 export type Directive = z.infer<typeof Directive>;
 

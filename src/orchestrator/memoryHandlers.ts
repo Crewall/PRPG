@@ -1,11 +1,13 @@
 import type { Job } from '../db/stores/jobStore.ts';
+import type { Row } from '../db/db.ts';
 import type { HandlerDeps } from './handlers.ts';
 import type { JobHandler } from './postTurn.ts';
 import { ScribeMemory } from '../agents/scribeMemory.ts';
 import type { MemoryDelta } from '../agents/scribeMemory.ts';
 import { renderObjectView } from '../memory/model.ts';
-import { findNearDuplicate } from '../memory/similarity.ts';
+import { findNearDuplicate, isNearDuplicate } from '../memory/similarity.ts';
 import { normalizeName } from '../db/stores/memoryStore.ts';
+import { logger } from '../util/logger.ts';
 
 const MAX_NEW_FACTS_PER_TURN = 20; // doc 05 budget
 const MAINTENANCE_EVERY = 10; // M turns (doc 04/05)
@@ -40,6 +42,26 @@ function buildSnapshot(deps: HandlerDeps, storyId: string, text: string): { snap
   return { snapshot: blocks.join('\n\n'), mentionedIds: mentioned.map((o) => o.id) };
 }
 
+const ROSTER_MAX_OBJECTS = 120;
+
+/**
+ * A compact roster of ALL the story's objects (id, type, name, aliases, one
+ * line of summary). The scribe needs this to recognize an entity referred to
+ * by a NEW name ("the woman" who is already recorded as Kate) — the mention
+ * snapshot alone only covers literal name matches, which is exactly how the
+ * same character used to end up as three different objects.
+ */
+function buildRoster(deps: HandlerDeps, storyId: string): string {
+  const objects = deps.memory.listObjects(storyId).slice(0, ROSTER_MAX_OBJECTS); // salience-ordered
+  return objects
+    .map((o) => {
+      const aka = o.aliases.length ? ` (aka ${o.aliases.join(', ')})` : '';
+      const summary = o.summary ? ` — ${o.summary.split('\n')[0].slice(0, 120)}` : '';
+      return `- id=${o.id} [${o.type}] ${o.name}${aka}${summary}`;
+    })
+    .join('\n');
+}
+
 /**
  * scribe_memory handler (Layer 3b). Extract a MemoryDelta and apply it with
  * post-processing the LLM is not trusted to do: tempId resolution, alias
@@ -59,7 +81,7 @@ export function createScribeMemoryHandler(deps: HandlerDeps): JobHandler {
 
     const agent = scribeMemoryAgent(deps, storyId);
     const delta: MemoryDelta = await agent.extract(
-      { playerInput: turn.playerInput, narration: turn.narration, presentNpcIds, snapshot },
+      { playerInput: turn.playerInput, narration: turn.narration, presentNpcIds, snapshot, roster: buildRoster(deps, storyId) },
       { turnId },
     );
     if (!deps.stories.getTurn(turnId)) return; // turn rewound while extracting — discard
@@ -77,6 +99,12 @@ export function createScribeMemoryHandler(deps: HandlerDeps): JobHandler {
 
 /** Apply a MemoryDelta with trust-but-verify post-processing. Returns affected object ids. */
 export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: string | null, delta: MemoryDelta): string[] {
+  // In-game clock stamp for this batch of facts: the clock as of the source
+  // turn when known, else the story's current clock (archival passes).
+  // (deps.stories is optional-chained: unit tests build partial deps.)
+  const turn = turnId ? deps.stories?.getTurn(turnId) : undefined;
+  const gameTimeMin = (turn?.meta.clockMin as number | undefined) ?? deps.stories?.getStory(storyId)?.clockMin;
+
   return deps.db.transaction(() => {
     const tempMap = new Map<string, string>(); // tempId -> real object id
     const affected = new Set<string>();
@@ -131,6 +159,7 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
         content: nf.content,
         confidence: nf.confidence,
         sourceTurnId: turnId ?? undefined,
+        gameTimeMin,
       };
       const supersedeId = nf.supersedesFactId && deps.memory.getFact(nf.supersedesFactId) ? nf.supersedesFactId : undefined;
       const fact = supersedeId ? deps.memory.supersedeFact(supersedeId, factInput) : deps.memory.addFact(factInput);
@@ -198,6 +227,7 @@ export function createArchiveFadedHandler(deps: HandlerDeps): JobHandler {
           `Record anything durable as objects and facts so it is not lost. These already happened; the player witnessed them.)\n${text}`,
         presentNpcIds: [],
         snapshot,
+        roster: buildRoster(deps, storyId),
       },
       {},
     );
@@ -247,27 +277,216 @@ export function createNpcDossierHandler(deps: HandlerDeps): JobHandler {
 }
 
 /**
- * Maintenance job (Layer 3b): salience decay for long-unmentioned objects and a
- * summary refresh. Runs on the M-turn cadence. (Dedup/consolidation via the
- * scribe is a later enhancement; decay + summary keep memory tidy for now.)
+ * Merge one memory object into another, losslessly (feature: entity merge).
+ * Unlike the old suggestion-accept path (which copied fact TEXT and dropped
+ * everything else), this re-points every reference to the merged object:
+ *  - facts move to the kept object (near-duplicates superseded, their knowledge
+ *    links copied to the surviving fact),
+ *  - knowledge links where the merged object is the KNOWER follow it,
+ *  - scene rosters, NPC agent sessions and the player-character setting follow,
+ *  - name + aliases fold into the kept object's aliases.
+ * Returns false when either object is missing or they don't belong together.
+ */
+export function mergeMemoryObjects(deps: HandlerDeps, keepId: string, mergeId: string): boolean {
+  const keep = deps.memory.getObject(keepId);
+  const merge = deps.memory.getObject(mergeId);
+  if (!keep || !merge || keep.id === merge.id || keep.storyId !== merge.storyId) return false;
+  const storyId = keep.storyId;
+  const now = Date.now();
+
+  deps.db.transaction(() => {
+    // 1. Facts move over (the FTS sync trigger fires on UPDATE).
+    deps.db.prepare(`UPDATE memory_facts SET object_id = ?, updated_at = ? WHERE object_id = ?`).run(keepId, now, mergeId);
+
+    // 2. Knowledge links where the merged object was the knower.
+    deps.db.prepare(`UPDATE knowledge_links SET knower_npc_object_id = ?, updated_at = ? WHERE knower_npc_object_id = ?`).run(keepId, now, mergeId);
+    // De-dupe (fact, knower) pairs that now collide.
+    deps.db
+      .prepare(
+        `DELETE FROM knowledge_links WHERE id NOT IN (
+           SELECT MIN(id) FROM knowledge_links GROUP BY fact_id, knower_type, IFNULL(knower_npc_object_id, '')
+         )`,
+      )
+      .run();
+
+    // 3. Near-duplicate facts (both objects said the same thing): supersede the
+    // newer copy, but first copy its knowledge links to the survivor.
+    const live = deps.memory.listFacts(keepId);
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length; j++) {
+        const a = live[i];
+        const b = live[j];
+        if (a.superseded || b.superseded) continue;
+        if (a.category !== b.category || !isNearDuplicate(a.content, b.content)) continue;
+        const [survivor, dupe] = a.createdAt <= b.createdAt ? [a, b] : [b, a];
+        const links = deps.memory.linksForFacts([dupe.id]).get(dupe.id) ?? [];
+        for (const l of links) {
+          deps.memory.linkKnowledge(
+            survivor.id,
+            { type: l.knowerType, npcObjectId: l.knowerNpcObjectId ?? undefined },
+            { learnedTurnId: l.learnedTurnId ?? undefined, distortion: l.distortion ?? undefined },
+          );
+        }
+        deps.memory.updateFact(dupe.id, { superseded: true });
+        dupe.superseded = true;
+      }
+    }
+
+    // 4. Scene rosters.
+    for (const r of deps.db.prepare(`SELECT id, active_npc_ids FROM scenes WHERE story_id = ?`).all<Row>(storyId)) {
+      const ids = JSON.parse((r.active_npc_ids as string) || '[]') as string[];
+      if (!ids.includes(mergeId)) continue;
+      const next = Array.from(new Set(ids.map((x) => (x === mergeId ? keepId : x))));
+      deps.db.prepare(`UPDATE scenes SET active_npc_ids = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(next), now, r.id);
+    }
+
+    // 5. NPC agent sessions: follow the merge unless the kept object already
+    // has one (then the merged object's session is dropped — thread_log keeps
+    // its history).
+    const keepHasSession = !!deps.db.prepare(`SELECT id FROM agent_sessions WHERE story_id = ? AND role = 'npc' AND npc_object_id = ?`).get(storyId, keepId);
+    if (keepHasSession) deps.db.prepare(`DELETE FROM agent_sessions WHERE story_id = ? AND role = 'npc' AND npc_object_id = ?`).run(storyId, mergeId);
+    else deps.db.prepare(`UPDATE agent_sessions SET npc_object_id = ?, updated_at = ? WHERE story_id = ? AND npc_object_id = ?`).run(keepId, now, storyId, mergeId);
+
+    // 6. The player character setting.
+    const story = deps.stories.getStory(storyId);
+    if (story?.settings.playerObjectId === mergeId) {
+      deps.stories.updateStory(storyId, { settings: { playerObjectId: keepId } });
+    }
+
+    // 7. Stale pending suggestions that reference the merged object.
+    deps.db.prepare(`DELETE FROM memory_suggestions WHERE story_id = ? AND status = 'pending' AND (keep_id = ? OR merge_id = ?)`).run(storyId, mergeId, mergeId);
+
+    // 8. Fold identity into the kept object, then delete the merged one.
+    const aliases = Array.from(new Set([...keep.aliases, merge.name, ...merge.aliases])).filter((a) => normalizeName(a) !== normalizeName(keep.name));
+    deps.memory.updateObject(keepId, {
+      aliases,
+      salience: Math.max(keep.salience, merge.salience),
+      summary: keep.summary || merge.summary,
+    });
+    deps.memory.deleteObject(mergeId);
+  });
+
+  logger.info('memory objects merged', { storyId, keepId, mergeId, mergedName: merge.name });
+  deps.events.emit({ t: 'memory.updated', storyId, objectIds: [keepId] });
+  return true;
+}
+
+// Cleanup pass limits: keep a maintenance run bounded on a phone.
+const UNIFY_MAX_MERGES = 8;
+const CONSOLIDATE_MIN_FACTS = 8; // objects with fewer live facts are left alone
+const CONSOLIDATE_MAX_OBJECTS = 4; // per maintenance run
+const CONSOLIDATE_MAX_OPS = 15; // removals and rewrites, each
+
+/** One object's live facts with ids, rendered for the consolidation pass. */
+function renderForConsolidation(deps: HandlerDeps, objectId: string): string | undefined {
+  const obj = deps.memory.getObject(objectId);
+  if (!obj) return undefined;
+  const facts = deps.memory.listFacts(objectId);
+  const lines = [
+    `## ${obj.name}${obj.aliases.length ? ` (aka ${obj.aliases.join(', ')})` : ''} — ${obj.type}`,
+    `Summary: ${obj.summary || '(none)'}`,
+    '',
+    '## Live facts',
+    ...facts.map((f) => `- (${f.id}) [${f.category}${f.subcategory ? '/' + f.subcategory : ''} · ${f.tier} · ${f.detailLevel}] ${f.content}`),
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Maintenance job (Layer 3b), every M turns or on demand from the UI:
+ *  1. salience decay for long-unmentioned objects (when salience is enabled),
+ *  2. entity unification — the scribe scans the roster for the same entity
+ *     recorded under different names; certain merges apply automatically,
+ *     doubtful ones land in the suggestion inbox,
+ *  3. fact consolidation — for the fattest objects, the scribe deduplicates
+ *     and unifies facts (superseded, never hard-deleted) and refreshes the
+ *     object summary.
  */
 export function createMemoryMaintenanceHandler(deps: HandlerDeps): JobHandler {
   return async (job: Job) => {
     const storyId = job.storyId!;
-    if (!(deps.stories.getStory(storyId)?.settings.salience.enabled ?? true)) return; // salience off — no decay
-    const objects = deps.memory.listObjects(storyId);
-    const affected: string[] = [];
-    for (const obj of objects) {
-      // Decay salience of objects not touched recently (×0.95, floor 0.1).
-      const stale = Date.now() - obj.updatedAt > 60_000; // "unmentioned" proxy within a session
-      if (stale) {
-        const decayed = Math.max(0.1, obj.salience * 0.95);
-        if (decayed !== obj.salience) {
-          deps.memory.updateObject(obj.id, { salience: decayed });
-          affected.push(obj.id);
+    const story = deps.stories.getStory(storyId);
+    if (!story) return;
+    const affected = new Set<string>();
+
+    // --- 1. Salience decay (only when the salience system is on). ---
+    if (story.settings.salience.enabled) {
+      for (const obj of deps.memory.listObjects(storyId)) {
+        // Decay salience of objects not touched recently (×0.95, floor 0.1).
+        const stale = Date.now() - obj.updatedAt > 60_000; // "unmentioned" proxy within a session
+        if (stale) {
+          const decayed = Math.max(0.1, obj.salience * 0.95);
+          if (decayed !== obj.salience) {
+            deps.memory.updateObject(obj.id, { salience: decayed });
+            affected.add(obj.id);
+          }
         }
       }
     }
-    if (affected.length) deps.events.emit({ t: 'memory.updated', storyId, objectIds: affected });
+
+    const agent = scribeMemoryAgent(deps, storyId);
+
+    // --- 2. Entity unification over the roster. ---
+    if (deps.memory.listObjects(storyId).length >= 2) {
+      try {
+        const reply = await agent.unify({ roster: buildRoster(deps, storyId) });
+        for (const m of reply.merges.slice(0, UNIFY_MAX_MERGES)) {
+          if (m.certainty === 'certain') {
+            if (mergeMemoryObjects(deps, m.keepId, m.mergeId)) affected.add(m.keepId);
+          } else if (deps.memory.getObject(m.keepId) && deps.memory.getObject(m.mergeId) && m.keepId !== m.mergeId) {
+            deps.suggestions.add({ storyId, type: 'merge', keepId: m.keepId, mergeId: m.mergeId, reason: m.reason || 'possible duplicate (maintenance)' });
+          }
+        }
+      } catch (err) {
+        logger.warn('maintenance: unify pass failed — skipping', { storyId, err: (err as Error).message });
+      }
+    }
+
+    // --- 3. Fact consolidation for the fattest objects. ---
+    const fat = deps.memory
+      .listObjects(storyId)
+      .map((o) => ({ obj: o, live: deps.memory.listFacts(o.id).length }))
+      .filter((x) => x.live >= CONSOLIDATE_MIN_FACTS)
+      .sort((a, b) => b.obj.updatedAt - a.obj.updatedAt)
+      .slice(0, CONSOLIDATE_MAX_OBJECTS);
+    for (const { obj } of fat) {
+      const block = renderForConsolidation(deps, obj.id);
+      if (!block) continue;
+      try {
+        const reply = await agent.consolidate({ objectBlock: block });
+        if (!deps.memory.getObject(obj.id)) continue; // merged/deleted meanwhile
+        const liveIds = new Set(deps.memory.listFacts(obj.id).map((f) => f.id));
+        deps.db.transaction(() => {
+          for (const r of reply.rewrites.slice(0, CONSOLIDATE_MAX_OPS)) {
+            const old = deps.memory.getFact(r.factId);
+            if (!old || !liveIds.has(old.id) || !r.content.trim()) continue;
+            const fresh = deps.memory.supersedeFact(old.id, {
+              objectId: old.objectId,
+              category: r.category ?? old.category,
+              subcategory: r.subcategory ?? old.subcategory ?? undefined,
+              detailLevel: old.detailLevel,
+              tier: r.tier ?? old.tier,
+              content: r.content.trim(),
+              confidence: old.confidence,
+              sourceTurnId: old.sourceTurnId ?? undefined,
+              gameTimeMin: old.gameTimeMin ?? undefined,
+            });
+            // Who-knows-this carries over to the rewritten fact.
+            for (const l of deps.memory.linksForFacts([old.id]).get(old.id) ?? []) {
+              deps.memory.linkKnowledge(fresh.id, { type: l.knowerType, npcObjectId: l.knowerNpcObjectId ?? undefined }, { learnedTurnId: l.learnedTurnId ?? undefined, distortion: l.distortion ?? undefined });
+            }
+          }
+          for (const fid of reply.removeFactIds.slice(0, CONSOLIDATE_MAX_OPS)) {
+            if (liveIds.has(fid)) deps.memory.updateFact(fid, { superseded: true });
+          }
+          if (reply.summary?.trim()) deps.memory.updateObject(obj.id, { summary: reply.summary.trim() });
+        });
+        affected.add(obj.id);
+      } catch (err) {
+        logger.warn('maintenance: consolidation failed — skipping object', { storyId, objectId: obj.id, err: (err as Error).message });
+      }
+    }
+
+    if (affected.size) deps.events.emit({ t: 'memory.updated', storyId, objectIds: Array.from(affected) });
   };
 }

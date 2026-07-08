@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { formatGameClockShort } from '../util/gameClock.ts';
 
 // Memory model (docs 03 & 05): objects carry atomic, categorized facts; each fact
 // has a detail level that governs disclosure. Zod schemas double as API/LLM
@@ -65,6 +66,8 @@ export interface MemoryFact {
   supersedesId: string | null;
   superseded: boolean;
   confidence: number;
+  /** In-game clock (minutes since Day 1, 00:00) when this was recorded; null on old rows. */
+  gameTimeMin: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -90,7 +93,7 @@ export interface ObjectView {
   name: string;
   aliases: string[];
   summary: string;
-  facts: { id: string; category: string; subcategory?: string; content: string; detailLevel: DetailLevel; tier: FactTier }[];
+  facts: { id: string; category: string; subcategory?: string; content: string; detailLevel: DetailLevel; tier: FactTier; gameTimeMin?: number | null }[];
 }
 
 export const NewMemoryObject = z.object({
@@ -114,6 +117,7 @@ export const NewFact = z.object({
   sourceTurnId: z.string().optional(),
   supersedesId: z.string().optional(),
   confidence: z.number().min(0).max(1).default(1),
+  gameTimeMin: z.number().int().min(0).optional(), // in-game clock stamp
 });
 export type NewFact = z.infer<typeof NewFact>;
 
@@ -122,7 +126,8 @@ export function renderObjectView(view: ObjectView): string {
   const lines = [`### ${view.name}${view.aliases.length ? ` (aka ${view.aliases.join(', ')})` : ''} — ${view.type}`];
   if (view.summary) lines.push(view.summary);
   for (const f of view.facts) {
-    lines.push(`- [${f.category}${f.subcategory ? '/' + f.subcategory : ''} · ${f.tier}] ${f.content}`);
+    const when = f.gameTimeMin != null ? ` · ${formatGameClockShort(f.gameTimeMin)}` : '';
+    lines.push(`- [${f.category}${f.subcategory ? '/' + f.subcategory : ''} · ${f.tier}${when}] ${f.content}`);
   }
   return lines.join('\n');
 }

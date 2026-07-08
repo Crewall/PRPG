@@ -30,8 +30,8 @@ export const StorySettings = z.object({
   budgets: z
     .object({
       recentTurns: z.number().int().positive().default(6), // K
-      digestTokens: z.number().int().positive().default(800),
-      sceneSummaryTokens: z.number().int().positive().default(300),
+      digestTokens: z.number().int().positive().default(1200),
+      sceneSummaryTokens: z.number().int().positive().default(500),
       retrievedMemoryTokens: z.number().int().positive().default(1500),
     })
     .default({}),
@@ -85,6 +85,8 @@ export interface Story {
   title: string;
   settings: StorySettings;
   currentSceneId: string | null;
+  /** Hidden in-game clock: minutes since Day 1, 00:00 (stories start at Day 1, 08:00). */
+  clockMin: number;
   status: StoryStatus;
   createdAt: number;
   updatedAt: number;

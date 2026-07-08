@@ -1,6 +1,7 @@
 import type { Db, Row } from '../db.ts';
 import { id } from '../../util/id.ts';
 import { StorySettings, defaultStorySettings } from '../../domain.ts';
+import { CLOCK_START_MIN, MAX_ADVANCE_MINUTES } from '../../util/gameClock.ts';
 import type { Scene, Story, Turn, TurnStatus } from '../../domain.ts';
 
 export interface NewStory {
@@ -27,6 +28,7 @@ function rowToStory(r: Row): Story {
     title: r.title as string,
     settings: StorySettings.parse(JSON.parse(r.settings_json as string)),
     currentSceneId: (r.current_scene_id as string) ?? null,
+    clockMin: (r.clock_min as number) ?? CLOCK_START_MIN,
     status: r.status as Story['status'],
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
@@ -114,6 +116,15 @@ export function createStoryStore(db: Db) {
       } else {
         db.prepare(`UPDATE stories SET status = 'archived', updated_at = ? WHERE id = ?`).run(Date.now(), storyId);
       }
+    },
+
+    /** Advance the hidden in-game clock; returns the new clock (minutes). */
+    advanceClock(storyId: string, minutes: number): number {
+      const story = this.getStory(storyId);
+      if (!story) return 0;
+      const next = story.clockMin + Math.max(0, Math.min(MAX_ADVANCE_MINUTES, Math.floor(minutes)));
+      db.prepare(`UPDATE stories SET clock_min = ?, updated_at = ? WHERE id = ?`).run(next, Date.now(), storyId);
+      return next;
     },
 
     nextTurnIndex(storyId: string): number {
