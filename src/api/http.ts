@@ -43,23 +43,46 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     roles: config.roles,
   }));
 
-  // Premise randomizer: the ENGINE rolls 5 of 100 seed phrases (true random),
-  // a storyteller-caliber model weaves them into a premise + genre + title.
+  // Premise randomizer: the ENGINE rolls N (1–12) seed elements (true random),
+  // a storyteller-caliber model weaves them into a premise + genre + title. A
+  // filled-in title and/or genre is kept fixed and fed to the model as a
+  // constraint the premise must respect.
   const RandomStory = z.object({ title: z.string(), genre: z.string(), premise: z.string() });
+  const RandomBody = z.object({
+    count: z.number().int().min(1).max(12).optional(),
+    title: z.string().optional(),
+    genre: z.string().optional(),
+  });
   server.post('/api/stories/randomize', async (req, reply) => {
     try {
+      const body = RandomBody.parse(req.body ?? {});
+      const n = body.count ?? 5;
       const override = app.settingsService.seedsOverride();
-      const seeds = rollSeeds(5, override ? { seeds: parseSeeds(override) } : {});
+      const seeds = rollSeeds(n, override ? { seeds: parseSeeds(override) } : {});
+      const fixedTitle = body.title?.trim();
+      const fixedGenre = body.genre?.trim();
+      const fixed = [
+        fixedTitle ? `Fixed title (keep exactly): ${fixedTitle}` : '',
+        fixedGenre ? `Fixed genre (keep exactly): ${fixedGenre}` : '',
+      ].filter(Boolean);
       const bound = registry.getForRole('storyteller');
       const result = await callJson(
         bound,
         {
-          system: renderPrompt('story-randomizer', {}),
-          messages: [{ role: 'user', content: `The five rolled seeds:\n${seeds.map((s) => `- ${s}`).join('\n')}` }],
+          system: renderPrompt('story-randomizer', { count: String(n) }),
+          messages: [
+            {
+              role: 'user',
+              content:
+                `The ${n} rolled seed element${n === 1 ? '' : 's'}:\n${seeds.map((s) => `- ${s}`).join('\n')}` +
+                (fixed.length ? `\n\n${fixed.join('\n')}` : ''),
+            },
+          ],
         },
         RandomStory,
       );
-      return { seeds, ...result };
+      // Honor the fixed fields verbatim regardless of what the model echoed.
+      return { seeds, title: fixedTitle || result.title, genre: fixedGenre || result.genre, premise: result.premise };
     } catch (err) {
       reply.code(500);
       return { error: (err as Error).message };
