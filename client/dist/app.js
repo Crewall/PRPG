@@ -220,6 +220,26 @@ async function renderPlay(storyId) {
       cb.addEventListener('change', () => onChange(cb.checked));
       return h('label', { class: 'opt-row', title: hint }, cb, h('span', {}, label));
     };
+
+    // Context budgets: how much summary/memory the storyteller gets each turn.
+    // Bigger = better long-story continuity, more tokens per request.
+    const budgets = { recentTurns: 6, digestTokens: 1200, sceneSummaryTokens: 500, retrievedMemoryTokens: 1500, ...(s.budgets || {}) };
+    const budgetIn = (key, label, hint, min, max) => {
+      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(budgets[key]), style: 'width:6em' });
+      inp.addEventListener('change', async () => {
+        const v = Math.max(min, Math.min(max, Number(inp.value) || budgets[key]));
+        inp.value = String(v); budgets[key] = v;
+        await patchSettings({ budgets: { ...budgets } });
+      });
+      return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
+    };
+    const budgetBlock = h('details', {},
+      h('summary', { class: 'sub' }, 'Context budgets (long-story continuity)'),
+      budgetIn('digestTokens', 'story digest tokens', 'Size of the whole-story digest the storyteller always sees. Raise if long stories lose their beginning.', 200, 4000),
+      budgetIn('sceneSummaryTokens', 'scene summary tokens', 'Size of the rolling current-scene summary.', 100, 2000),
+      budgetIn('retrievedMemoryTokens', 'retrieved memory tokens', 'Budget for memory facts retrieved for the turn.', 200, 6000),
+      budgetIn('recentTurns', 'recent raw turns', 'How many of the latest exchanges are passed verbatim (chat-history mode).', 1, 20));
+
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
@@ -231,6 +251,7 @@ async function renderPlay(storyId) {
           !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
         toggle('Salience system', 'Importance weighting & decay of memory objects.',
           s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
+        budgetBlock,
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -476,8 +497,15 @@ async function renderPlay(storyId) {
       story.settings = { ...(story.settings || {}), salience: { enabled: salienceOn } };
       salBtn.textContent = salienceOn ? 'on' : 'off';
     });
+    // Manual cleanup: unify duplicate entities + consolidate facts, right now.
+    const cleanBtn = h('button', { class: 'link', title: 'Run the memory cleanup now: unify entities recorded under different names, deduplicate & merge facts, refresh summaries. Runs automatically every 10 turns.' }, 'clean up');
+    cleanBtn.addEventListener('click', async () => {
+      cleanBtn.textContent = 'cleaning…'; cleanBtn.disabled = true;
+      try { await api.post(`/api/stories/${storyId}/memory/maintenance`); } catch (e) { alert('cleanup failed: ' + e.message); }
+      // The memory.updated WS event re-renders the tab when the job finishes.
+    });
     body.append(h('div', { class: 'row item-tools' },
-      h('span', { class: 'sub', title: 'Importance weighting & decay of memory objects. Off = salience frozen and ignored in ranking.' }, 'Salience system:'), salBtn));
+      h('span', { class: 'sub', title: 'Importance weighting & decay of memory objects. Off = salience frozen and ignored in ranking.' }, 'Salience system:'), salBtn, cleanBtn));
 
     // Suggestion inbox.
     let suggestions = [];
@@ -497,13 +525,13 @@ async function renderPlay(storyId) {
     for (const row of objects) (byType[row.object.type] ||= []).push(row);
     for (const [type, rows] of Object.entries(byType)) {
       body.append(h('div', { class: 'mem-type' }, type));
-      for (const row of rows) body.append(memObjectCard(row, scope, () => renderMemory(body)));
+      for (const row of rows) body.append(memObjectCard(row, scope, () => renderMemory(body), objects));
     }
     // Quick add.
     body.append(h('details', { class: 'quickadd' }, h('summary', {}, '+ Add object manually'), quickAddObject(() => renderMemory(body))));
   }
 
-  function memObjectCard(row, scope, refresh) {
+  function memObjectCard(row, scope, refresh, allObjects) {
     const { object, view } = row;
     const facts = (view?.facts) || [];
     const factList = h('div', { class: 'facts hidden' });
@@ -543,9 +571,34 @@ async function renderPlay(storyId) {
       } }, 'Save'));
     factList.append(objTools, objForm);
 
+    // Merge duplicate entities: fold another object (same character under a
+    // different name) into this one — facts, knowledge and aliases follow.
+    const others = (allObjects || []).map((r) => r.object).filter((o) => o.id !== object.id);
+    if (others.length) {
+      const mergeSel = h('select', {},
+        h('option', { value: '' }, 'merge another object into this…'),
+        ...others.map((o) => h('option', { value: o.id }, `${o.name} (${o.type})`)));
+      mergeSel.addEventListener('change', async () => {
+        const mergeId = mergeSel.value;
+        if (!mergeId) return;
+        const victim = others.find((o) => o.id === mergeId);
+        if (!confirm(`Merge "${victim?.name}" into "${object.name}"? Its facts and aliases move here; the duplicate is deleted.`)) { mergeSel.value = ''; return; }
+        try { await api.post(`/api/memory/objects/${object.id}/merge`, { mergeId }); } catch (e) { alert('merge failed: ' + e.message); }
+        refresh(); refreshSceneHeader();
+      });
+      objForm.append(mergeSel);
+    }
+
     for (const f of facts) factList.append(factRow(f, refresh));
     factList.append(h('details', { class: 'quickadd' }, h('summary', {}, '+ fact'), quickAddFact(object.id, refresh)));
     return card;
+  }
+
+  // In-game clock stamp on a fact ("d2 14:30"), when the engine recorded one.
+  function gameTimeTag(min) {
+    if (min == null) return null;
+    const day = Math.floor(min / 1440) + 1, hh = Math.floor((min % 1440) / 60), mm = min % 60;
+    return h('span', { class: 'sub', title: 'In-game time when this was recorded' }, `d${day} ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
   }
 
   // Feature 5: a fact row with inline edit (content/category/level/tier) and delete.
@@ -553,7 +606,9 @@ async function renderPlay(storyId) {
     const row = h('div', { class: 'fact' },
       h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
       h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
-      h('span', { class: 'fcat' }, f.category), h('span', {}, f.content),
+      h('span', { class: 'fcat' }, f.category),
+      ...(gameTimeTag(f.gameTimeMin) ? [gameTimeTag(f.gameTimeMin)] : []),
+      h('span', {}, f.content),
       h('button', { class: 'link', onclick: () => startEdit() }, '✎'),
       h('button', { class: 'link danger', onclick: async () => {
         if (!confirm('Delete this fact?')) return;
@@ -595,6 +650,15 @@ async function renderPlay(storyId) {
 
   async function renderSummaries(body) {
     body.replaceChildren();
+    // The hidden in-game clock (debug view only — the story never states it).
+    try {
+      const s = await api.get(`/api/stories/${storyId}`);
+      if (s && s.clockMin != null) {
+        const day = Math.floor(s.clockMin / 1440) + 1, hh = Math.floor((s.clockMin % 1440) / 60), mm = s.clockMin % 60;
+        body.append(h('div', { class: 'row item-tools' }, h('span', { class: 'sub' },
+          `In-game clock: Day ${day}, ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`)));
+      }
+    } catch {}
     let sums = [];
     try { sums = await api.get(`/api/stories/${storyId}/summaries`); } catch {}
     if (!sums.length) { body.append(h('div', { class: 'empty' }, 'No summaries yet.')); return; }

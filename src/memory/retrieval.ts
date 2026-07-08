@@ -4,6 +4,7 @@ import { discloseFact } from './knowledge.ts';
 import { renderObjectView, tierWithin } from './model.ts';
 import type { FactTier, KnowledgeScope, ObjectView } from './model.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { formatGameClockShort } from '../util/gameClock.ts';
 
 export interface RankedFact {
   factId: string;
@@ -12,6 +13,7 @@ export interface RankedFact {
   category: string;
   content: string;
   tier: FactTier;
+  gameTimeMin: number | null;
   score: number;
 }
 
@@ -87,7 +89,7 @@ export function searchFacts(memory: MemoryStore, storyId: string, scope: Knowled
     const recency = 1 / (1 + ageDays);
     const score = weights.bm25 * bm25Norm + weights.salience * obj.salience + weights.recency * recency + TIER_BONUS[fact.tier];
 
-    ranked.push({ factId: fact.id, objectId: obj.id, objectName: obj.name, category: fact.category, content: disc.distortion ?? fact.content, tier: fact.tier, score });
+    ranked.push({ factId: fact.id, objectId: obj.id, objectName: obj.name, category: fact.category, content: disc.distortion ?? fact.content, tier: fact.tier, gameTimeMin: fact.gameTimeMin, score });
   }
 
   ranked.sort((a, b) => b.score - a.score);
@@ -111,7 +113,12 @@ export function renderRetrieval(result: RetrievalResult): string {
   const parts: string[] = [];
   for (const v of result.entities) parts.push(renderObjectView(v));
   if (result.facts.length) {
-    parts.push(['Other relevant facts:', ...result.facts.map((f) => `- ${f.objectName}: ${f.content}`)].join('\n'));
+    parts.push(
+      [
+        'Other relevant facts:',
+        ...result.facts.map((f) => `- ${f.objectName}: ${f.content}${f.gameTimeMin != null ? ` (${formatGameClockShort(f.gameTimeMin)})` : ''}`),
+      ].join('\n'),
+    );
   }
   return parts.join('\n\n');
 }

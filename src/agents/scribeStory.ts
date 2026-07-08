@@ -38,18 +38,25 @@ export class ScribeStory extends Agent {
     return { sceneSummary: reply.sceneSummary.trim(), fadedOut: reply.fadedOut.map((s) => s.trim()).filter(Boolean) };
   }
 
-  /** Fold a finalized scene summary into the story-level digest. */
+  /**
+   * Fold a scene summary into the story-level digest — on scene close, or as a
+   * mid-scene checkpoint (the same scene will fold again later; the prompt
+   * tells the scribe to merge, not duplicate).
+   */
   async foldDigest(
-    input: { previousDigest: string; closedSceneSummary: string; maxTokens: number },
+    input: { previousDigest: string; closedSceneSummary: string; checkpoint?: boolean; maxTokens: number },
     opts: { turnId?: string } = {},
   ): Promise<{ storyDigest: string; fadedOut: string[] }> {
     const system = renderPrompt('scribe-story-digest', { maxTokens: String(input.maxTokens) });
+    const label = input.checkpoint
+      ? 'Current summary of the scene STILL IN PROGRESS (checkpoint fold — this scene will fold again as it continues; it may extend material you already folded earlier, so merge and update rather than duplicate):'
+      : 'Finalized summary of the scene that just closed:';
     const ctx: BuiltContext = {
       system,
       messages: [
         {
           role: 'user',
-          content: `Current story digest:\n${input.previousDigest || '(empty — this is the first scene)'}\n\nFinalized summary of the scene that just closed:\n${input.closedSceneSummary}`,
+          content: `Current story digest:\n${input.previousDigest || '(empty — this is the first scene)'}\n\n${label}\n${input.closedSceneSummary}`,
         },
       ],
     };

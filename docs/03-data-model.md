@@ -26,6 +26,7 @@ Jobs  (persistent queue for scribe work)
 | title | TEXT | |
 | settings_json | TEXT | `StorySettings` (Zod-validated): role→modelProfile map, overseer enabled, context budgets, debug flags |
 | current_scene_id | TEXT | |
+| clock_min | INTEGER | hidden in-game clock, minutes since Day 1 00:00 (stories start at 480 = Day 1, 08:00); advanced by the storyteller's `advance_time` directive or a small per-turn default |
 | status | TEXT | `active` \| `archived` |
 
 ### `scenes`
@@ -108,6 +109,7 @@ detail level** — the unit of scoped disclosure.
 | supersedes_id | TEXT | old fact this replaces (soft history; superseded facts kept, flagged) |
 | superseded | INTEGER | 0/1 |
 | confidence | REAL | scribe's certainty, 0–1 |
+| game_time_min | INTEGER | in-game clock stamp (minutes) when the fact was recorded; NULL on pre-clock rows. Rendered as `d2 14:30` in agent prompts and the memory UI |
 
 ### `memory_fts` (virtual, FTS5)
 Content-indexed over `memory_facts.content + memory_objects.name + aliases`,

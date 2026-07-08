@@ -20,6 +20,7 @@ import type { ContextPlan } from '../agents/contextPlanner.ts';
 import { NpcAgent } from '../agents/npcAgent.ts';
 import type { NpcReply } from '../agents/npcAgent.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { DEFAULT_TURN_MINUTES } from '../util/gameClock.ts';
 import { logger } from '../util/logger.ts';
 import { parseDirectives } from './directives.ts';
 import type { Directive } from './directives.ts';
@@ -181,6 +182,13 @@ export class TurnPipeline {
       let consultCount = 0;
       let weaveCtx = ctx;
 
+      // Hidden clock: minutes this turn spans, per the storyteller's
+      // advance_time directives. Live continuations ADD narration (and time);
+      // buffered weaves REWRITE the draft (so their total replaces it).
+      const sumAdvance = (ds: Directive[]) =>
+        ds.filter((d): d is Extract<Directive, { type: 'advance_time' }> => d.type === 'advance_time').reduce((n, d) => n + d.minutes, 0);
+      let clockAdvance = sumAdvance(parsed.directives);
+
       // Steps 4–6 — the directive cascade. Consults and adjudications can beget
       // each other (an adjudicated outcome may demand an NPC's reaction, and a
       // consult may trigger an uncertain action), so a weave pass is allowed to
@@ -222,6 +230,7 @@ export class TurnPipeline {
           draft = await storyteller.narrate(weaveCtx, g.onDelta, { turnId: turn.id, signal: aborter.signal });
           parsed = parseDirectives(draft);
           narrationParts.push(parsed.narration);
+          clockAdvance += sumAdvance(parsed.directives);
         } else {
           // Buffered — nothing shown yet, so the weave replaces the draft wholesale.
           weaveCtx = contexts.withNpcReplies(weaveCtx, draft, weaveReplies, weaveResolutions);
@@ -231,6 +240,7 @@ export class TurnPipeline {
           parsed = parseDirectives(draft);
           narrationParts.length = 0;
           narrationParts.push(parsed.narration);
+          clockAdvance = sumAdvance(parsed.directives) || clockAdvance;
         }
         storytellerCalls++;
       }
@@ -246,6 +256,11 @@ export class TurnPipeline {
       const finalNarration = narrationParts.join('\n\n');
       const finalDirectives = parsed.directives;
 
+      // Hidden clock: advance by what the storyteller declared, else the
+      // default few minutes per exchange. The post-advance time is stamped
+      // into the turn meta so the memory scribe dates this turn's facts.
+      const newClock = stories.advanceClock(storyId, clockAdvance > 0 ? clockAdvance : DEFAULT_TURN_MINUTES);
+
       // Step 7 — emit.
       const promptTokens = estimateTokens(ctx.system) + ctx.messages.reduce((n, m) => n + estimateTokens(m.content), 0);
       stories.updateTurn(turn.id, {
@@ -258,6 +273,7 @@ export class TurnPipeline {
           model: bound.profile.model,
           storytellerCalls,
           consults: consultCount,
+          clockMin: newClock,
           // Hidden dice: numbers live here (and the debug UI), never in the story.
           ...(allRolls.length ? { rolls: allRolls.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome })) } : {}),
         },

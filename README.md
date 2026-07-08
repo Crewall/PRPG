@@ -14,7 +14,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 | Multi-agent threads | Separate AI sessions per role: storyteller, one per active NPC, memory scribe, story scribe, rule overseer |
 | Structured memory | Characters, objects, locations, events stored as memory objects with categories, subcategories and **detail levels** (e.g. only "visible" aspects returned when something is looked at) |
 | NPC isolation | Each NPC has its own persona and its own knowledge subset — NPCs never leak each other's knowledge |
-| Story compression | The story scribe keeps a rolling summary so prompts never need the full history; details are recovered from memory on demand |
+| Story compression | The story scribe keeps a rolling scene summary and a whole-story digest (checkpointed mid-scene so long scenes can't stale it) so prompts never need the full history; details are recovered from memory on demand |
+| Memory cleanup | A periodic (and on-demand) maintenance pass unifies entities recorded under different names, deduplicates/merges facts, and refreshes summaries; duplicate entities can also be merged manually, losslessly |
+| In-game clock | A hidden day/hour/minute clock advanced by the storyteller (`advance_time`) — memory facts are stamped with when they happened in the fiction |
 | Rule enforcement | Optional overseer validates outputs against user-defined rules and requests regeneration when violated |
 | Hidden threads | Support threads invisible to the player by default; a debug setting exposes every thread and prompt for troubleshooting |
 

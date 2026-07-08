@@ -32,11 +32,18 @@ function scribeStoryAgent(deps: HandlerDeps, storyId: string): ScribeStory {
   return new ScribeStory({ session, bound, threadLog: deps.threadLog, storyId });
 }
 
+// How far the story digest may lag behind play before a mid-scene checkpoint
+// fold is forced. Without this, a scene that never closes would leave the
+// digest empty and the story's beginning would survive only in the (small)
+// scene summary — the "story derails after ~10 turns" failure mode.
+export const DIGEST_CHECKPOINT_EVERY = 8;
+
 /**
  * scribe_story handler. Two modes:
  *  - 'scene' (default, per turn): rewrite the current scene summary to cover the
  *    turn(s) since it was last updated.
- *  - 'digest' (scene close): fold a closed scene's summary into the story digest.
+ *  - 'digest': fold a scene's summary into the story digest — on scene close,
+ *    and as a mid-scene checkpoint when the digest lags too far behind play.
  */
 export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
   return async (job: Job) => {
@@ -49,13 +56,20 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
 
     if (mode === 'digest') {
       const sceneId = job.payload.sceneId as string;
-      const sceneSummary = deps.summaries.getSceneSummary(sceneId)?.content ?? '';
-      if (!sceneSummary.trim()) return; // nothing to fold
-      const prevDigest = deps.summaries.getStoryDigest(storyId)?.content ?? '';
-      const { storyDigest, fadedOut } = await agent.foldDigest({ previousDigest: prevDigest, closedSceneSummary: sceneSummary, maxTokens: budgets.digestTokens });
+      const checkpoint = !!job.payload.checkpoint;
+      const sceneSummary = deps.summaries.getSceneSummary(sceneId);
+      if (!sceneSummary?.content.trim()) return; // nothing to fold
+      const prevDigest = deps.summaries.getStoryDigest(storyId);
+      // Stale checkpoint (a later fold already covered this) — skip.
+      if (checkpoint && prevDigest && prevDigest.coversToTurnIndex >= sceneSummary.coversToTurnIndex) return;
+      const { storyDigest, fadedOut } = await agent.foldDigest({
+        previousDigest: prevDigest?.content ?? '',
+        closedSceneSummary: sceneSummary.content,
+        checkpoint,
+        maxTokens: budgets.digestTokens,
+      });
       if (!deps.stories.getStory(storyId)) return; // story deleted while summarizing
-      const maxIdx = deps.stories.nextTurnIndex(storyId) - 1;
-      deps.summaries.upsertStoryDigest(storyId, storyDigest, maxIdx);
+      deps.summaries.upsertStoryDigest(storyId, storyDigest, sceneSummary.coversToTurnIndex);
       deps.events.emit({ t: 'summary.updated', storyId, scope: 'story' });
       // Feature 3: whatever faded out of the digest gets archived into memory.
       if (fadedOut.length) deps.jobs.enqueue('archive_faded', { storyId, payload: { items: fadedOut } });
@@ -88,5 +102,13 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
     deps.events.emit({ t: 'summary.updated', storyId, scope: 'scene' });
     // Feature 3: details that faded out of the scene summary get archived into memory.
     if (fadedOut.length) deps.jobs.enqueue('archive_faded', { storyId, payload: { items: fadedOut } });
+
+    // Mid-scene digest checkpoint: when the digest has fallen too far behind
+    // play, fold the (still-open) scene's summary in so the story-level memory
+    // stays current even in a scene that never breaks.
+    const digest = deps.summaries.getStoryDigest(storyId);
+    if (turn.index - (digest?.coversToTurnIndex ?? -1) >= DIGEST_CHECKPOINT_EVERY) {
+      deps.jobs.enqueue('scribe_story', { storyId, payload: { mode: 'digest', sceneId: turn.sceneId, checkpoint: true } });
+    }
   };
 }

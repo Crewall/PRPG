@@ -84,10 +84,12 @@ export async function callJson<S extends z.ZodTypeAny>(
   const CAP_CEILING = Math.max(baseMax * 4, 8192);
   const MAX_REPAIRS = 1; // malformed/invalid JSON → one "fix it" round
   const MAX_ESCALATIONS = 2; // truncated at the cap → up to two budget bumps
+  const MAX_EMPTY_RETRIES = 2; // empty (0-token) reply → plain re-request, no repair message
   let repairs = 0;
   let escalations = 0;
+  let emptyRetries = 0;
 
-  for (let attempt = 0; attempt < MAX_REPAIRS + MAX_ESCALATIONS + 1; attempt++) {
+  for (let attempt = 0; attempt < MAX_REPAIRS + MAX_ESCALATIONS + MAX_EMPTY_RETRIES + 1; attempt++) {
     const result = await bound.chat(
       { system: ctx.system, messages, jsonSchema: { type: 'object' }, signal: ctx.signal, maxTokens: currentMax },
       opts.onDelta,
@@ -95,6 +97,17 @@ export async function callJson<S extends z.ZodTypeAny>(
     lastRaw = result.text;
     opts.onRaw?.(result.text, attempt);
     const truncated = isTruncated(result.stopReason);
+
+    // An empty reply (or the bare "{" prefill) is a model failure, not JSON to
+    // repair — asking it to "fix" nothing is pointless; just ask again.
+    const bare = result.text.trim();
+    if (bare === '' || bare === '{') {
+      if (emptyRetries < MAX_EMPTY_RETRIES) {
+        emptyRetries++;
+        continue;
+      }
+      throw new JsonCallError(`the model returned an empty reply (${emptyRetries + 1} attempts)`, lastRaw, attempt + 1);
+    }
 
     let parsed: unknown;
     try {

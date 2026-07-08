@@ -7,6 +7,7 @@ import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model
 import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
+import { mergeMemoryObjects } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
@@ -259,6 +260,20 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return { ok: true };
   });
 
+  // Feature: merge another object INTO :oid (duplicate entities — "the woman"
+  // and "Kate"). Lossless: facts, knowledge links, scene rosters, NPC sessions
+  // and aliases all follow; the merged object is deleted.
+  const handlerDeps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
+  server.post('/api/memory/objects/:oid/merge', async (req, reply) => {
+    const { oid } = req.params as { oid: string };
+    const { mergeId } = z.object({ mergeId: z.string().min(1) }).parse(req.body);
+    if (!mergeMemoryObjects(handlerDeps, oid, mergeId)) {
+      reply.code(400);
+      return { error: 'cannot merge — objects must both exist and belong to the same story' };
+    }
+    return { ok: true, keep: memory.getObject(oid) };
+  });
+
   server.get('/api/memory/objects/:oid/facts', async (req) => {
     const { oid } = req.params as { oid: string };
     const q = req.query as { includeSuperseded?: string };
@@ -322,6 +337,18 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return memory.linkKnowledge(fid, knower, { distortion: body.distortion });
   });
 
+  // Manual memory cleanup: run the maintenance job (unify duplicate entities,
+  // consolidate facts, decay salience) now instead of waiting for the cadence.
+  server.post('/api/stories/:id/memory/maintenance', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!stories.getStory(id)) {
+      reply.code(404);
+      return { error: 'not found' };
+    }
+    const job = jobs.enqueue('memory_maintenance', { storyId: id, payload: {} });
+    return { ok: true, jobId: job.id };
+  });
+
   // ---- Layer 3b: suggestion inbox ----
   server.get('/api/stories/:id/memory/suggestions', async (req) => {
     const { id } = req.params as { id: string };
@@ -337,16 +364,8 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       return { error: 'not found' };
     }
     if (body.action === 'accept' && sug.type === 'merge' && sug.keepId && sug.mergeId) {
-      // Fold merge target's facts into keep, then delete the merged object.
-      const keep = memory.getObject(sug.keepId);
-      const merge = memory.getObject(sug.mergeId);
-      if (keep && merge) {
-        for (const f of memory.listFacts(merge.id, { includeSuperseded: true })) {
-          memory.addFact({ objectId: keep.id, category: f.category, subcategory: f.subcategory ?? undefined, detailLevel: f.detailLevel, tier: f.tier, content: f.content, confidence: f.confidence });
-        }
-        memory.updateObject(keep.id, { aliases: Array.from(new Set([...keep.aliases, merge.name, ...merge.aliases])) });
-        memory.deleteObject(merge.id);
-      }
+      // Lossless merge: facts, knowledge links, scene rosters, sessions, aliases.
+      mergeMemoryObjects(handlerDeps, sug.keepId, sug.mergeId);
     }
     suggestions.setStatus(sid, body.action === 'accept' ? 'accepted' : 'rejected');
     return { ok: true };

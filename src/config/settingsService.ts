@@ -73,6 +73,8 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'scribe-story-scene', label: 'Story scribe — scene summary' },
   { name: 'scribe-story-digest', label: 'Story scribe — digest fold' },
   { name: 'scribe-memory', label: 'Memory scribe — extraction' },
+  { name: 'scribe-memory-unify', label: 'Memory scribe — entity unification (cleanup)' },
+  { name: 'scribe-memory-consolidate', label: 'Memory scribe — fact consolidation (cleanup)' },
   { name: 'context-planner', label: 'Context planner — memory selection' },
   { name: 'npc-dossier', label: 'Memory scribe — NPC dossier' },
   { name: 'adjudicator', label: 'Adjudicator — action resolution' },

@@ -105,7 +105,9 @@ rerank via `sqlite-vec` behind the same function signature.
 turn completed
   └─ job: scribe_memory
        1. Detect mentioned entities (alias scan of turn text) → load their
-          current facts → build extraction prompt.
+          current facts → build extraction prompt. A compact roster of ALL
+          objects (id/type/name/aliases) is always included so the scribe can
+          resolve "the woman" to an existing Kate instead of duplicating her.
        2. LLM → MemoryDelta JSON (schema in 04-agents.md).
        3. Orchestrator post-processing:
           a. tempId resolution; alias/normalized-name match against existing
@@ -118,16 +120,34 @@ turn completed
           d. Clamp fact count, clamp salience to [0,1], validate detail levels
              (a fact can move down the ladder over time — hidden→known when
              revealed — via supersede with same content, lower level).
+          e. Stamp each new fact with the hidden in-game clock of its source
+             turn (`game_time_min`) — events in memory carry an in-fiction
+             "when", rendered as `d2 14:30` in prompts and the UI.
        4. Commit in one transaction; emit `memory.updated` WS event (UI refresh).
 ```
 
-### Maintenance ("expansion") job
+### Maintenance ("cleanup") job
 
-Every M turns per active object (default 10), or on demand from the UI:
-- deduplicate/merge near-identical facts (supersede),
-- refresh `summary` from the current fact set,
-- decay salience of long-unmentioned objects (×0.95 per cycle, floor 0.1),
-- flag contradictions it cannot resolve → UI review queue.
+Every M turns (default 10), or on demand from the memory UI ("clean up"):
+- **entity unification** — an LLM pass over the object roster finds the same
+  entity recorded under different names; `certain` merges apply automatically,
+  `likely` ones are queued as suggestions for the player,
+- **fact consolidation** — for the objects with the most live facts, an LLM
+  pass deduplicates and unifies facts (supersede — history kept, knowledge
+  links carried over) and refreshes `summary`,
+- decay salience of long-unmentioned objects (×0.95 per cycle, floor 0.1).
+
+### Entity merge
+
+`mergeMemoryObjects(keep, merge)` folds a duplicate object into its canonical
+twin **losslessly**: facts move over (near-duplicate contents are superseded,
+their knowledge links copied to the surviving fact), knowledge links where the
+duplicate was the *knower* follow it, scene rosters / NPC agent sessions / the
+player-character setting are re-pointed, and the duplicate's name+aliases fold
+into the kept object's aliases. Exposed as
+`POST /api/memory/objects/:keepId/merge {mergeId}`, used by the suggestion
+inbox's accept action, the maintenance job's certain merges, and the manual
+"merge another object into this" control in the memory browser.
 
 ## Player-facing memory browser
 
@@ -142,8 +162,15 @@ detail levels, grant/revoke knowledge links; every manual change is journaled to
 
 | budget | default |
 |---|---|
+| story digest | 1200 tokens |
+| scene summary | 500 tokens |
 | storyteller retrieved-memory block | 1500 tokens |
 | NPC persona + knowledge block | 1200 tokens |
 | scribe_memory input snapshot | 2000 tokens |
+| scribe_memory object roster | 120 objects |
 | facts per object per view | 30 (salience-ranked) |
 | new facts per turn | 20 |
+
+The per-story budgets (digest, scene summary, retrieved memory, recent raw
+turns) are editable in Story options → "Context budgets" — raising the digest
+budget is the first lever when a long story starts losing its beginning.

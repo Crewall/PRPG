@@ -2,6 +2,7 @@ import type { BuiltContext } from '../agents/agent.ts';
 import type { ChatMessage } from '../llm/types.ts';
 import { renderPrompt } from '../agents/prompts.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { formatGameClock } from '../util/gameClock.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { SummaryStore } from '../db/stores/summaryStore.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
@@ -159,6 +160,12 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       if (story.settings.premise.trim()) {
         parts.push(`## Premise\n${story.settings.premise.trim()}`);
       }
+
+      // The hidden in-game clock. The storyteller keeps it honest via the
+      // advance_time directive; the player never sees it stated outright.
+      parts.push(
+        `## In-game clock (hidden from the player)\nIt is ${formatGameClock(story.clockMin)}. Keep the fiction consistent with this time of day. When your reply spans more than a few minutes of story time (travel, rest, waiting, a long conversation), declare it with an advance_time directive; small exchanges advance a few minutes automatically. Never state the clock verbatim unless the fiction would reveal it.`,
+      );
 
       // The player's own character (from the intake interview), storyteller scope.
       if (story.settings.playerObjectId) {

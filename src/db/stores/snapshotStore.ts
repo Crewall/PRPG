@@ -14,6 +14,7 @@ import type { Db, Row } from '../db.ts';
 interface SnapshotPayload {
   capturedAt: number;
   currentSceneId: string | null;
+  clockMin?: number; // hidden in-game clock (absent on pre-clock snapshots)
   messageRowidWatermark: number;
   scenes: Row[];
   summaries: Row[];
@@ -42,10 +43,11 @@ export function createSnapshotStore(db: Db) {
     /** Capture the story's mutable state as the backup for `turnId` (call before the turn writes anything). */
     capture(storyId: string, turnId: string, turnIndex: number): void {
       db.transaction(() => {
-        const story = db.prepare(`SELECT current_scene_id FROM stories WHERE id = ?`).get<Row>(storyId);
+        const story = db.prepare(`SELECT current_scene_id, clock_min FROM stories WHERE id = ?`).get<Row>(storyId);
         const payload: SnapshotPayload = {
           capturedAt: Date.now(),
           currentSceneId: (story?.current_scene_id as string) ?? null,
+          clockMin: (story?.clock_min as number) ?? undefined,
           messageRowidWatermark: Number(db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM agent_messages`).get<{ m: number }>()!.m),
           scenes: db.prepare(`SELECT * FROM scenes WHERE story_id = ?`).all<Row>(storyId),
           summaries: db.prepare(`SELECT * FROM story_summaries WHERE story_id = ?`).all<Row>(storyId),
@@ -113,6 +115,7 @@ export function createSnapshotStore(db: Db) {
           if (!keepScenes.has(s.id as string)) db.prepare(`DELETE FROM scenes WHERE id = ?`).run(s.id);
         }
         db.prepare(`UPDATE stories SET current_scene_id = ?, updated_at = ? WHERE id = ?`).run(p.currentSceneId, Date.now(), storyId);
+        if (p.clockMin !== undefined) db.prepare(`UPDATE stories SET clock_min = ? WHERE id = ?`).run(p.clockMin, storyId);
 
         // 5. Summaries & suggestions: small, rewritten wholesale — wipe and reinsert.
         db.prepare(`DELETE FROM story_summaries WHERE story_id = ?`).run(storyId);
@@ -126,7 +129,7 @@ export function createSnapshotStore(db: Db) {
         db.prepare(`DELETE FROM memory_objects WHERE story_id = ?`).run(storyId);
         for (const o of p.objects) upsert('memory_objects', o, ['story_id', 'type', 'name', 'aliases_json', 'summary', 'salience', 'status', 'created_at', 'updated_at']);
         for (const f of p.facts)
-          upsert('memory_facts', f, ['object_id', 'category', 'subcategory', 'detail_level', 'tier', 'content', 'source_turn_id', 'supersedes_id', 'superseded', 'confidence', 'created_at', 'updated_at']);
+          upsert('memory_facts', f, ['object_id', 'category', 'subcategory', 'detail_level', 'tier', 'content', 'source_turn_id', 'supersedes_id', 'superseded', 'confidence', 'game_time_min', 'created_at', 'updated_at']);
         for (const l of p.links) upsert('knowledge_links', l, ['fact_id', 'knower_type', 'knower_npc_object_id', 'learned_turn_id', 'distortion', 'created_at', 'updated_at']);
 
         // 7. Queued post-turn work is now stale.

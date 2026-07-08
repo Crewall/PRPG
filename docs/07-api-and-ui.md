@@ -28,8 +28,10 @@ middleware slot exists from day one (`Authorization: Bearer <token>` checked if
 | `POST /api/memory/objects/:oid/facts` | manual fact add |
 | `PATCH /api/memory/facts/:fid` | edit content/category/detail level; supersede |
 | `POST /api/memory/facts/:fid/knowledge` | grant/revoke knower links, set distortion |
+| `POST /api/memory/objects/:oid/merge` | fold a duplicate object into `:oid` (`{ mergeId }`) — lossless entity merge (facts, knowledge links, scene rosters, sessions, aliases) |
+| `POST /api/stories/:id/memory/maintenance` | run the memory cleanup now (entity unification, fact consolidation, salience decay) — also runs automatically every 10 turns |
 | `GET /api/stories/:id/memory/suggestions` | pending merge/contradiction queue |
-| `POST /api/memory/suggestions/:sid` | accept/reject a suggestion |
+| `POST /api/memory/suggestions/:sid` | accept/reject a suggestion (accepting a merge uses the lossless entity merge) |
 
 ### Rules & agents
 | method & path | purpose |
@@ -73,14 +75,19 @@ wizard: title → premise seed → genre/tone presets → model profile per role
   tapping an NPC chip opens their player-scope memory card.
 - Drawer (mobile) / right panel (desktop) with tabs:
   - **Memory** — browsable object list grouped by type; object page shows
-    summary + facts grouped by category, filtered to current scope; edit
-    controls; suggestion inbox (merges/contradictions).
+    summary + facts grouped by category (with their in-game time stamps,
+    `d2 14:30`), filtered to current scope; edit controls; a "merge another
+    object into this" picker for duplicate entities; suggestion inbox
+    (merges/contradictions); a "clean up" action that runs memory maintenance
+    on demand.
   - **Rules** — rule list with enable toggles, severity, add/edit.
   - **Threads** *(only when `debug.showThreads`)* — live-tailing list of every
     agent call: role badge, tokens, duration; tap → full prompt/response viewer
     with JSON pretty-print and copy button. Filter by role/turn.
-  - **Settings** — per-story: model profiles per role, context budgets, K recent
-    turns, overseer toggles, debug visibility, export/import.
+  - **Settings** — per-story: model profiles per role, context budgets (story
+    digest / scene summary / retrieved memory tokens, K recent turns — under
+    Story options → "Context budgets"), overseer toggles, debug visibility,
+    export/import. The debug Summaries tab also shows the hidden in-game clock.
 
 **3. Global settings** — providers/API keys status (masked, edit via config file
 note), default profiles, log retention, LAN exposure warning.
