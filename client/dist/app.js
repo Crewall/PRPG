@@ -32,6 +32,7 @@ function route() {
   if (hash.startsWith('/play/')) return renderPlay(hash.slice('/play/'.length));
   if (hash.startsWith('/settings/prompts/')) return renderPromptEditor(decodeURIComponent(hash.slice('/settings/prompts/'.length)));
   if (hash === '/settings/seeds') return renderSeedsEditor();
+  if (hash === '/settings/style') return renderStyleEditor();
   if (hash === '/settings') return renderSettings();
   return renderHome();
 }
@@ -205,6 +206,15 @@ async function renderPlay(storyId) {
     vSlider.addEventListener('input', () => { vLabel.textContent = `${vSlider.value} — ${VERBOSITY_LABELS[Number(vSlider.value)]}`; });
     vSlider.addEventListener('change', () => patchSettings({ verbosity: Number(vSlider.value) }));
 
+    // Tone: the narrator voice fed to the storyteller's {{tone}} — per story.
+    const toneIn = h('input', { value: s.tone || '', placeholder: 'immersive, second-person present tense' });
+    const toneStatus = h('span', { class: 'sub' });
+    toneIn.addEventListener('change', async () => {
+      toneStatus.textContent = 'saving…';
+      try { await patchSettings({ tone: toneIn.value }); toneStatus.className = 'sub ok'; toneStatus.textContent = '✓'; }
+      catch (e) { toneStatus.className = 'sub err'; toneStatus.textContent = '✗ ' + e.message; }
+    });
+
     const toggle = (label, hint, checked, onChange) => {
       const cb = h('input', { type: 'checkbox', ...(checked ? { checked: true } : {}) });
       cb.addEventListener('change', () => onChange(cb.checked));
@@ -214,6 +224,7 @@ async function renderPlay(storyId) {
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Narrator tone'), h('div', { class: 'row', style: 'gap:8px' }, toneIn, toneStatus)),
         toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
           s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
         toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
@@ -917,7 +928,9 @@ async function renderSettings() {
     ...prompts.map((p) => h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/prompts/' + encodeURIComponent(p.name)) },
       h('span', {}, p.label), h('span', { class: 'sub' }, p.overridden ? 'customised ›' : 'default ›'))),
     h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/seeds') },
-      h('span', {}, 'Story-beginning randomizer — seed phrases'), h('span', { class: 'sub' }, seedNote)));
+      h('span', {}, 'Story-beginning randomizer — seed phrases'), h('span', { class: 'sub' }, seedNote)),
+    h('div', { class: 'prompt-row', onclick: () => (location.hash = '/settings/style') },
+      h('span', {}, 'Storyteller style — verbosity & tone'), h('span', { class: 'sub' }, '›')));
 
   // Throughput tuning — matters most on slow/free models (see agent bar).
   const concInput = h('input', { type: 'number', step: '1', min: '1', max: '16', value: perf.jobConcurrency, oninput: (e) => (perf.jobConcurrency = parseInt(e.target.value, 10)) });
@@ -1045,6 +1058,58 @@ async function renderSeedsEditor() {
     )),
   );
   setCount();
+}
+
+// Storyteller style: view/edit the burned-in prompt insertions behind the
+// {{verbosity}} and {{tone}} variables. Verbosity has one instruction string
+// per step (1–5); tone is the default narrator voice for new stories.
+async function renderStyleEditor() {
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  let data;
+  try { data = await api.get('/api/settings/style'); }
+  catch { location.hash = '/settings'; return; }
+  const STEPS = ['1', '2', '3', '4', '5'];
+  const LABELS = { 1: 'terse', 2: 'brief', 3: 'balanced', 4: 'rich', 5: 'expansive' };
+
+  const vInputs = {};
+  const vRows = STEPS.map((s) => {
+    const ta = h('textarea', { rows: '2', style: 'font-family:ui-monospace,monospace; font-size:13px' }, data.verbosity[s] || '');
+    vInputs[s] = ta;
+    return h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, `Verbosity ${s} — ${LABELS[s]}`), ta);
+  });
+  const toneIn = h('input', { value: data.tone || '', placeholder: data.toneDefault });
+
+  const status = h('span', { class: 'sub' });
+  const saveBtn = h('button', { class: 'primary' }, 'Save style');
+  saveBtn.addEventListener('click', async () => {
+    status.className = 'sub'; status.textContent = 'saving…';
+    const verbosity = Object.fromEntries(STEPS.map((s) => [s, vInputs[s].value]));
+    try { await api.put('/api/settings/style', { verbosity, tone: toneIn.value }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
+    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+  const resetBtn = h('button', { class: 'ghost' }, 'Reset to defaults');
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset verbosity strings and default tone to the built-in defaults?')) return;
+    try {
+      await api.put('/api/settings/style', { verbosity: {}, tone: '' });
+      for (const s of STEPS) vInputs[s].value = data.verbosityDefault[s];
+      toneIn.value = data.toneDefault;
+      status.className = 'sub'; status.textContent = 'reset to defaults';
+    } catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+  });
+
+  app.replaceChildren(
+    topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/settings') }, '← Settings')),
+    h('div', { class: 'scroll' }, h('div', { class: 'container' },
+      h('h2', {}, 'Storyteller style'),
+      h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Reply-length instruction per verbosity step (the slider in Story options picks which one). The storyteller prompt inserts the chosen string as {{verbosity}}.'),
+      ...vRows,
+      h('h3', {}, 'Default tone'),
+      h('div', { class: 'sub', style: 'margin-bottom:6px' }, 'The narrator voice ({{tone}}) for new stories. Each story can override this in its Story options. Built-in default: ' + data.toneDefault),
+      toneIn,
+      h('div', { class: 'row', style: 'margin-top:14px; gap:12px' }, saveBtn, resetBtn, status),
+    )),
+  );
 }
 
 route();

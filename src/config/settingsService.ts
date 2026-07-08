@@ -37,6 +37,11 @@ export const RuntimeSettings = z.object({
   // use the shipped src/data/story-seeds.txt. Editable in Settings so users on
   // Termux don't have to hunt for the file.
   seeds: z.string().default(''),
+  // Editable storyteller-style insertions. `verbosity` overrides the built-in
+  // reply-length strings per step ("1".."5"); `tone` is the default narrator
+  // voice for new stories. Empty entries fall back to the built-in defaults.
+  verbosity: z.record(z.string(), z.string()).default({}),
+  tone: z.string().default(''),
   // Throughput tuning. jobConcurrency = how many background scribe jobs run at
   // once; requestTimeoutMs = how long to wait for a model reply before aborting
   // (free/slow models need a generous value). Editable in Settings.
@@ -101,6 +106,8 @@ function seedFromConfig(base: Config): RuntimeSettings {
     roles: roles as RuntimeSettings['roles'],
     prompts: {},
     seeds: '',
+    verbosity: {},
+    tone: '',
     performance: { jobConcurrency: 2, requestTimeoutMs: base.llm.timeoutMs },
   };
 }
@@ -114,6 +121,8 @@ export interface SettingsUpdate {
   roles?: RuntimeSettings['roles'];
   prompts?: Record<string, string>;
   seeds?: string;
+  verbosity?: Record<string, string>;
+  tone?: string;
   performance?: Partial<RuntimeSettings['performance']>;
 }
 
@@ -124,6 +133,10 @@ export interface SettingsService {
   promptOverride(name: string): string | undefined;
   /** The user's seed-phrase override (one per line), or undefined to use the shipped file. */
   seedsOverride(): string | undefined;
+  /** Per-step verbosity-string overrides ("1".."5"); empty map = all built-in. */
+  verbosityOverride(): Record<string, string>;
+  /** Default narrator tone for new stories, or undefined to use the built-in default. */
+  toneDefault(): string | undefined;
   /** Throughput tuning: job concurrency + request timeout. */
   performance(): RuntimeSettings['performance'];
   onChange(listener: () => void): void;
@@ -197,6 +210,8 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
     effective: () => compiled,
     promptOverride: (name) => settings.prompts[name],
     seedsOverride: () => (settings.seeds && settings.seeds.trim() ? settings.seeds : undefined),
+    verbosityOverride: () => settings.verbosity ?? {},
+    toneDefault: () => (settings.tone && settings.tone.trim() ? settings.tone.trim() : undefined),
     performance: () => settings.performance,
     onChange: (l) => listeners.push(l),
 
@@ -220,6 +235,8 @@ export function createSettingsService(store: SettingsStore, base: Config): Setti
         roles: patch.roles ?? settings.roles,
         prompts: patch.prompts ?? settings.prompts,
         seeds: patch.seeds ?? settings.seeds,
+        verbosity: patch.verbosity ?? settings.verbosity,
+        tone: patch.tone ?? settings.tone,
         performance: { ...settings.performance, ...(patch.performance ?? {}) },
       });
       // Compile eagerly so an invalid change is rejected before persisting.
