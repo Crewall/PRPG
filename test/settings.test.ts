@@ -82,4 +82,16 @@ describe('SettingsService', () => {
     svc.update({ prompts: { storyteller: 'MY CUSTOM PROMPT {{genre}}' } });
     expect(svc.promptOverride('storyteller')).toBe('MY CUSTOM PROMPT {{genre}}');
   });
+
+  it('verbosity and tone overrides are stored and reported', () => {
+    const svc = createSettingsService(createSettingsStore(db), base);
+    expect(svc.verbosityOverride()).toEqual({});
+    expect(svc.toneDefault()).toBeUndefined();
+    svc.update({ verbosity: { '3': 'two sentences only' }, tone: 'grimdark' });
+    expect(svc.verbosityOverride()).toEqual({ '3': 'two sentences only' });
+    expect(svc.toneDefault()).toBe('grimdark');
+    // A whitespace-only tone reads as no override.
+    svc.update({ tone: '   ' });
+    expect(svc.toneDefault()).toBeUndefined();
+  });
 });

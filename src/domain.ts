@@ -4,13 +4,18 @@ import { RoleName } from './config/config.ts';
 // Domain types + Zod schemas shared across stores, API and orchestrator.
 // StorySettings is persisted per story (settings_json) and validated on read/write.
 
+// The narrator voice/style fed to the storyteller prompt's {{tone}}. Per-story
+// (editable in Story options); new stories can inherit a global default set in
+// Settings → Storyteller style.
+export const DEFAULT_TONE = 'immersive, second-person present tense';
+
 export const StorySettings = z.object({
   // Per-role model-profile overrides (fall back to config.roles when absent).
   roles: z.record(RoleName, z.string()).default({}),
   // Free-text opening premise the storyteller builds the world from.
   premise: z.string().default(''),
   genre: z.string().default('freeform'),
-  tone: z.string().default('immersive, second-person present tense'),
+  tone: z.string().default(DEFAULT_TONE),
   // Storyteller reply length, 1 (terse) … 5 (expansive). Storyteller only —
   // scribes/NPCs are unaffected.
   verbosity: z.number().int().min(1).max(5).default(3),

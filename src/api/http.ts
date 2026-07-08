@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { App } from '../app.ts';
-import { StorySettings } from '../domain.ts';
+import { StorySettings, DEFAULT_TONE } from '../domain.ts';
+import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
 import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
@@ -91,7 +92,12 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
 
   server.post('/api/stories', async (req, reply) => {
     const body = CreateStoryBody.parse(req.body);
-    const settings = StorySettings.parse({ ...(body.settings ?? {}), premise: body.seed || body.settings?.premise || '' });
+    // New stories inherit the global default tone (Settings → Storyteller style)
+    // unless one was passed explicitly.
+    const toneDefault = app.settingsService.toneDefault();
+    const merged = { ...(body.settings ?? {}), premise: body.seed || body.settings?.premise || '' };
+    if (!merged.tone && toneDefault) merged.tone = toneDefault;
+    const settings = StorySettings.parse(merged);
     const story = stories.createStory({ title: body.title, settings });
     reply.code(201);
     return story;
@@ -412,12 +418,15 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'not found' };
     }
-    // Abort the (potentially slow) model call if the client cancels/disconnects,
-    // so a hung interview can't keep generating after the player gave up. The
-    // client's Cancel button aborts its fetch, which closes this request.
+    // Abort the (potentially slow) model call if the client actually
+    // disconnects. We watch the RESPONSE stream, not the request: Node emits the
+    // request stream's 'close' as soon as the POST body is read (instantly for a
+    // small JSON), which would abort every interview on the spot. The response
+    // stream's 'close' only fires early — before it finished writing — on a real
+    // client disconnect.
     const ac = new AbortController();
-    req.raw.on('close', () => {
-      if (!reply.raw.writableEnded) ac.abort(new Error('client cancelled the interview'));
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) ac.abort(new Error('client cancelled the interview'));
     });
     try {
       const deps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
@@ -586,5 +595,40 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     }
     svc.update({ seeds });
     return { ok: true, count: parseSeeds(seeds || defaultSeedsText()).length };
+  });
+
+  // Storyteller style: the burned-in prompt insertions behind {{verbosity}} and
+  // {{tone}}. Exposes the built-in defaults plus any override so they can be
+  // viewed and edited (Settings → Storyteller style).
+  const STEPS = ['1', '2', '3', '4', '5'];
+  server.get('/api/settings/style', async () => {
+    const vOverride = svc.get().verbosity ?? {};
+    const verbosity = Object.fromEntries(STEPS.map((s) => [s, (vOverride[s] ?? '').trim() || VERBOSITY_STYLE[Number(s)]]));
+    const verbosityDefault = Object.fromEntries(STEPS.map((s) => [s, VERBOSITY_STYLE[Number(s)]]));
+    const overriddenSteps = STEPS.filter((s) => (vOverride[s] ?? '').trim() && vOverride[s].trim() !== VERBOSITY_STYLE[Number(s)]);
+    return {
+      verbosity,
+      verbosityDefault,
+      verbosityOverridden: overriddenSteps.length > 0,
+      tone: svc.toneDefault() ?? DEFAULT_TONE,
+      toneDefault: DEFAULT_TONE,
+      toneOverridden: !!svc.toneDefault(),
+    };
+  });
+
+  server.put('/api/settings/style', async (req) => {
+    const body = z
+      .object({ verbosity: z.record(z.string(), z.string()).optional(), tone: z.string().optional() })
+      .parse(req.body ?? {});
+    const patch: { verbosity?: Record<string, string>; tone?: string } = {};
+    if (body.verbosity) {
+      // Store only the steps that actually differ from the built-in default.
+      patch.verbosity = Object.fromEntries(
+        STEPS.map((s) => [s, (body.verbosity![s] ?? '').trim()]).filter(([s, v]) => v && v !== VERBOSITY_STYLE[Number(s)]),
+      );
+    }
+    if (body.tone !== undefined) patch.tone = body.tone.trim() === DEFAULT_TONE ? '' : body.tone.trim();
+    svc.update(patch);
+    return { ok: true };
   });
 }

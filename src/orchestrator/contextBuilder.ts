@@ -14,7 +14,9 @@ import type { Story } from '../domain.ts';
 export const BEGIN_MARKER = '(Begin the story from the premise. BRIEFLY set the opening scene — a few short paragraphs at most — and end by inviting the player to act.)';
 
 // Storyteller reply-length instruction per verbosity step (settings.verbosity).
-const VERBOSITY_STYLE: Record<number, string> = {
+// Exported as the built-in default; a per-installation override can be set in
+// Settings → Storyteller style and is applied via ContextBuilderDeps.verbosityOverride.
+export const VERBOSITY_STYLE: Record<number, string> = {
   1: 'Keep each reply TERSE: one short paragraph (2–4 sentences).',
   2: 'Keep each reply brief: 1–2 short paragraphs.',
   3: 'Keep each reply focused: 1–4 short paragraphs.',
@@ -106,6 +108,8 @@ export interface ContextBuilderDeps {
   stories: StoryStore;
   summaries: SummaryStore;
   memory: MemoryStore;
+  /** Optional editable verbosity strings (keyed "1".."5"); falls back to VERBOSITY_STYLE. */
+  verbosityOverride?: () => Record<string, string>;
 }
 
 /**
@@ -116,6 +120,10 @@ export interface ContextBuilderDeps {
  */
 export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
   const { stories, summaries, memory } = deps;
+  const verbosityFor = (step: number): string => {
+    const override = deps.verbosityOverride?.() ?? {};
+    return override[String(step)]?.trim() || VERBOSITY_STYLE[step] || VERBOSITY_STYLE[3];
+  };
 
   return {
     forStoryteller(story: Story, playerInput: string, extras?: StorytellerContextExtras): BuiltContext {
@@ -145,7 +153,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
           genre: story.settings.genre,
           tone: story.settings.tone,
           adjudication,
-          verbosity: VERBOSITY_STYLE[story.settings.verbosity] ?? VERBOSITY_STYLE[3],
+          verbosity: verbosityFor(story.settings.verbosity),
         }),
       ];
       if (story.settings.premise.trim()) {
