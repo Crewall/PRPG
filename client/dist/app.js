@@ -837,7 +837,7 @@ async function renderPlay(storyId) {
       case 'turn.final':
         if (current) { current.className = 'bubble narration'; current.textContent = m.narration; }
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
-        if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}`));
+        if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown(); break;
       case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; setBusy(false); break;

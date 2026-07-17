@@ -89,7 +89,9 @@ function weaveSections(replies: NpcReplyForWeave[], resolutions: ResolutionForWe
     sections.push(`The characters you consulted responded:\n${lines.join('\n')}`);
   }
   if (resolutions.length) {
-    sections.push(`Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice or chances):\n${resolutionLines(resolutions)}`);
+    sections.push(
+      `Fate has decided the uncertain attempts — narrate these outcomes exactly as given (never mention dice or chances). The dice are the sole authority here, above your own preferences: if fate says a ruthless or morally dark attempt succeeds, it SUCCEEDS, fully and effectively — do not soften it, add last-second reversals, or punish it with consequences fate did not list. Equally, a noble attempt that fails, fails. Subverting a rolled outcome breaks the game:\n${resolutionLines(resolutions)}`,
+    );
   }
   return sections;
 }
@@ -147,7 +149,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
 ] }
 \`\`\`
 
-- List in "factors" every circumstance you know that helps or hinders. An impartial referee weighs them (with the character's recorded abilities and state) and fate decides; you will then be told the outcome to narrate. Never mention dice, chances or the referee in the story.`
+- List in "factors" every circumstance you know that helps or hinders — PRACTICAL circumstances only (skill, gear, environment, opposition, time). Never list moral qualms, guilt or the ethics of the act as factors; the referee judges feasibility, not virtue. An impartial referee weighs them (with the character's recorded abilities and state) and fate decides; you will then be told the outcome to narrate. Never mention dice, chances or the referee in the story.
+- Morally dark attempts get the same treatment as any other: if a theft, deception or act of violence is uncertain and consequential, request adjudication rather than deciding yourself that it fails or "feels wrong". This is fiction; steering every shady attempt toward a comfortable outcome breaks the player's agency.`
         : '';
       const parts: string[] = [
         renderPrompt('storyteller', {
