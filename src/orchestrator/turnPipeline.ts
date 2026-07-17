@@ -275,7 +275,8 @@ export class TurnPipeline {
           consults: consultCount,
           clockMin: newClock,
           // Hidden dice: numbers live here (and the debug UI), never in the story.
-          ...(allRolls.length ? { rolls: allRolls.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome })) } : {}),
+          // assessment included so a suspicious chance can be audited at a glance.
+          ...(allRolls.length ? { rolls: allRolls.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome, assessment: r.assessment })) } : {}),
         },
       });
       agents.appendMessage(session.id, { role: 'user', content: playerInput || '(begin)', turnId: turn.id });
