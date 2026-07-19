@@ -39,8 +39,8 @@ describe('memory dedupe (feature 6)', () => {
     });
 
     function handlerDeps() {
-      const { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs } = app;
-      return { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs };
+      const { db, stories, summaries, agents, threadLog, registry, events, memory, npcProfiles, suggestions, jobs } = app;
+      return { db, stories, summaries, agents, threadLog, registry, events, memory, npcProfiles, suggestions, jobs };
     }
 
     it('applyMemoryDelta skips near-duplicates but still extends knowledge', () => {

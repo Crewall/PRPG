@@ -27,6 +27,10 @@ import type { Directive } from './directives.ts';
 import { breakScene } from './scenes.ts';
 import { resolveNpc, npcEnter, npcExit } from './npc.ts';
 import type { NpcServiceDeps } from './npc.ts';
+import { runNpcRound } from './npcRound.ts';
+import type { NpcRoundOutcome } from './npcRound.ts';
+import { truncateToTokens } from './contextBuilder.ts';
+import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import type { Story, Turn } from '../domain.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
@@ -48,6 +52,7 @@ export interface PipelineDeps {
   memory: MemoryStore;
   summaries: SummaryStore;
   snapshots: SnapshotStore;
+  npcProfiles: NpcProfileStore;
   registry: LlmRegistry;
   contexts: ContextBuilder;
   events: EventBus;
@@ -79,7 +84,7 @@ export class TurnPipeline {
   }
 
   private npcDeps(): NpcServiceDeps {
-    return { stories: this.deps.stories, agents: this.deps.agents, memory: this.deps.memory, jobs: this.deps.jobs, registry: this.deps.registry, events: this.deps.events };
+    return { stories: this.deps.stories, agents: this.deps.agents, memory: this.deps.memory, jobs: this.deps.jobs, registry: this.deps.registry, events: this.deps.events, npcProfiles: this.deps.npcProfiles };
   }
 
   /** Cancel the in-flight turn for a story, if any. */
@@ -145,16 +150,34 @@ export class TurnPipeline {
     let stage = 'setup';
 
     try {
+      // NPC Story Mode (docs/09): NPCs act FIRST — every present NPC the
+      // mechanical gate lets through replies (parallel) with what it says and
+      // intends, then ONE storyteller pass weaves the round. The structured
+      // memory pipeline (planner, retrieval, scribe_memory) is bypassed.
+      const npcMode = story.settings.npcStories.enabled;
+      let round: NpcRoundOutcome[] = [];
+      if (npcMode) {
+        stage = 'npc round';
+        out.status('the characters are thinking…');
+        round = await runNpcRound(
+          { stories, agents, memory: this.deps.memory, npcProfiles: this.deps.npcProfiles, threadLog, jobs, registry, contexts },
+          story, turn, playerInput, aborter.signal,
+        );
+      }
+
       // Step 2 — context build. In summary-driven mode a cheap planner pass
       // decides which memories (and how deep) the storyteller needs (feature 4).
       let plan: ContextPlan | undefined;
-      if (story.settings.context.summaryDriven && story.settings.context.plannerEnabled) {
+      if (!npcMode && story.settings.context.summaryDriven && story.settings.context.plannerEnabled) {
         stage = 'context planner';
         out.status('gathering memories…');
         plan = await this.planContext(story, playerInput, turn.id, aborter.signal);
       }
       stage = 'context build';
-      const ctx = contexts.forStoryteller(story, playerInput, plan ? { plan } : undefined);
+      const ctx = contexts.forStoryteller(story, playerInput, {
+        ...(plan ? { plan } : {}),
+        ...(round.length ? { npcRound: round.map((r) => r.weave) } : {}),
+      });
 
       const profileName = story.settings.roles.storyteller ?? registry.getForRole('storyteller').name;
       const bound = registry.getProfile(profileName);
@@ -164,8 +187,10 @@ export class TurnPipeline {
 
       // Are there present major NPCs the storyteller might consult? If so, we buffer
       // pass-1 (it may be a draft that gets re-woven) rather than streaming it live.
+      // NPC Story Mode: never — the NPCs already spoke, pass 1 streams live and
+      // consult_npc directives are ignored.
       const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
-      const canConsult = (scene?.activeNpcIds.length ?? 0) > 0;
+      const canConsult = !npcMode && (scene?.activeNpcIds.length ?? 0) > 0;
 
       // A delta gate that never leaks the ```directives fence to the player.
       const gate = this.makeGate(out);
@@ -245,7 +270,11 @@ export class TurnPipeline {
         storytellerCalls++;
       }
 
-      const leftover = parsed.directives.filter((d) => d.type === 'consult_npc' || d.type === 'resolve_action');
+      if (npcMode) {
+        const ignored = parsed.directives.filter((d) => d.type === 'consult_npc');
+        if (ignored.length) logger.debug('consult_npc ignored in NPC story mode — the round already ran', { storyId, turnId: turn.id, count: ignored.length });
+      }
+      const leftover = parsed.directives.filter((d) => (!npcMode && d.type === 'consult_npc') || d.type === 'resolve_action');
       if (leftover.length) {
         logger.warn('directive cascade cap reached — dropping', { storyId, turnId: turn.id, dropped: leftover.map((d) => d.type) });
       }
@@ -274,6 +303,10 @@ export class TurnPipeline {
           storytellerCalls,
           consults: consultCount,
           clockMin: newClock,
+          // Who was present this turn — the basis for NPC Story Mode's
+          // personalized excerpts (witnessed turns + gap notes). Stamped in
+          // both modes; it is cheap and useful either way.
+          presentNpcIds: scene?.activeNpcIds ?? [],
           // Hidden dice: numbers live here (and the debug UI), never in the story.
           // assessment included so a suspicious chance can be audited at a glance.
           ...(allRolls.length ? { rolls: allRolls.map((r) => ({ actor: r.actor, action: r.action, chance: r.chance, roll: r.roll, outcome: r.outcome, assessment: r.assessment })) } : {}),
@@ -285,12 +318,35 @@ export class TurnPipeline {
       const finalTurn = stories.getTurn(turn.id)!;
       out.final(finalTurn);
 
+      // NPC Story Mode: persist each NPC's mind. Presence for everyone in the
+      // scene (skipped NPCs still witnessed the round); rewritten notes and
+      // the acted-marker only for NPCs that actually engaged.
+      if (npcMode && scene) {
+        const updated: string[] = [];
+        for (const oid of scene.activeNpcIds) {
+          if (oid === story.settings.playerObjectId) continue;
+          this.deps.npcProfiles.upsert(storyId, oid, { lastPresentTurnIdx: turn.index });
+        }
+        for (const r of round) {
+          const acted = !r.weave.skipped && !r.weave.error && !!(r.weave.dialogue || r.weave.intent);
+          const patch: { notes?: string; lastActedTurnIdx?: number } = {};
+          if (r.notes) patch.notes = truncateToTokens(r.notes, story.settings.npcStories.notesTokens);
+          if (acted) patch.lastActedTurnIdx = turn.index;
+          if (Object.keys(patch).length) {
+            this.deps.npcProfiles.upsert(storyId, r.objectId, patch);
+            updated.push(r.objectId);
+          }
+        }
+        if (updated.length) this.deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: updated });
+      }
+
       // Step 8 — scene effects: scene_break / npc_enter / npc_exit.
       this.applySceneDirectives(storyId, finalDirectives);
 
-      // Step 9 — post-turn async scribes.
+      // Step 9 — post-turn async scribes. NPC Story Mode replaces the memory
+      // scribe (and everything chained off it) with the NPCs' own notes.
       jobs.enqueue('scribe_story', { storyId, turnId: turn.id, payload: { mode: 'scene', turnId: turn.id } });
-      jobs.enqueue('scribe_memory', { storyId, turnId: turn.id, payload: { turnId: turn.id } });
+      if (!npcMode) jobs.enqueue('scribe_memory', { storyId, turnId: turn.id, payload: { turnId: turn.id } });
 
       return finalTurn;
     } catch (err) {

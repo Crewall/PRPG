@@ -57,7 +57,7 @@ describe('NPC dossier at elevation', () => {
     const marta = app.memory.createObject({ storyId: story.id, type: 'character', name: 'Marta', aliases: [], summary: 'The innkeeper.', salience: 0.7, status: 'active' });
     app.memory.addFact({ objectId: marta.id, category: 'appearance', detailLevel: 'visible', tier: 'major', content: 'Marta wears a red scarf', confidence: 1 });
 
-    const deps = { stories: app.stories, agents: app.agents, memory: app.memory, jobs: app.jobs, registry: app.registry, events: app.events };
+    const deps = { stories: app.stories, agents: app.agents, memory: app.memory, npcProfiles: app.npcProfiles, jobs: app.jobs, registry: app.registry, events: app.events };
     promoteNpc(deps, story.id, marta.id);
     await app.worker.drain();
 

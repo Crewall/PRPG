@@ -263,7 +263,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   // Feature: merge another object INTO :oid (duplicate entities — "the woman"
   // and "Kate"). Lossless: facts, knowledge links, scene rosters, NPC sessions
   // and aliases all follow; the merged object is deleted.
-  const handlerDeps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
+  const handlerDeps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, npcProfiles: app.npcProfiles, suggestions, jobs, registry, events: app.events };
   server.post('/api/memory/objects/:oid/merge', async (req, reply) => {
     const { oid } = req.params as { oid: string };
     const { mergeId } = z.object({ mergeId: z.string().min(1) }).parse(req.body);
@@ -388,7 +388,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   });
 
   // ---- Layer 4: NPC agents (promote/demote, session list) ----
-  const npcDeps = { stories, agents: app.agents, memory, jobs, registry, events: app.events };
+  const npcDeps = { stories, agents: app.agents, memory, npcProfiles: app.npcProfiles, jobs, registry, events: app.events };
 
   server.get('/api/stories/:id/agents', async (req) => {
     const { id } = req.params as { id: string };
@@ -448,7 +448,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       if (!reply.raw.writableFinished) ac.abort(new Error('client cancelled the interview'));
     });
     try {
-      const deps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, suggestions, jobs, registry, events: app.events };
+      const deps = { db: app.db, stories, summaries, agents: app.agents, threadLog, memory, npcProfiles: app.npcProfiles, suggestions, jobs, registry, events: app.events };
       return await runPlayerInterview(deps, id, body.exchanges, { signal: ac.signal });
     } catch (err) {
       reply.code(500);
