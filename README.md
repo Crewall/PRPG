@@ -14,6 +14,7 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 | Multi-agent threads | Separate AI sessions per role: storyteller, one per active NPC, memory scribe, story scribe, rule overseer |
 | Structured memory | Characters, objects, locations, events stored as memory objects with categories, subcategories and **detail levels** (e.g. only "visible" aspects returned when something is looked at) |
 | NPC isolation | Each NPC has its own persona and its own knowledge subset — NPCs never leak each other's knowledge |
+| NPC Story Mode | Optional per-story mode ([docs/09](docs/09-npc-story-mode.md)): each NPC's mind is a narrative document (personality + self-written notes) instead of extracted facts; present NPCs act proactively every round (a mechanical gate skips idle ones) and the storyteller weaves their words/intents in one pass |
 | Story compression | The story scribe keeps a rolling scene summary and a whole-story digest (checkpointed mid-scene so long scenes can't stale it) so prompts never need the full history; details are recovered from memory on demand |
 | Memory cleanup | A periodic (and on-demand) maintenance pass unifies entities recorded under different names, deduplicates/merges facts, and refreshes summaries; duplicate entities can also be merged manually, losslessly |
 | In-game clock | A hidden day/hour/minute clock advanced by the storyteller (`advance_time`) — memory facts are stamped with when they happened in the fiction |
@@ -41,6 +42,9 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 - **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
 - **Layer 4 — NPC agents (personas, isolation, consult loop):** ✅ implemented.
 - Layers 5–6 (rule overseer, debug/polish): designed in `docs/`, not yet built.
+- **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)) —
+  a per-story switch replacing the structured memory pipeline with per-NPC
+  narrative minds (proactive rounds, skip gate, seeding, NPC-minds panel).
 - **Settings UI (extra):** in-app page to set provider API keys (with a live
   "test key" button), curate a favourites list of models, pick a model +
   temperature + max-tokens per AI role, and edit each role's prompt. All

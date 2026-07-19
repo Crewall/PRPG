@@ -1,6 +1,8 @@
 # 09 — NPC Story Mode (narrative minds)
 
-**Status: planned — this document is the implementation spec.**
+**Status: ✅ implemented** (settings switch `npcStories.enabled`, off by
+default). This document is the spec it was built from, updated to match the
+implementation.
 
 An alternative, per-story mode for NPC simulation that bypasses the structured
 memory pipeline (fact extraction → knowledge links → scoped retrieval), which
@@ -25,7 +27,7 @@ Existing stories are unaffected; the default stays the structured-memory mode.
 
 | Question | Decision |
 |---|---|
-| When do NPCs act? | **Every round, NPCs first** (user-confirmed). All present NPCs run in parallel, then one storyteller pass. This is *faster* than today's consult flow (2 sequential stages instead of up to 3) at the cost of N NPC calls per turn. |
+| When do NPCs act? | **Every round, NPCs first** (user-confirmed). Present NPCs run in parallel, then one storyteller pass. This is *faster* than today's consult flow (2 sequential stages instead of up to 3). A **mechanical skip gate** (below) keeps the N-calls-per-round cost honest: an NPC with nothing new this round is not invoked at all. |
 | Who maintains an NPC's notes? | **The NPC itself, inside its round reply** (default; user had no preference). The same call that produces dialogue/intent also returns the rewritten notes. One LLM call per NPC per round, total. |
 | Fate of the structured memory system in this mode? | **Off, roster only** (default). No `scribe_memory` jobs, no fact extraction, no retrieval blocks, no maintenance passes. `memory_objects` stays as the character/location roster — agent sessions (`npc_object_id`) and scenes (`active_npc_ids`) key on those ids. Personality + notes live in a new lightweight table. |
 | How is the personalized excerpt built? | **Mechanical filter** (default): story digest + scene summary + last-K raw turns *while the NPC was present* + gap notes for absences. Zero extra LLM calls, fully deterministic. An LLM "what you learned while away" bridge on re-entry is future work. |
@@ -130,9 +132,10 @@ Precedence rules, documented in the schema comment:
 
 ```
 0. preflight, appendTurn, snapshot.capture           (unchanged)
-1. present = scene.activeNpcIds.slice(0, maxNpcsPerRound)
+1. present = scene.activeNpcIds; the SKIP GATE decides who is invoked
+   (capped at maxNpcsPerRound); the rest appear as present-but-idle
 2. NPC round (parallel, Promise.all):
-     for each npc: buildNpcRoundContext → NpcAgent.respondRound
+     for each invoked npc: forNpcRound → NpcAgent.respondRound
      → { dialogue, intent, innerState, notes }
    a failed/timeout NPC degrades to an "unavailable" entry (like consult
    errors today) — the turn never fails because an NPC did
@@ -153,10 +156,32 @@ Precedence rules, documented in the schema comment:
 7. post-turn jobs: enqueue scribe_story ONLY (no scribe_memory)
 ```
 
-Implementation shape: extract the NPC round into
-`src/orchestrator/npcRound.ts` (`runNpcRound(deps, story, turn, playerInput,
-signal): NpcRoundOutcome[]`) rather than growing `runLocked`; the pipeline
-branch then reads as: `const round = npcStories ? await runNpcRound(...) : []`.
+Implementation shape: the NPC round lives in `src/orchestrator/npcRound.ts`
+(`runNpcRound(deps, story, turn, playerInput, signal): NpcRoundOutcome[]`);
+the pipeline branch reads as: `const round = npcStories ? await
+runNpcRound(...) : []`.
+
+### The skip gate (mechanical, zero LLM cost)
+
+`shouldInvokeNpc` in `npcRound.ts` invokes a present NPC only when the round
+plausibly touches them; otherwise the call is skipped and the storyteller just
+sees them listed as present-but-idle. An NPC is invoked when ANY of:
+
+1. they have **no mind yet** (no profile / empty personality) — they must act
+   and establish themselves (a seed job is queued in parallel);
+2. they **just (re-)entered** (`lastPresentTurnIdx < turn.index - 1`) — they
+   need to react and refresh their notes;
+3. the **player's input mentions them** (name, alias, or a distinctive name
+   word, word-boundary matched; generic words like "the"/"old"/"guard" are
+   excluded so "the barmaid" doesn't match every "the");
+4. the **previous narration mentions them** — the narrator put them in play,
+   so a skipped NPC self-heals into the conversation next round;
+5. they **spoke or acted last round** (`lastActedTurnIdx >= turn.index - 1`)
+   — a conversation or action is in flight.
+
+A false positive costs one NPC call; a false negative self-heals via rule 4.
+Skipped NPCs still get their `lastPresentTurnIdx` presence update (they
+witnessed the round), only their notes stay untouched.
 
 Status lines: reuse the existing emitter — `out.status('the characters are
 thinking…')` during step 2, `'the storyteller is writing…'` for step 3.
@@ -323,12 +348,15 @@ convention as manual memory edits).
    like the existing `summaryDriven` toggle
    (`patchSettings({ npcStories: { enabled: on } })`), with a one-line
    explanation that this replaces the structured memory system for NPCs.
-2. A minimal **"NPC minds"** panel (visible when the mode is on): list of
-   NPCs with editable `personality` and `notes` textareas + save. This is
-   the player's window into (and repair tool for) each NPC's head, replacing
-   the memory browser's role for NPCs in this mode.
-3. Debug thread view needs no changes — round replies flow through
-   `thread_log` like consults do today.
+2. An **"NPC minds"** drawer tab (shown whenever the mode is on, first in
+   the tab row): each NPC's editable `personality` and `notes` with save.
+   This is the player's window into (and repair tool for) each NPC's head —
+   the separate stories are always visible here, not only in debug mode.
+3. **Full AI-communication visibility**: every round call, seed call and
+   storyteller weave flows through `thread_log` exactly like consults do
+   today (the `Agent` base logs every request/response), so the debug
+   Threads tab shows each NPC's prompts and raw replies; manual profile
+   edits are journaled there as `agent_role='user'`.
 
 **WS:** emit `{ t: 'npc.profile.updated', storyId, objectId }` after step 5
 of the turn loop and after manual PUTs, so an open panel refreshes live.
@@ -396,10 +424,9 @@ working — the switch stays off until milestone 5 exposes it.
   explicit: dialogue is quoted, intents are attempts; the adjudicator still
   arbitrates uncertain attempts. The NPC learns what *actually* happened
   from the next round's excerpt (final narration), not from its own intent.
-- **A silent NPC every round wastes a call.** Accepted for v1 (user chose
-  every-round cadence); the prompt legitimizes silence and the storyteller
-  omits it. Future: a cheap relevance gate or "skip if not addressed and
-  nothing changed" heuristic.
+- **A silent NPC every round wastes a call.** Solved by the mechanical skip
+  gate (see §3): an NPC with nothing new this round is not invoked at all,
+  and re-enters the moment the player or narrator mentions them.
 - **Long-absent NPC re-entry quality.** Gap note + digest is v1; an LLM
   "what you learned while away" bridge is listed as future work.
 - **Old stories switching modes.** Handled by the conversion path of
@@ -412,6 +439,5 @@ working — the switch stays off until milestone 5 exposes it.
 - LLM re-entry bridge for long-dormant NPCs.
 - Off-screen NPC life: a periodic cheap pass advancing absent NPCs' notes
   ("what were you doing meanwhile?").
-- Relevance gating to skip obviously-idle NPCs.
 - Per-NPC model/temperature overrides in the NPC minds panel.
 - Location "minds" (same narrative-document trick for places/factions).

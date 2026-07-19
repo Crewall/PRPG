@@ -35,6 +35,10 @@ export interface NpcRoundOutcome {
   notes?: string;
 }
 
+// Words too generic to identify a character on their own ("the barmaid" must
+// not match every "the" in a sentence).
+const GENERIC_NAME_WORDS = new Set(['the', 'old', 'young', 'big', 'little', 'guard', 'captain', 'lady', 'lord', 'sir', 'master', 'mister', 'miss', 'madam', 'brother', 'sister', 'father', 'mother', 'doctor', 'king', 'queen']);
+
 /** Does `text` mention this character (name, alias, or a distinctive name word)? */
 export function mentionsNpc(text: string, obj: Pick<MemoryObject, 'name' | 'aliases'>): boolean {
   if (!text) return false;
@@ -47,7 +51,7 @@ export function mentionsNpc(text: string, obj: Pick<MemoryObject, 'name' | 'alia
     // Multiword names also match by their distinctive words ("Guard Captain
     // Held" → "held") — a false positive only costs one NPC call, and a miss
     // self-heals next round via the narration mention.
-    for (const word of n.split(/\s+/)) if (word.length >= 3) needles.add(word);
+    for (const word of n.split(/\s+/)) if (word.length >= 3 && !GENERIC_NAME_WORDS.has(word)) needles.add(word);
   }
   for (const needle of needles) {
     const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
