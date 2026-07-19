@@ -320,14 +320,28 @@ export class TurnPipeline {
 
       // NPC Story Mode: persist each NPC's mind. Presence for everyone in the
       // scene (skipped NPCs still witnessed the round); rewritten notes and
-      // the acted-marker only for NPCs that actually engaged.
+      // the acted-marker only for NPCs that actually engaged. A roster id
+      // whose character object no longer exists (deleted in the memory
+      // browser, stale after a merge) would violate npc_profiles' FK — skip
+      // it AND heal the roster so it cannot fail every subsequent turn.
       if (npcMode && scene) {
+        stage = 'saving character minds';
         const updated: string[] = [];
+        const stale: string[] = [];
         for (const oid of scene.activeNpcIds) {
           if (oid === story.settings.playerObjectId) continue;
+          if (!this.deps.memory.getObject(oid)) {
+            stale.push(oid);
+            continue;
+          }
           this.deps.npcProfiles.upsert(storyId, oid, { lastPresentTurnIdx: turn.index });
         }
+        if (stale.length) {
+          logger.warn('removing stale character ids from the scene roster', { storyId, sceneId: scene.id, stale });
+          stories.setActiveNpcs(scene.id, scene.activeNpcIds.filter((oid) => !stale.includes(oid)));
+        }
         for (const r of round) {
+          if (!this.deps.memory.getObject(r.objectId)) continue; // deleted mid-turn
           const acted = !r.weave.skipped && !r.weave.error && !!(r.weave.dialogue || r.weave.intent);
           const patch: { notes?: string; lastActedTurnIdx?: number } = {};
           if (r.notes) patch.notes = truncateToTokens(r.notes, story.settings.npcStories.notesTokens);

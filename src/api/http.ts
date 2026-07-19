@@ -256,6 +256,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
 
   server.delete('/api/memory/objects/:oid', async (req) => {
     const { oid } = req.params as { oid: string };
+    // Deleting a character that is in the current scene would leave a stale
+    // roster id behind (and a dangling NPC session) — demote it first.
+    const obj = memory.getObject(oid);
+    if (obj) demoteNpc(npcDeps, obj.storyId, oid);
     memory.deleteObject(oid);
     return { ok: true };
   });

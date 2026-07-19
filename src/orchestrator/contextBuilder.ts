@@ -425,21 +425,43 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       // Witnessed turns: completed turns whose presence stamp includes this NPC.
       // Turns from before presence stamping (no meta field) are skipped — the
       // digest/scene recap covers them.
-      const witnessed = stories
+      const completed = stories
         .recentTurns(story.id, 50)
-        .filter((t) => t.status === 'complete' && t.index < input.turnIndex)
+        .filter((t) => t.status === 'complete' && t.index < input.turnIndex);
+      const witnessed = completed
         .filter((t) => (t.meta.presentNpcIds as string[] | undefined)?.includes(npcObjectId))
         .slice(-s.presentTurns);
       const witnessedThisScene = witnessed.some((t) => t.sceneId === story.currentSceneId);
 
+      // The situational recap. An NPC standing in the scene perceives what is
+      // around them RIGHT NOW regardless of what they witnessed earlier — so
+      // the setting, the place, the people present and the scene's state are
+      // always included; only past events are presence-gated.
       const recapParts: string[] = [];
       const digest = summaries.getStoryDigest(story.id);
       if (digest?.content.trim()) {
-        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), 250)}`);
+        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), 400)}`);
+      } else if (story.settings.premise.trim()) {
+        // The digest lags early in a story — the premise anchors the world.
+        recapParts.push(`The world and situation of this story: ${truncateToTokens(story.settings.premise.trim(), 300)}`);
       }
+      const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
+      if (scene?.locationObjectId) {
+        const loc = memory.getObjectView(scene.locationObjectId, { kind: 'perception' }, { maxTokens: 250 });
+        if (loc && (loc.summary || loc.facts.length)) recapParts.push(`Where you are: ${renderObjectView(loc)}`);
+      }
+      const others = (scene?.activeNpcIds ?? [])
+        .filter((oid) => oid !== npcObjectId && oid !== story.settings.playerObjectId)
+        .map((oid) => memory.getObject(oid)?.name)
+        .filter((n): n is string => !!n);
+      if (others.length) recapParts.push(`Also present here: ${others.join(', ')} — and the player's character.`);
       const sceneSummary = story.currentSceneId ? summaries.getSceneSummary(story.currentSceneId) : undefined;
-      if (witnessedThisScene && sceneSummary?.content.trim()) {
-        recapParts.push(`The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 300)}`);
+      if (sceneSummary?.content.trim()) {
+        recapParts.push(
+          witnessedThisScene
+            ? `The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 400)}`
+            : `The scene you find yourself in: ${truncateToTokens(sceneSummary.content.trim(), 400)}`,
+        );
       }
       const gap = input.lastPresentTurnIdx >= 0 ? input.turnIndex - 1 - input.lastPresentTurnIdx : 0;
       if (gap > 0) {
@@ -450,9 +472,19 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       if (recapParts.length) messages.push({ role: 'user', content: recapParts.join('\n\n') });
       if (witnessed.length) {
         const lines = witnessed.map(
-          (t) => `Player: ${truncateToTokens(t.playerInput || '(the scene opens)', 100)}\nWhat happened: ${truncateToTokens(t.narration, 150)}`,
+          (t) => `Player: ${truncateToTokens(t.playerInput || '(the scene opens)', 150)}\nWhat happened: ${truncateToTokens(t.narration, 250)}`,
         );
         messages.push({ role: 'user', content: `Recent moments you witnessed:\n\n${lines.join('\n\n')}` });
+      }
+      // The present moment: the latest narration describes the state of the
+      // scene the NPC is standing in — include it even without a presence
+      // stamp (they are here NOW), unless it is already in the witnessed list.
+      const lastTurn = completed.at(-1);
+      if (lastTurn?.narration && !witnessed.some((t) => t.id === lastTurn.id)) {
+        messages.push({
+          role: 'user',
+          content: `What is happening right now, around you:\n${truncateToTokens(lastTurn.narration, 350)}`,
+        });
       }
       messages.push({
         role: 'user',

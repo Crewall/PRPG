@@ -204,6 +204,43 @@ describe('NPC Story Mode', () => {
       expect(clamped.length).toBeLessThanOrEqual(10 * 4 + 2); // tokens×4 chars + ellipsis
     });
 
+    it('a stale roster id (deleted character) cannot fail the turn — and gets healed', async () => {
+      // Simulate a character deleted while still listed in the scene roster.
+      const scene = app.stories.getScene(app.stories.getStory(storyId)!.currentSceneId!)!;
+      app.stories.setActiveNpcs(scene.id, [...scene.activeNpcIds, 'ghost-deleted-id']);
+      const turn = await app.pipeline.run(storyId, 'Marta, hello.', emitter());
+      expect(turn?.status).toBe('complete'); // used to die with: FOREIGN KEY constraint failed
+      const healed = app.stories.getScene(scene.id)!;
+      expect(healed.activeNpcIds).not.toContain('ghost-deleted-id');
+      expect(healed.activeNpcIds).toEqual(expect.arrayContaining([martaId, tomId]));
+    });
+
+    it('a just-arrived NPC still gets the full situational recap', async () => {
+      await app.pipeline.run(storyId, 'Marta, pour one for Tom.', emitter());
+      // The story scribe would normally write this; simulate its output.
+      const sceneId = app.stories.getStory(storyId)!.currentSceneId!;
+      app.summaries.upsertSceneSummary(storyId, sceneId, 'The taproom is tense; a ledger has gone missing.', 0);
+      // A newcomer enters: present now, but witnessed nothing so far.
+      const newId = app.memory.createObject({ storyId, type: 'character', name: 'Newcomer', aliases: [], summary: '', salience: 0.5, status: 'active' }).id;
+      app.npcProfiles.upsert(storyId, newId, { personality: 'Curious drifter.', notes: '- just walked in' });
+      app.stories.addActiveNpc(sceneId, newId);
+      await app.pipeline.run(storyId, 'I nod at the door.', emitter());
+
+      const req = app.threadLog
+        .query(storyId, { role: 'npc' })
+        .filter((l) => l.direction === 'request')
+        .map((l) => l.payload as { system: string; messages: { content: string }[] })
+        .find((p) => p.system.includes('You are **Newcomer**'));
+      expect(req).toBeDefined();
+      const all = req!.messages.map((m) => m.content).join('\n');
+      // Present-tense situation is never presence-gated:
+      expect(all).toContain('The scene you find yourself in');
+      expect(all).toContain('ledger has gone missing');
+      expect(all).toContain('Also present here: Marta, Old Tom');
+      // The latest narration reaches them even without a presence stamp.
+      expect(all).toContain('What is happening right now');
+    });
+
     it('rewind restores the pre-turn notes', async () => {
       await app.pipeline.run(storyId, 'Marta, first.', emitter());
       const afterTurn1 = app.npcProfiles.get(martaId)!.notes;
