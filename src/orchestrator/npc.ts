@@ -101,6 +101,25 @@ export function enterOrCreateNpc(deps: NpcServiceDeps, storyId: string, name: st
   return promoteNpc(deps, storyId, obj.id) ? obj : undefined;
 }
 
+/**
+ * Manual "rebuild from story" (the dossier's ⟳ control): re-run the
+ * mode-appropriate mind-builder for one character, deliberately refreshing
+ * what exists. Structured mode → npc_dossier (facts + portrait, parse-first);
+ * NPC Story Mode → npc_seed with force (personality + notes rewritten).
+ */
+export function rebuildNpcMind(deps: NpcServiceDeps, storyId: string, objectId: string): boolean {
+  const story = deps.stories.getStory(storyId);
+  const obj = deps.memory.getObject(objectId);
+  if (!story || !obj || obj.storyId !== storyId) return false;
+  if (story.settings.npcStories.enabled) {
+    if (!deps.npcProfiles.get(objectId)) deps.npcProfiles.upsert(storyId, objectId, {});
+    deps.jobs.enqueue('npc_seed', { storyId, payload: { objectId, force: true } });
+  } else {
+    deps.jobs.enqueue('npc_dossier', { storyId, payload: { objectId } });
+  }
+  return true;
+}
+
 /** npc_exit directive: resolve by name and demote. */
 export function npcExit(deps: NpcServiceDeps, storyId: string, name: string): boolean {
   const obj = resolveNpc(deps, storyId, name);

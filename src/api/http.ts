@@ -6,7 +6,7 @@ import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
 import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
-import { promoteNpc, demoteNpc, enterOrCreateNpc } from '../orchestrator/npc.ts';
+import { promoteNpc, demoteNpc, enterOrCreateNpc, rebuildNpcMind } from '../orchestrator/npc.ts';
 import { mergeMemoryObjects, enqueueMemoryRescan } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
@@ -256,6 +256,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
 
   server.delete('/api/memory/objects/:oid', async (req) => {
     const { oid } = req.params as { oid: string };
+    // Deleting a character that is in the current scene would leave a stale
+    // roster id behind (and a dangling NPC session) — demote it first.
+    const obj = memory.getObject(oid);
+    if (obj) demoteNpc(npcDeps, obj.storyId, oid);
     memory.deleteObject(oid);
     return { ok: true };
   });
@@ -482,6 +486,17 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   server.post('/api/stories/:id/npcs/:oid/demote', async (req) => {
     const { id, oid } = req.params as { id: string; oid: string };
     demoteNpc(npcDeps, id, oid);
+    return { ok: true };
+  });
+
+  // Manual "rebuild from story" (the dossier's ⟳ control): re-run the
+  // mode-appropriate mind-builder for one character, focused parse-first.
+  server.post('/api/stories/:id/npcs/:oid/rebuild', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    if (!rebuildNpcMind(npcDeps, id, oid)) {
+      reply.code(404);
+      return { error: 'character not found' };
+    }
     return { ok: true };
   });
 

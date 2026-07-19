@@ -208,21 +208,29 @@ Built in `contextBuilder.ts` as a new `forNpcRound(story, npcObjectId, opts)`
   or plans for the narrator."*
 - Reply schema (see §6).
 
-**Messages** (one user message, assembled mechanically):
+**Messages** (assembled mechanically). Design rule: an NPC standing in the
+scene perceives what is around them RIGHT NOW regardless of what they
+witnessed earlier — the setting, the place, the people present and the
+scene's state are ALWAYS included; only past events are presence-gated.
 
-1. *Recap* — `## The story as you know it`:
-   - story digest, truncated to ~250 tk, framed "as you would plausibly
-     know it" (same framing `forNpc` uses today);
-   - current scene summary (~300 tk) **only if** the NPC has been present in
-     this scene (its id appears in a `presentNpcIds` meta of any turn of the
-     scene, or it is in `activeNpcIds` now);
+1. *Situational recap* (one message):
+   - story digest (~400 tk, "as you would plausibly know it"), or the story
+     **premise** as fallback while the digest still lags;
+   - **where you are**: the scene location's perception-scope view;
+   - **who else is present**: names of the other roster NPCs + the player;
+   - current scene summary (~400 tk) — framed "as you have witnessed it"
+     when the NPC saw the scene, "the scene you find yourself in" when they
+     just arrived (included either way);
    - gap note when `lastPresentTurnIdx < turn.index - 1`:
-     `"You were elsewhere for the last N exchanges (since <formatGameClock>)."`
+     `"You were elsewhere for the last N exchanges…"`.
 2. *Recent moments you witnessed* — the last `presentTurns` completed turns
    whose `meta.presentNpcIds` contains this NPC (player input + narration,
-   each truncated ~150 tk). Turns without presence meta are skipped.
-3. *This round* —
-   `The player just said or did: <input>` +
+   each truncated ~250 tk). Turns without presence meta are skipped.
+3. *What is happening right now* — the latest completed narration, included
+   even without a presence stamp (they are here now); skipped only when it
+   already appears in the witnessed list.
+4. *This round* —
+   `The player now says or does: <input>` +
    `React as {{name}}: what do you say aloud (if anything), and what do you
    do or intend to do? Then return your updated private notes. Reply as JSON.`
 
@@ -339,8 +347,30 @@ storyteller's PC section keeps using `getObjectView(playerObjectId,
 GET  /api/stories/:id/npc-profiles          → [{ objectId, name, personality, notes, lastPresentTurnIdx }]
 PUT  /api/npc-profiles/:objectId            { personality?, notes? }   → updated row
 POST /api/stories/:id/npcs/enter            { name }  → find-or-create the character and promote (both modes)
+POST /api/stories/:id/npcs/:oid/rebuild     → focused mind rebuild: npc_dossier (default mode) / npc_seed force (this mode)
 POST /api/stories/:id/memory/rescan         { turns? } → re-run the memory scribe over the last N completed turns
 ```
+
+### The dossier fix (both modes)
+
+The general memory scribe is a per-turn, all-entities extractor with a
+20-facts-per-turn clamp — a rich character introduction competing with the
+rest of the turn gets shredded to snippets. The fix is a **focused
+single-character pass** (`npc_dossier`, run at promotion and via the
+dossier's "⟳ rebuild from story" button):
+
+- it PARSES the **verbatim recent story text** (~3000 tk) with the one
+  character as its only subject, then invents only what remains;
+- it gets its own cap (40 facts), so a full sheet fits in one pass;
+- it also writes a **prose portrait** (100–250 words, the storyteller's own
+  descriptive language kept nearly verbatim) into `npc_profiles.personality`
+  — because atomizing prose into facts is inherently lossy, the portrait
+  carries the texture while the facts carry the disclosure machinery. The
+  portrait leads the NPC's consult persona and is player-editable.
+
+The dossier modal is fully **editable**: portrait textarea, one-line summary
+(✎), inline fact editing (content/category/level/tier), fact delete (soft —
+history kept), and manual fact add.
 Manual edits are journaled to `thread_log` with `agent_role='user'` (same
 convention as manual memory edits).
 

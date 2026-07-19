@@ -372,11 +372,20 @@ async function renderPlay(storyId) {
   // Character/object dossier: the full fact sheet with sorting and filtering
   // by tier, visibility level and category — plus (debug) what this NPC KNOWS
   // about the world, straight from the recorded knowledge links.
+  // The dossier modal currently on screen, if any — so a finished rebuild
+  // (memory.updated / npc.profile.updated) can refresh it in place.
+  let openDossier = null; // { oid, reopen }
+  function refreshDossierIfOpen(objectIds) {
+    if (openDossier && (!objectIds || objectIds.includes(openDossier.oid))) openDossier.reopen();
+  }
+
   async function showDossier(oid) {
     const scope = debug ? 'storyteller' : 'player';
     let view;
     try { view = await api.get(`/api/memory/objects/${oid}?scope=${scope}&maxFacts=500`); } catch { return; }
     const facts = (view?.facts) || [];
+    let profile = null;
+    try { profile = (await api.get(`/api/stories/${storyId}/npc-profiles`)).find((p) => p.objectId === oid) || null; } catch {}
     let knowledge = null;
     try {
       const k = await api.get(`/api/stories/${storyId}/npcs/${oid}/knowledge`);
@@ -385,9 +394,48 @@ async function renderPlay(storyId) {
 
     const TIER_ORD = { major: 0, mid: 1, minor: 2 };
     const LVL_ORD = { visible: 0, known: 1, secret: 2, hidden: 3 };
+    const LEVELS = ['visible', 'known', 'secret', 'hidden'];
+    const TIERS = ['major', 'mid', 'minor'];
     const cats = [...new Set(facts.map((f) => f.category))].sort();
     const active = { tier: new Set(), lvl: new Set(), cat: new Set() }; // empty set = no filter
     let sortBy = 'tier';
+    const sel = (values, val) => h('select', {}, ...values.map((v) => h('option', { value: v, ...(v === val ? { selected: true } : {}) }, v)));
+
+    // One fact row: display with ✎/× controls; ✎ swaps to an inline editor.
+    function factRow(f) {
+      const row = h('div', { class: 'fact' });
+      function show() {
+        row.replaceChildren(
+          h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
+          h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
+          h('span', { class: 'fcat' }, f.category + (f.subcategory ? '/' + f.subcategory : '')),
+          h('span', {}, f.content),
+          h('button', { class: 'link', title: 'edit this fact', onclick: edit }, '✎'),
+          h('button', { class: 'link', title: 'delete this fact', onclick: del }, '×'));
+      }
+      function del() {
+        if (!confirm('Delete this fact?')) return;
+        api.del(`/api/memory/facts/${f.id}`)
+          .then(() => { facts.splice(facts.indexOf(f), 1); renderList(); })
+          .catch((e) => alert('delete failed: ' + e.message));
+      }
+      function edit() {
+        const content = h('textarea', { rows: '2', style: 'flex:1 1 100%' }); content.value = f.content;
+        const cat = h('input', { value: f.category, style: 'width:9em' });
+        const lvl = sel(LEVELS, f.detailLevel);
+        const tier = sel(TIERS, f.tier || 'mid');
+        row.replaceChildren(content, h('div', { class: 'row', style: 'gap:6px' }, cat, lvl, tier,
+          h('button', { class: 'link', onclick: async () => {
+            try {
+              const updated = await api.patch(`/api/memory/facts/${f.id}`, { content: content.value, category: cat.value.trim() || f.category, detailLevel: lvl.value, tier: tier.value });
+              Object.assign(f, updated); renderList();
+            } catch (e) { alert('save failed: ' + e.message); }
+          } }, 'save'),
+          h('button', { class: 'link', onclick: show }, 'cancel')));
+      }
+      show();
+      return row;
+    }
 
     const list = h('div', { class: 'dossier-list' });
     function renderList() {
@@ -403,11 +451,7 @@ async function renderPlay(storyId) {
         : t(a) - t(b) || a.category.localeCompare(b.category));
       list.replaceChildren(
         h('div', { class: 'sub' }, `${kept.length} of ${facts.length} fact${facts.length === 1 ? '' : 's'}`),
-        ...(kept.length ? kept.map((f) => h('div', { class: 'fact' },
-          h('span', { class: `lvl ${f.detailLevel}` }, f.detailLevel),
-          h('span', { class: `tier ${f.tier || 'mid'}` }, f.tier || 'mid'),
-          h('span', { class: 'fcat' }, f.category + (f.subcategory ? '/' + f.subcategory : '')),
-          h('span', {}, f.content))) : [h('div', { class: 'empty' }, facts.length ? 'Nothing matches the filters.' : 'Nothing known yet.')]));
+        ...(kept.length ? kept.map(factRow) : [h('div', { class: 'empty' }, facts.length ? 'Nothing matches the filters.' : 'Nothing known yet.')]));
     }
     function chipRow(values, key) {
       return h('div', { class: 'filter-row' }, ...values.map((v) => {
@@ -420,19 +464,72 @@ async function renderPlay(storyId) {
       ...[['tier', 'sort: importance'], ['category', 'sort: category'], ['level', 'sort: visibility']].map(([v, lbl]) => h('option', { value: v }, lbl)));
     renderList();
 
-    const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
+    // Add a fact by hand.
+    const addContent = h('textarea', { rows: '2', placeholder: 'New fact…' });
+    const addCat = h('input', { value: 'personality', style: 'width:9em', title: 'category' });
+    const addLvl = sel(LEVELS, 'known');
+    const addTier = sel(TIERS, 'mid');
+    const addForm = h('details', { class: 'quickadd' }, h('summary', {}, '+ Add fact'), addContent,
+      h('div', { class: 'row', style: 'gap:6px' }, addCat, addLvl, addTier,
+        h('button', { class: 'link', onclick: async () => {
+          if (!addContent.value.trim()) return;
+          try {
+            const created = await api.post(`/api/memory/objects/${oid}/facts`, { content: addContent.value.trim(), category: addCat.value.trim() || 'notes', detailLevel: addLvl.value, tier: addTier.value });
+            facts.push(created); addContent.value = ''; renderList();
+          } catch (e) { alert('add failed: ' + e.message); }
+        } }, 'add')));
+
+    // Prose portrait: the storyteller's description preserved near-verbatim
+    // (built by ⟳ rebuild), editable — this is where the richness lives that
+    // atomic facts can't hold.
+    const portraitTa = h('textarea', { rows: '5', placeholder: '(no portrait yet — press "⟳ rebuild from story" to write one from the story text)' });
+    portraitTa.value = profile?.personality || '';
+    const portraitStatus = h('span', { class: 'sub' });
+    const portraitBlock = h('div', {},
+      h('div', { class: 'mem-type' }, 'Portrait (prose — editable)'), portraitTa,
+      h('div', { class: 'row', style: 'gap:8px' },
+        h('button', { class: 'link', onclick: async () => {
+          portraitStatus.textContent = 'saving…';
+          try { await api.put(`/api/npc-profiles/${oid}`, { personality: portraitTa.value }); portraitStatus.className = 'sub ok'; portraitStatus.textContent = '✓'; }
+          catch (e) { portraitStatus.className = 'sub err'; portraitStatus.textContent = '✗ ' + e.message; }
+        } }, 'save portrait'), portraitStatus));
+
+    // Rebuild: a focused AI pass re-reads the recent story text and rewrites
+    // this character's portrait + fact sheet. The modal refreshes itself when
+    // the background job finishes (memory.updated / npc.profile.updated).
+    const rebuildBtn = h('button', { class: 'link', title: 'Re-read the recent story text and rebuild this character\'s portrait and fact sheet. Runs in the background; the dossier refreshes when done.' }, '⟳ rebuild from story');
+    rebuildBtn.addEventListener('click', async () => {
+      rebuildBtn.textContent = '⟳ rebuilding…'; rebuildBtn.disabled = true;
+      try { await api.post(`/api/stories/${storyId}/npcs/${oid}/rebuild`); }
+      catch (e) { alert('rebuild failed: ' + e.message); rebuildBtn.textContent = '⟳ rebuild from story'; rebuildBtn.disabled = false; }
+    });
+
+    // Summary: one-line description, edited via a simple prompt.
+    const summaryEl = h('div', { class: 'mem-summary' }, view?.summary || '(no summary)');
+    const summaryEdit = h('button', { class: 'link', title: 'edit the one-line summary', onclick: async () => {
+      const next = prompt('Character summary:', view?.summary || '');
+      if (next === null) return;
+      try { await api.patch(`/api/memory/objects/${oid}`, { summary: next }); view.summary = next; summaryEl.textContent = next || '(no summary)'; }
+      catch (e) { alert('save failed: ' + e.message); }
+    } }, '✎');
+
+    const close = () => { openDossier = null; modal.remove(); };
+    const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) close(); } },
       h('div', { class: 'modal dossier' },
-        h('h3', {}, view?.name || 'Unknown'),
-        view?.summary ? h('div', { class: 'mem-summary' }, view.summary) : null,
+        h('h3', {}, view?.name || 'Unknown', ' ', rebuildBtn),
+        h('div', { class: 'row', style: 'gap:6px' }, summaryEl, summaryEdit),
+        portraitBlock,
         facts.length ? h('div', { class: 'filter-bar' }, chipRow(['major', 'mid', 'minor'], 'tier'), chipRow(['visible', 'known', 'secret', 'hidden'], 'lvl'), cats.length > 1 ? chipRow(cats, 'cat') : null, sortSel) : null,
         list,
+        addForm,
         knowledge ? h('div', { class: 'knows' },
           h('div', { class: 'mem-type' }, `What ${view?.name || 'they'} knows about the world`),
           ...knowledge.map((k) => h('div', { class: 'fact' },
             h('span', { class: `tier ${k.tier || 'mid'}` }, k.tier || 'mid'),
             h('span', { class: 'fcat' }, k.objectName),
             h('span', {}, k.content + (k.distorted ? '  ⚠ believes a distortion' : '')))) ) : null,
-        h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
+        h('button', { class: 'ghost', onclick: close }, 'Close')));
+    openDossier = { oid, reopen: () => { modal.remove(); showDossier(oid); } };
     document.body.append(modal);
   }
 
@@ -904,8 +1001,8 @@ async function renderPlay(storyId) {
         if (!input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
         current = null; setBusy(false); break;
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
-      case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
-      case 'npc.profile.updated': if (m.storyId === storyId && activeTab === 'minds') renderDrawer(); break;
+      case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
+      case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
