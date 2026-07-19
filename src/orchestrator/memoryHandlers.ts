@@ -1,6 +1,7 @@
 import type { Job } from '../db/stores/jobStore.ts';
 import type { Row } from '../db/db.ts';
 import type { HandlerDeps } from './handlers.ts';
+import { renderRecentStory } from './handlers.ts';
 import type { JobHandler } from './postTurn.ts';
 import { ScribeMemory } from '../agents/scribeMemory.ts';
 import type { MemoryDelta } from '../agents/scribeMemory.ts';
@@ -10,6 +11,7 @@ import { normalizeName } from '../db/stores/memoryStore.ts';
 import { logger } from '../util/logger.ts';
 
 const MAX_NEW_FACTS_PER_TURN = 20; // doc 05 budget
+const DOSSIER_MAX_FACTS = 40; // focused single-character pass — a whole sheet at once
 const MAINTENANCE_EVERY = 10; // M turns (doc 04/05)
 
 function scribeMemoryAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
@@ -97,8 +99,14 @@ export function createScribeMemoryHandler(deps: HandlerDeps): JobHandler {
   };
 }
 
-/** Apply a MemoryDelta with trust-but-verify post-processing. Returns affected object ids. */
-export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: string | null, delta: MemoryDelta): string[] {
+/**
+ * Apply a MemoryDelta with trust-but-verify post-processing. Returns affected
+ * object ids. `opts.maxFacts` overrides the per-turn clamp — the focused
+ * dossier pass writes a whole character sheet in one delta and gets more room
+ * than a general turn extraction.
+ */
+export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: string | null, delta: MemoryDelta, opts: { maxFacts?: number } = {}): string[] {
+  const maxFacts = opts.maxFacts ?? MAX_NEW_FACTS_PER_TURN;
   // In-game clock stamp for this batch of facts: the clock as of the source
   // turn when known, else the story's current clock (archival passes).
   // (deps.stories is optional-chained: unit tests build partial deps.)
@@ -128,7 +136,7 @@ export function applyMemoryDelta(deps: HandlerDeps, storyId: string, turnId: str
     // 2. New facts (clamped), resolving tempIds and superseding.
     let added = 0;
     for (const nf of delta.newFacts) {
-      if (added >= MAX_NEW_FACTS_PER_TURN) break;
+      if (added >= maxFacts) break;
       const objectId = tempMap.get(nf.objectId) ?? (deps.memory.getObject(nf.objectId) ? nf.objectId : undefined);
       if (!objectId) continue; // unresolved reference — skip
 
@@ -253,25 +261,29 @@ export function createNpcDossierHandler(deps: HandlerDeps): JobHandler {
     if (!story || !obj) return;
 
     const view = deps.memory.getObjectView(objectId, { kind: 'storyteller' }, { maxTokens: 600 });
-    const recentTurns = deps.stories
-      .recentTurns(storyId, 3)
-      .filter((t) => t.status === 'complete')
-      .map((t) => `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`)
-      .join('\n\n');
 
     const agent = dossierAgent(deps, storyId);
-    const delta: MemoryDelta = await agent.dossier({
+    const reply = await agent.dossier({
       name: obj.name,
       objectId,
       currentSheet: view ? renderObjectView(view) : obj.name,
+      currentPortrait: deps.npcProfiles.get(objectId)?.personality ?? '',
       premise: story.settings.premise,
       digest: deps.summaries.getStoryDigest(storyId)?.content ?? '',
       sceneSummary: story.currentSceneId ? deps.summaries.getSceneSummary(story.currentSceneId)?.content ?? '' : '',
-      recentTurns,
+      recentStory: renderRecentStory(deps.stories, storyId),
     });
     if (!deps.memory.getObject(objectId)) return; // deleted/rewound while generating
 
-    const affected = applyMemoryDelta(deps, storyId, null, delta);
+    // A single-character pass writes a whole sheet at once — give it more
+    // room than the general per-turn extraction clamp.
+    const affected = applyMemoryDelta(deps, storyId, null, reply, { maxFacts: DOSSIER_MAX_FACTS });
+    // The prose portrait: the storyteller's description preserved (nearly)
+    // verbatim, stored on the character's profile and editable by the player.
+    if (reply.portrait.trim()) {
+      deps.npcProfiles.upsert(storyId, objectId, { personality: reply.portrait.trim() });
+      deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: [objectId] });
+    }
     if (affected.length) deps.events.emit({ t: 'memory.updated', storyId, objectIds: affected });
   };
 }

@@ -6,6 +6,7 @@ import { formatGameClock } from '../util/gameClock.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import type { SummaryStore } from '../db/stores/summaryStore.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
+import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import { searchFacts, renderRetrieval } from '../memory/retrieval.ts';
 import { renderObjectView } from '../memory/model.ts';
 import type { ContextPlan } from '../agents/contextPlanner.ts';
@@ -174,6 +175,8 @@ export interface ContextBuilderDeps {
   stories: StoryStore;
   summaries: SummaryStore;
   memory: MemoryStore;
+  /** Prose portraits/minds per character (npc_profiles). Optional: older callers/tests omit it. */
+  npcProfiles?: NpcProfileStore;
   /** Optional editable verbosity strings (keyed "1".."5"); falls back to VERBOSITY_STYLE. */
   verbosityOverride?: () => Record<string, string>;
 }
@@ -367,6 +370,10 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       const name = view?.name ?? 'the character';
 
       let knowledge = view ? renderPersonaKnowledge(view) : '(You know only what is obvious about yourself.)';
+      // The prose portrait (npc_dossier's parse-first capture, player-editable):
+      // richer than atomized facts, so the persona leads with it when present.
+      const portrait = deps.npcProfiles?.get(npcObjectId)?.personality.trim();
+      if (portrait) knowledge = `### Your portrait — who you are\n${truncateToTokens(portrait, 400)}\n\n### What is recorded about you\n${knowledge}`;
       const worldKnown = memory.npcKnowledge(story.id, npcObjectId).filter((k) => k.objectId !== npcObjectId);
       if (worldKnown.length) {
         const lines = worldKnown.map((k) => `- (${k.fact.id}) ${k.objectName}: ${k.content}`);

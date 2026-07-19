@@ -69,7 +69,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const settingsService = createSettingsService(settings, config);
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
   const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
-  const contexts = createContextBuilder({ stories, summaries, memory, verbosityOverride: () => settingsService.verbosityOverride() });
+  const contexts = createContextBuilder({ stories, summaries, memory, npcProfiles, verbosityOverride: () => settingsService.verbosityOverride() });
   const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).

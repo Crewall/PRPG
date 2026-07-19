@@ -78,14 +78,24 @@ export interface ScribeMemoryInput {
   roster?: string; // compact list of ALL objects (id/type/name/aliases) — for entity resolution
 }
 
+// Dossier output: the fact delta PLUS a prose portrait — the storyteller's
+// description of the character preserved nearly verbatim, because atomizing a
+// rich portrait into facts is inherently lossy (the facts carry the
+// disclosure machinery; the portrait carries the texture).
+export const DossierReply = MemoryDelta.extend({
+  portrait: z.string().default(''),
+});
+export type DossierReply = z.infer<typeof DossierReply>;
+
 export interface DossierInput {
   name: string;
   objectId: string;
   currentSheet: string; // rendered storyteller-scope view of the character
+  currentPortrait: string; // existing prose portrait, if any
   premise: string;
   digest: string;
   sceneSummary: string;
-  recentTurns: string;
+  recentStory: string; // VERBATIM recent turns — the primary source to parse
 }
 
 /**
@@ -113,11 +123,12 @@ export class ScribeMemory extends Agent {
   }
 
   /**
-   * Character dossier at NPC elevation (feature: promoted NPCs get a full
-   * sheet). Fills only the gaps — dedupe downstream drops anything that is
-   * already recorded.
+   * Character dossier — at NPC elevation and on the manual "rebuild from
+   * story" action. A single-character focused pass: it PARSES the verbatim
+   * story text first (nothing competes with this character for fact slots),
+   * then fills the gaps. Dedupe downstream drops anything already recorded.
    */
-  async dossier(input: DossierInput, opts: { turnId?: string } = {}): Promise<MemoryDelta> {
+  async dossier(input: DossierInput, opts: { turnId?: string } = {}): Promise<DossierReply> {
     const system = renderPrompt('npc-dossier', { name: input.name, objectId: input.objectId });
     const ctx: BuiltContext = {
       system,
@@ -126,14 +137,15 @@ export class ScribeMemory extends Agent {
           role: 'user',
           content:
             `## What is already recorded about ${input.name} (do NOT repeat these)\n${input.currentSheet || '(nothing yet)'}\n\n` +
+            `## Their current portrait (rewrite it to cover everything the story now shows)\n${input.currentPortrait || '(none yet)'}\n\n` +
             `## Story premise\n${input.premise || '(none)'}\n\n` +
-            `## Story so far\n${input.digest || '(the story just began)'}\n\n` +
-            `## Current scene\n${input.sceneSummary || '(scene just opened)'}\n\n` +
-            `## Recent turns\n${input.recentTurns || '(none)'}`,
+            `## Story so far (summary)\n${input.digest || '(the story just began)'}\n\n` +
+            `## Current scene (summary)\n${input.sceneSummary || '(scene just opened)'}\n\n` +
+            `## The most recent story text (VERBATIM — your primary source)\n${input.recentStory || '(none)'}`,
         },
       ],
     };
-    return this.invokeJson(ctx, MemoryDelta, opts);
+    return this.invokeJson(ctx, DossierReply, opts);
   }
 
   /** Cleanup pass 1: spot duplicate entities in the full object roster. */

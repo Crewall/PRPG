@@ -7,7 +7,7 @@ import { createApp } from '../src/app.ts';
 import type { App } from '../src/app.ts';
 import { StorySettings } from '../src/domain.ts';
 import { mentionsNpc, shouldInvokeNpc } from '../src/orchestrator/npcRound.ts';
-import { npcEnter, enterOrCreateNpc } from '../src/orchestrator/npc.ts';
+import { npcEnter, enterOrCreateNpc, rebuildNpcMind } from '../src/orchestrator/npc.ts';
 import { enqueueMemoryRescan } from '../src/orchestrator/memoryHandlers.ts';
 import type { NpcProfile } from '../src/db/stores/npcProfileStore.ts';
 import type { TurnEmitter } from '../src/orchestrator/turnPipeline.ts';
@@ -274,6 +274,15 @@ describe('NPC Story Mode', () => {
       // Re-adding the same name resolves instead of duplicating.
       const again = enterOrCreateNpc(deps, plain.id, 'brother aldous');
       expect(again?.id).toBe(obj!.id);
+    });
+
+    it('rebuild in NPC Story Mode force-reseeds an existing mind', async () => {
+      const deps = { stories: app.stories, agents: app.agents, memory: app.memory, npcProfiles: app.npcProfiles, jobs: app.jobs, registry: app.registry, events: app.events };
+      expect(app.npcProfiles.get(martaId)!.personality).toContain('Sharp-tongued');
+      expect(rebuildNpcMind(deps, storyId, martaId)).toBe(true);
+      await app.worker.drain();
+      // modeDriver's seed branch answered — the old mind was deliberately replaced.
+      expect(app.npcProfiles.get(martaId)!.personality).toContain('Gruff gatekeeper');
     });
 
     it('npc_seed converts an existing fact sheet mechanically (no LLM)', async () => {

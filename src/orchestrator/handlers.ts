@@ -119,6 +119,24 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
 }
 
 /**
+ * The verbatim recent story text for character-building passes (npc_seed,
+ * npc_dossier): as many completed turns as fit `maxTokens`, newest kept when
+ * over budget, presented chronologically. Summaries lag and can be thin —
+ * this is what "parse the story first" reads.
+ */
+export function renderRecentStory(stories: StoryStore, storyId: string, maxTokens = 3000): string {
+  const blocks: string[] = [];
+  let used = 0;
+  for (const t of stories.recentTurns(storyId, 30).filter((x) => x.status === 'complete').reverse()) {
+    const block = `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`;
+    used += estimateTokens(block);
+    if (blocks.length && used > maxTokens) break;
+    blocks.push(block);
+  }
+  return blocks.reverse().join('\n\n');
+}
+
+/**
  * npc_seed handler (NPC Story Mode, docs/09): give a profile-less NPC a mind.
  * Two paths:
  *  - conversion (no LLM): the object already has memory facts (story switched
@@ -135,8 +153,11 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
     const story = deps.stories.getStory(storyId);
     const obj = deps.memory.getObject(objectId);
     if (!story || !obj) return;
+    // force=true (the manual "rebuild from story" action) refreshes an
+    // existing mind deliberately; the default path never clobbers one.
+    const force = !!job.payload.force;
     const existing = deps.npcProfiles.get(objectId);
-    if (existing?.personality.trim()) return; // already has a mind — never clobber
+    if (!force && existing?.personality.trim()) return; // already has a mind — never clobber
 
     // Conversion path: fold an existing fact sheet into the narrative profile.
     const view = deps.memory.getObjectView(objectId, { kind: 'npc', npcObjectId: objectId });
@@ -153,7 +174,7 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
       if (personaLines.length || noteLines.length) {
         deps.npcProfiles.upsert(storyId, objectId, {
           personality: personaLines.join('\n') || (view.summary ? `- ${view.summary}` : ''),
-          ...(existing?.notes.trim() ? {} : { notes: noteLines.join('\n') }),
+          ...(!force && existing?.notes.trim() ? {} : { notes: noteLines.join('\n') }),
         });
         deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: [objectId] });
         return;
@@ -169,31 +190,22 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
     const bound = deps.registry.getProfile(profileName);
     const session = deps.agents.ensureSession(storyId, 'npc', profileName, objectId);
     const agent = new NpcAgent({ session, bound, threadLog: deps.threadLog, storyId });
-    const SEED_STORY_TOKENS = 3000;
-    const turnBlocks: string[] = [];
-    let used = 0;
-    for (const t of deps.stories.recentTurns(storyId, 30).filter((x) => x.status === 'complete').reverse()) {
-      const block = `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`;
-      used += estimateTokens(block);
-      if (turnBlocks.length && used > SEED_STORY_TOKENS) break;
-      turnBlocks.push(block);
-    }
     const system = renderPrompt('npc-story-seed', {
       name: obj.name,
       premise: story.settings.premise || '(none given)',
       digest: deps.summaries.getStoryDigest(storyId)?.content || '(the story is just beginning)',
       sceneSummary: (story.currentSceneId ? deps.summaries.getSceneSummary(story.currentSceneId)?.content : '') || '(no scene summary yet)',
-      recentStory: turnBlocks.reverse().join('\n\n') || '(no story text yet)',
+      recentStory: renderRecentStory(deps.stories, storyId) || '(no story text yet)',
     });
     const seed = await agent.seed(
       { system, messages: [{ role: 'user', content: `Create the mind for ${obj.name}. Reply as JSON.` }] },
     );
     if (!deps.memory.getObject(objectId)) return; // deleted/rewound while generating
     const current = deps.npcProfiles.get(objectId);
-    if (current?.personality.trim()) return; // seeded/edited meanwhile — keep theirs
+    if (!force && current?.personality.trim()) return; // seeded/edited meanwhile — keep theirs
     deps.npcProfiles.upsert(storyId, objectId, {
       personality: seed.personality,
-      ...(current?.notes.trim() ? {} : { notes: seed.notes }),
+      ...(!force && current?.notes.trim() ? {} : { notes: seed.notes }),
     });
     deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: [objectId] });
   };
