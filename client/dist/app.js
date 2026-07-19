@@ -249,6 +249,8 @@ async function renderPlay(storyId) {
           s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
         toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
           !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
+        toggle('NPC story mode (narrative minds)', 'Replaces the structured memory system for NPCs: each present character acts every round from its own personality + private notes, and the storyteller weaves the replies. Memory extraction is paused while this is on.',
+          !!s.npcStories?.enabled, async (on) => { await patchSettings({ npcStories: { enabled: on } }); renderDrawer(); }),
         toggle('Salience system', 'Importance weighting & decay of memory objects.',
           s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
         budgetBlock,
@@ -495,15 +497,51 @@ async function renderPlay(storyId) {
   let activeTab = 'memory';
   async function renderDrawer() {
     const tabs = [['memory', 'Memory']];
+    // NPC Story Mode: each character's mind (personality + private notes) is a
+    // first-class, player-editable panel — the mode's replacement for the
+    // memory browser's NPC role.
+    if (story.settings?.npcStories?.enabled) tabs.unshift(['minds', 'NPC minds']);
     if (debug) tabs.push(['summaries', 'Summaries'], ['threads', 'Threads']);
-    if (!tabs.find((t) => t[0] === activeTab)) activeTab = 'memory';
+    if (!tabs.find((t) => t[0] === activeTab)) activeTab = tabs[0][0];
     const tabRow = h('div', { class: 'tabs' }, ...tabs.map(([k, label]) =>
       h('button', { class: 'tab' + (activeTab === k ? ' active' : ''), onclick: () => { activeTab = k; renderDrawer(); } }, label)));
     const body = h('div', { class: 'drawer-body' }, h('div', { class: 'empty' }, 'Loading…'));
     drawer.replaceChildren(tabRow, body);
-    if (activeTab === 'memory') await renderMemory(body);
+    if (activeTab === 'minds') await renderMinds(body);
+    else if (activeTab === 'memory') await renderMemory(body);
     else if (activeTab === 'summaries') await renderSummaries(body);
     else await renderThreads(body);
+  }
+
+  // ---- NPC minds (NPC Story Mode): view & repair each character's head. ----
+  async function renderMinds(body) {
+    body.replaceChildren();
+    let profiles = [];
+    try { profiles = await api.get(`/api/stories/${storyId}/npc-profiles`); } catch {}
+    if (!profiles.length) {
+      body.append(h('div', { class: 'empty' }, 'No character minds yet — they appear when a major character enters a scene.'));
+      return;
+    }
+    for (const p of profiles) {
+      const persona = h('textarea', { rows: '4', placeholder: '(personality is being seeded…)' }); persona.value = p.personality || '';
+      const notes = h('textarea', { rows: '6', placeholder: '(no notes yet — they write these themselves as they play)' }); notes.value = p.notes || '';
+      const status = h('span', { class: 'sub' });
+      const save = h('button', { class: 'link' }, 'save');
+      save.addEventListener('click', async () => {
+        status.textContent = 'saving…';
+        try { await api.put(`/api/npc-profiles/${p.objectId}`, { personality: persona.value, notes: notes.value }); status.className = 'sub ok'; status.textContent = '✓'; }
+        catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+      });
+      const details = h('div', { class: 'facts hidden' },
+        h('div', { class: 'sub' }, 'Personality (stable — who they are)'), persona,
+        h('div', { class: 'sub' }, 'Private notes (their own memory — they rewrite these each round they act)'), notes,
+        h('div', { class: 'row', style: 'gap:8px' }, save, status));
+      body.append(h('div', { class: 'mem-obj' },
+        h('div', { class: 'mem-head' },
+          h('span', { class: 'mem-name', onclick: () => details.classList.toggle('hidden') }, p.name),
+          h('span', { class: 'sub', onclick: () => details.classList.toggle('hidden') }, p.personality ? 'mind' : 'seeding…')),
+        details));
+    }
   }
 
   async function renderMemory(body) {
@@ -849,6 +887,7 @@ async function renderPlay(storyId) {
         current = null; setBusy(false); break;
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); break;
+      case 'npc.profile.updated': if (m.storyId === storyId && activeTab === 'minds') renderDrawer(); break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;

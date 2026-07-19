@@ -471,6 +471,38 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return { ok: true };
   });
 
+  // ---- NPC Story Mode: narrative profiles (docs/09). The player's window
+  // into — and repair tool for — each NPC's head. ----
+
+  server.get('/api/stories/:id/npc-profiles', async (req) => {
+    const { id } = req.params as { id: string };
+    return app.npcProfiles.listForStory(id).map((p) => ({
+      ...p,
+      name: app.memory.getObject(p.objectId)?.name ?? '(unknown)',
+    }));
+  });
+
+  server.put('/api/npc-profiles/:oid', async (req, reply) => {
+    const { oid } = req.params as { oid: string };
+    const body = z.object({ personality: z.string().optional(), notes: z.string().optional() }).parse(req.body);
+    const obj = app.memory.getObject(oid);
+    if (!obj) {
+      reply.code(404);
+      return { error: 'character not found' };
+    }
+    const updated = app.npcProfiles.upsert(obj.storyId, oid, body);
+    // The player is the game master of their own game — manual mind edits are
+    // journaled like manual memory edits, so the debug thread view shows them.
+    threadLog.log({
+      storyId: obj.storyId,
+      agentRole: 'user',
+      direction: 'request',
+      payload: { action: 'npc-profile-edit', objectId: oid, ...body },
+    });
+    app.events.emit({ t: 'npc.profile.updated', storyId: obj.storyId, objectIds: [oid] });
+    return { ...updated, name: obj.name };
+  });
+
   server.get('/api/system/settings', async () => app.settings.all());
 
   // ---- Settings: providers/keys, favourites, per-role models & params, prompts ----
