@@ -306,14 +306,14 @@ or `scribe_story` as fallback):
    `personality` ← facts in categories personality/voice/appearance,
    `notes` ← one bullet per remaining non-superseded fact the NPC knows
    about itself + `npcKnowledge` world facts. Deterministic, lossless enough.
-2. **Generation path:** otherwise one `invokeJson` call — inputs: name, story
-   digest, current scene summary, the narration of the turn that introduced
-   them; output `{ personality: string, notes: string }`. New prompt
-   `src/agents/prompts/npc-story-seed.md`: *"Invent a coherent, playable
-   character consistent with everything given; personality = 3–6 lines of
-   temperament/voice/manner/drives; notes = 5–12 first-person factual
-   bullets of what they know, want and feel at this moment. Do not
-   contradict anything established."*
+2. **Generation path:** otherwise one `invokeJson` call. The seeder **parses
+   the story first**: its inputs are the premise, story digest, scene
+   summary, and — most importantly — the **verbatim recent story text** (as
+   many completed turns as fit ~3000 tokens, newest kept). The prompt
+   (`npc-story-seed.md`) works in two explicit steps: STEP 1 comb the story
+   text for everything already established about the character (words,
+   actions, descriptions — canon, must match exactly); STEP 2 only then
+   invent what remains. Output `{ personality, notes }`, canon-first.
 
 Until the seed job lands, a profile-less NPC still plays: `forNpcRound`
 substitutes `personality: '(improvise a plausible personality from the story
@@ -338,16 +338,23 @@ storyteller's PC section keeps using `getObjectView(playerObjectId,
 ```
 GET  /api/stories/:id/npc-profiles          → [{ objectId, name, personality, notes, lastPresentTurnIdx }]
 PUT  /api/npc-profiles/:objectId            { personality?, notes? }   → updated row
+POST /api/stories/:id/npcs/enter            { name }  → find-or-create the character and promote (both modes)
+POST /api/stories/:id/memory/rescan         { turns? } → re-run the memory scribe over the last N completed turns
 ```
 Manual edits are journaled to `thread_log` with `agent_role='user'` (same
 convention as manual memory edits).
 
 **Client (`client/dist/app.js` — vanilla, no build step):**
 
-1. Story options: a toggle **"NPC minds: narrative stories"** wired exactly
-   like the existing `summaryDriven` toggle
+1. Story options: a toggle **"NPC story mode (narrative minds)"** wired
+   exactly like the existing `summaryDriven` toggle
    (`patchSettings({ npcStories: { enabled: on } })`), with a one-line
    explanation that this replaces the structured memory system for NPCs.
+   The Present bar has a **"+" control** to make any character major by
+   name (find-or-create + promote, works in both modes), and the Memory tab
+   has a **"re-scan turns"** button that re-runs the memory scribe over the
+   last few exchanges when a pass missed something (the near-duplicate
+   filter makes re-runs safe).
 2. An **"NPC minds"** drawer tab (shown whenever the mode is on, first in
    the tab row): each NPC's editable `personality` and `notes` with save.
    This is the player's window into (and repair tool for) each NPC's head —

@@ -86,6 +86,21 @@ export function npcEnter(deps: NpcServiceDeps, storyId: string, name: string): b
   return promoteNpc(deps, storyId, obj.id);
 }
 
+/**
+ * Manual "add major character" (the UI's + control): resolve by name, or
+ * create the roster object outright — in BOTH modes, since this is an explicit
+ * player decision (unlike the storyteller's npc_enter directive, which in the
+ * default mode defers creation to the memory scribe). Then promote, which
+ * queues the mode-appropriate mind-building job (npc_dossier / npc_seed).
+ */
+export function enterOrCreateNpc(deps: NpcServiceDeps, storyId: string, name: string): MemoryObject | undefined {
+  const trimmed = name.trim();
+  if (!trimmed || !deps.stories.getStory(storyId)) return undefined;
+  let obj = resolveNpc(deps, storyId, trimmed);
+  if (!obj) obj = deps.memory.createObject({ storyId, type: 'character', name: trimmed, aliases: [], summary: '', salience: 0.6, status: 'active' });
+  return promoteNpc(deps, storyId, obj.id) ? obj : undefined;
+}
+
 /** npc_exit directive: resolve by name and demote. */
 export function npcExit(deps: NpcServiceDeps, storyId: string, name: string): boolean {
   const obj = resolveNpc(deps, storyId, name);
