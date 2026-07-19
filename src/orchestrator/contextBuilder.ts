@@ -36,6 +36,33 @@ export interface StorytellerContextExtras {
   sections?: { heading: string; body: string; budgetTokens: number }[];
   /** Retrieval plan from the context_planner (summary-driven mode, feature 4). */
   plan?: ContextPlan;
+  /** NPC Story Mode: the round's proactive NPC replies (docs/09). */
+  npcRound?: NpcRoundForWeave[];
+}
+
+// NPC Story Mode: one present NPC's contribution to the round, phrased for the
+// storyteller. Exactly one of {acted, skipped, error} shapes applies:
+// dialogue/intent/innerState when the NPC was invoked; skipped=true when the
+// mechanical gate found nothing new for them; error when the call failed.
+export interface NpcRoundForWeave {
+  name: string;
+  dialogue?: string;
+  intent?: string;
+  innerState?: string;
+  skipped?: boolean;
+  error?: string;
+}
+
+// NPC Story Mode: everything forNpcRound needs beyond the stores — the NPC's
+// narrative profile and the turn being played. The runner (npcRound.ts)
+// fetches the profile so the builder stays store-agnostic about profiles.
+export interface NpcRoundContextInput {
+  personality: string;
+  notes: string;
+  lastPresentTurnIdx: number;
+  playerInput: string;
+  /** Index of the turn being generated (witnessed turns are strictly before it). */
+  turnIndex: number;
 }
 
 export interface NpcConsultContext {
@@ -71,6 +98,8 @@ export interface ContextBuilder {
   forStoryteller(story: Story, playerInput: string, extras?: StorytellerContextExtras): BuiltContext;
   /** Persona + NPC-scoped recap + situation for one consult (isolation boundary). */
   forNpc(story: Story, npcObjectId: string, consult: NpcConsultContext): BuiltContext;
+  /** NPC Story Mode: narrative profile + mechanically personalized excerpt for one proactive round (docs/09). */
+  forNpcRound(story: Story, npcObjectId: string, input: NpcRoundContextInput): BuiltContext;
   /** Extend a storyteller context with NPC replies (and any resolved actions) for a full REWRITE pass. */
   withNpcReplies(base: BuiltContext, draft: string, replies: NpcReplyForWeave[], resolutions?: ResolutionForWeave[]): BuiltContext;
   /** Extend a storyteller context with consult replies / resolved actions for a CONTINUATION pass (prior text already streamed to the player). */
@@ -94,6 +123,40 @@ function weaveSections(replies: NpcReplyForWeave[], resolutions: ResolutionForWe
     );
   }
   return sections;
+}
+
+/**
+ * NPC Story Mode: render the round's NPC contributions as a storyteller
+ * system-prompt section. Undefined when there is nothing to say at all.
+ */
+export function npcRoundSection(round: NpcRoundForWeave[]): string | undefined {
+  if (!round.length) return undefined;
+  const lines: string[] = [];
+  const quiet: string[] = [];
+  for (const r of round) {
+    if (r.skipped) {
+      quiet.push(r.name);
+      continue;
+    }
+    if (r.error) {
+      lines.push(`- ${r.name} is unavailable (${r.error}); voice them briefly yourself, consistent with their known character.`);
+      continue;
+    }
+    if (!r.dialogue && !r.intent && !r.innerState) {
+      quiet.push(r.name);
+      continue;
+    }
+    const bits = [r.dialogue ? `says: "${r.dialogue}"` : 'says nothing'];
+    if (r.intent) bits.push(`— intends: ${r.intent}`);
+    if (r.innerState) bits.push(`(inwardly: ${r.innerState})`);
+    lines.push(`- ${r.name} ${bits.join(' ')}`);
+  }
+  const parts: string[] = [
+    `Each present character has already spoken or acted through their own mind this round. Quote or faithfully paraphrase their words. Their intents are ATTEMPTS, not outcomes — you decide what actually happens (or request adjudication for uncertain, consequential attempts). "Inwardly" entries are private subtext: let them color the character's manner, never state or quote them. Do not use consult_npc directives — the characters have already answered; omit anyone with nothing worth showing.`,
+  ];
+  if (lines.length) parts.push(lines.join('\n'));
+  if (quiet.length) parts.push(`Also present, not engaging this round (voice them briefly yourself only if the moment demands it): ${quiet.join(', ')}.`);
+  return parts.join('\n');
 }
 
 /** Render an object view with per-fact ids so an NPC can cite them in revealsFactIds. */
@@ -134,6 +197,9 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       // Feature 4: summary-driven mode replaces the last-K raw turns with
       // summary + prompt + scene characters + goals + planner-guided retrieval.
       const summaryDriven = story.settings.context.summaryDriven;
+      // NPC Story Mode (docs/09): memory-derived blocks are replaced by the
+      // proactive NPC round; NPCs speak for themselves before this pass.
+      const npcStoriesOn = story.settings.npcStories.enabled;
       const plan = extras?.plan;
 
       // --- System prompt: persona + premise + compressed history + injected sections ---
@@ -206,8 +272,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
         if (ambient.length) parts.push(`## Scene state\n${truncateToTokens(ambient.join('\n\n'), 400)}`);
       }
 
+      // --- NPC Story Mode: the round's proactive NPC contributions. ---
+      if (npcStoriesOn) {
+        const section = npcRoundSection(extras?.npcRound ?? []);
+        if (section) parts.push(`## The characters act this round\n${section}`);
+      }
+
       // --- Present major characters the storyteller MAY consult (Layer 4). ---
-      if (presentNpcs.length) {
+      if (presentNpcs.length && !npcStoriesOn) {
         const list = presentNpcs.map((n) => `- ${n.name}`).join('\n');
         parts.push(
           `## Present major characters — you may consult them\nThese characters are voiced by their own minds and hold their own private knowledge. When one of them should speak or act in a way that depends on what THEY know (not what you know), delegate to them with a \`consult_npc\` directive instead of voicing them yourself:\n${list}`,
@@ -215,7 +287,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       }
 
       // --- Current goals (summary-driven mode): what everyone is after right now. ---
-      if (summaryDriven) {
+      if (summaryDriven && !npcStoriesOn) {
         const goals = memory.factsByCategory(story.id, ['goals', 'goal']).slice(0, 20);
         if (goals.length) {
           const lines = goals.map((g) => `- ${g.objectName}: ${g.fact.content}`);
@@ -224,7 +296,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       }
 
       // --- Focus objects requested by the context planner: full scoped views. ---
-      if (summaryDriven && plan?.focusObjects?.length) {
+      if (summaryDriven && !npcStoriesOn && plan?.focusObjects?.length) {
         const seen = new Set<string>();
         const blocks: string[] = [];
         for (const name of plan.focusObjects) {
@@ -238,17 +310,20 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       }
 
       // --- Retrieved memory: storyteller sees everything, incl. hidden facts.
-      // In summary-driven mode the planner widens the query and sets tier depth. ---
-      const queryText = summaryDriven && plan?.queries?.length ? [playerInput, ...plan.queries].join('\n') : playerInput;
-      const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, queryText, {
-        maxTokens: b.retrievedMemoryTokens,
-        maxTier: summaryDriven ? plan?.depth : undefined,
-        // Salience off → rank purely by match + recency (+ tier).
-        scoreWeights: story.settings.salience.enabled ? undefined : { bm25: 1.0, salience: 0, recency: 0.4 },
-      });
-      const retrievedText = renderRetrieval(retrieval);
-      if (retrievedText.trim()) {
-        parts.push(`## Relevant memory (you know all of this — including secrets and hidden truths — use it to stay consistent and foreshadow)\n${retrievedText}`);
+      // In summary-driven mode the planner widens the query and sets tier depth.
+      // NPC Story Mode: skipped — the fact store is not maintained there. ---
+      if (!npcStoriesOn) {
+        const queryText = summaryDriven && plan?.queries?.length ? [playerInput, ...plan.queries].join('\n') : playerInput;
+        const retrieval = searchFacts(memory, story.id, { kind: 'storyteller' }, queryText, {
+          maxTokens: b.retrievedMemoryTokens,
+          maxTier: summaryDriven ? plan?.depth : undefined,
+          // Salience off → rank purely by match + recency (+ tier).
+          scoreWeights: story.settings.salience.enabled ? undefined : { bm25: 1.0, salience: 0, recency: 0.4 },
+        });
+        const retrievedText = renderRetrieval(retrieval);
+        if (retrievedText.trim()) {
+          parts.push(`## Relevant memory (you know all of this — including secrets and hidden truths — use it to stay consistent and foreshadow)\n${retrievedText}`);
+        }
       }
 
       for (const section of extras?.sections ?? []) {
@@ -320,6 +395,63 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
           `The player just said or did: ${consult.playerInput || '(nothing in particular)'}\n\n` +
           `You are asked to respond to this: ${consult.situation}\n\n` +
           `Reply in character as ${name}, as JSON.`,
+      });
+      return { system, messages };
+    },
+
+    forNpcRound(story: Story, npcObjectId: string, input: NpcRoundContextInput): BuiltContext {
+      // NPC Story Mode isolation boundary: the mind is personality + notes +
+      // a mechanically personalized excerpt of the main story. No other NPC's
+      // profile, notes, or unwitnessed events can enter here.
+      const s = story.settings.npcStories;
+      const name = memory.getObject(npcObjectId)?.name ?? 'the character';
+      const system = renderPrompt('npc-story', {
+        name,
+        personality:
+          input.personality.trim() ||
+          '(No established personality yet — improvise one plausible for this story, and stay consistent with it from now on.)',
+        notes: input.notes.trim() || '(You have no particular notes yet beyond the recap below.)',
+        // Words ≈ tokens × 0.75 (chars/4 heuristic) — the prompt speaks in words.
+        notesBudget: String(Math.round(s.notesTokens * 0.75)),
+      });
+
+      // Witnessed turns: completed turns whose presence stamp includes this NPC.
+      // Turns from before presence stamping (no meta field) are skipped — the
+      // digest/scene recap covers them.
+      const witnessed = stories
+        .recentTurns(story.id, 50)
+        .filter((t) => t.status === 'complete' && t.index < input.turnIndex)
+        .filter((t) => (t.meta.presentNpcIds as string[] | undefined)?.includes(npcObjectId))
+        .slice(-s.presentTurns);
+      const witnessedThisScene = witnessed.some((t) => t.sceneId === story.currentSceneId);
+
+      const recapParts: string[] = [];
+      const digest = summaries.getStoryDigest(story.id);
+      if (digest?.content.trim()) {
+        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), 250)}`);
+      }
+      const sceneSummary = story.currentSceneId ? summaries.getSceneSummary(story.currentSceneId) : undefined;
+      if (witnessedThisScene && sceneSummary?.content.trim()) {
+        recapParts.push(`The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 300)}`);
+      }
+      const gap = input.lastPresentTurnIdx >= 0 ? input.turnIndex - 1 - input.lastPresentTurnIdx : 0;
+      if (gap > 0) {
+        recapParts.push(`You were elsewhere for the last ${gap === 1 ? 'exchange' : `${gap} exchanges`} — you did not witness what happened in the meantime.`);
+      }
+
+      const messages: ChatMessage[] = [];
+      if (recapParts.length) messages.push({ role: 'user', content: recapParts.join('\n\n') });
+      if (witnessed.length) {
+        const lines = witnessed.map(
+          (t) => `Player: ${truncateToTokens(t.playerInput || '(the scene opens)', 100)}\nWhat happened: ${truncateToTokens(t.narration, 150)}`,
+        );
+        messages.push({ role: 'user', content: `Recent moments you witnessed:\n\n${lines.join('\n\n')}` });
+      }
+      messages.push({
+        role: 'user',
+        content:
+          `The player now says or does: ${input.playerInput.trim() || '(nothing in particular — the moment simply continues)'}\n\n` +
+          `React as ${name}: what do you say aloud (if anything), and what do you do or intend to do? Then return your updated private notes. Reply as JSON.`,
       });
       return { system, messages };
     },

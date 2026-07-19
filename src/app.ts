@@ -10,6 +10,7 @@ import { createJobStore } from './db/stores/jobStore.ts';
 import { createMemoryStore } from './db/stores/memoryStore.ts';
 import { createSuggestionStore } from './db/stores/suggestionStore.ts';
 import { createSnapshotStore } from './db/stores/snapshotStore.ts';
+import { createNpcProfileStore } from './db/stores/npcProfileStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
 import { createSettingsService } from './config/settingsService.ts';
@@ -18,7 +19,7 @@ import { setPromptOverrideProvider } from './agents/prompts.ts';
 import { createContextBuilder } from './orchestrator/contextBuilder.ts';
 import { TurnPipeline } from './orchestrator/turnPipeline.ts';
 import { JobWorker } from './orchestrator/postTurn.ts';
-import { createScribeStoryHandler } from './orchestrator/handlers.ts';
+import { createScribeStoryHandler, createNpcSeedHandler } from './orchestrator/handlers.ts';
 import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler, createNpcDossierHandler } from './orchestrator/memoryHandlers.ts';
 import { EventBus } from './util/events.ts';
 
@@ -38,6 +39,7 @@ export interface App {
   memory: ReturnType<typeof createMemoryStore>;
   suggestions: ReturnType<typeof createSuggestionStore>;
   snapshots: ReturnType<typeof createSnapshotStore>;
+  npcProfiles: ReturnType<typeof createNpcProfileStore>;
   settingsService: SettingsService;
   registry: LlmRegistry;
   pipeline: TurnPipeline;
@@ -59,6 +61,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const memory = createMemoryStore(db);
   const suggestions = createSuggestionStore(db);
   const snapshots = createSnapshotStore(db);
+  const npcProfiles = createNpcProfileStore(db);
 
   // Runtime settings: seed from config.json, then the DB is the source of truth.
   // The registry reads the compiled effective config live, and prompt overrides
@@ -67,16 +70,17 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
   const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
   const contexts = createContextBuilder({ stories, summaries, memory, verbosityOverride: () => settingsService.verbosityOverride() });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, registry, contexts, events, rng: opts.rng });
+  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events, { concurrency: () => settingsService.performance().jobConcurrency });
-  const handlerDeps = { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs };
+  const handlerDeps = { db, stories, summaries, agents, threadLog, registry, events, memory, npcProfiles, suggestions, jobs };
   worker.register('scribe_story', createScribeStoryHandler(handlerDeps));
   worker.register('scribe_memory', createScribeMemoryHandler(handlerDeps));
   worker.register('memory_maintenance', createMemoryMaintenanceHandler(handlerDeps));
   worker.register('archive_faded', createArchiveFadedHandler(handlerDeps));
   worker.register('npc_dossier', createNpcDossierHandler(handlerDeps));
+  worker.register('npc_seed', createNpcSeedHandler(handlerDeps));
 
   if (opts.startWorker !== false) worker.start();
 
@@ -93,6 +97,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     memory,
     suggestions,
     snapshots,
+    npcProfiles,
     settingsService,
     registry,
     pipeline,

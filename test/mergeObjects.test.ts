@@ -34,7 +34,7 @@ describe('mergeMemoryObjects (entity merge)', () => {
   function deps() {
     return {
       db: app.db, stories: app.stories, summaries: app.summaries, agents: app.agents, threadLog: app.threadLog,
-      memory: app.memory, suggestions: app.suggestions, jobs: app.jobs, registry: app.registry, events: app.events,
+      memory: app.memory, npcProfiles: app.npcProfiles, suggestions: app.suggestions, jobs: app.jobs, registry: app.registry, events: app.events,
     };
   }
 

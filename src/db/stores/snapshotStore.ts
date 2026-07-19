@@ -23,6 +23,7 @@ interface SnapshotPayload {
   facts: Row[];
   links: Row[];
   suggestions: Row[];
+  npcProfiles?: Row[]; // absent on snapshots from before NPC Story Mode
 }
 
 const KEEP_PER_STORY = 8; // how many rewind steps back a story supports
@@ -65,6 +66,7 @@ export function createSnapshotStore(db: Db) {
             )
             .all<Row>(storyId),
           suggestions: db.prepare(`SELECT * FROM memory_suggestions WHERE story_id = ?`).all<Row>(storyId),
+          npcProfiles: db.prepare(`SELECT * FROM npc_profiles WHERE story_id = ?`).all<Row>(storyId),
         };
         db.prepare(
           `INSERT OR REPLACE INTO turn_snapshots (turn_id, story_id, turn_index, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -131,6 +133,17 @@ export function createSnapshotStore(db: Db) {
         for (const f of p.facts)
           upsert('memory_facts', f, ['object_id', 'category', 'subcategory', 'detail_level', 'tier', 'content', 'source_turn_id', 'supersedes_id', 'superseded', 'confidence', 'game_time_min', 'created_at', 'updated_at']);
         for (const l of p.links) upsert('knowledge_links', l, ['fact_id', 'knower_type', 'knower_npc_object_id', 'learned_turn_id', 'distortion', 'created_at', 'updated_at']);
+
+        // 6b. NPC Story Mode profiles. Keyed by object_id (not id) so the
+        // generic upsert doesn't apply; the object wipe above already cascaded
+        // them away, so plain reinsert restores the captured state. Old
+        // snapshots without the field leave whatever survived the cascade.
+        for (const np of p.npcProfiles ?? []) {
+          db.prepare(
+            `INSERT OR REPLACE INTO npc_profiles (object_id, story_id, personality, notes, last_present_turn_idx, last_acted_turn_idx, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(np.object_id, np.story_id, np.personality, np.notes, np.last_present_turn_idx, np.last_acted_turn_idx, np.created_at, np.updated_at);
+        }
 
         // 7. Queued post-turn work is now stale.
         db.prepare(`DELETE FROM jobs WHERE story_id = ? AND status IN ('pending', 'running')`).run(storyId);

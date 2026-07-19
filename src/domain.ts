@@ -47,6 +47,23 @@ export const StorySettings = z.object({
       plannerEnabled: z.boolean().default(true),
     })
     .default({}),
+  // NPC Story Mode (docs/09): replaces the structured memory pipeline for
+  // NPCs. Each present NPC acts every round from a mechanically personalized
+  // excerpt of the main story, keeps its own narrative notes, and its
+  // words/intents are woven by the storyteller in a single pass. While
+  // enabled: no scribe_memory jobs, no retrieval blocks, consult_npc ignored.
+  // The context planner is skipped too (it only plans memory retrieval).
+  npcStories: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Max tokens kept of each NPC's private notes (server-side truncation). */
+      notesTokens: z.number().int().positive().default(300),
+      /** How many recent present-turns each NPC sees verbatim. */
+      presentTurns: z.number().int().positive().default(4),
+      /** Cap on NPC calls per round (first-listed in the scene win). */
+      maxNpcsPerRound: z.number().int().positive().default(4),
+    })
+    .default({}),
   // The adjudicator: uncertain, consequential attempts are judged by a
   // separate impartial AI (difficulty + circumstances) and decided by a real
   // hidden dice roll, instead of the storyteller deciding outcomes itself.

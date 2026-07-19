@@ -62,8 +62,8 @@ describe('player dossier interview', () => {
   });
 
   function deps() {
-    const { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs } = app;
-    return { db, stories, summaries, agents, threadLog, registry, events, memory, suggestions, jobs };
+    const { db, stories, summaries, agents, threadLog, registry, events, memory, npcProfiles, suggestions, jobs } = app;
+    return { db, stories, summaries, agents, threadLog, registry, events, memory, npcProfiles, suggestions, jobs };
   }
 
   it('asks, then creates the player character and marks it on the story', async () => {

@@ -8,6 +8,7 @@ export type ServerEvent =
   | { t: 'memory.updated'; storyId: string; objectIds: string[] }
   | { t: 'job.failed'; storyId: string | null; jobId: string; type: string; error: string }
   | { t: 'scene.changed'; storyId: string; sceneId: string }
+  | { t: 'npc.profile.updated'; storyId: string; objectIds: string[] }
   | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }
   | {
       t: 'thread.activity';
