@@ -490,3 +490,22 @@ export function createMemoryMaintenanceHandler(deps: HandlerDeps): JobHandler {
     if (affected.size) deps.events.emit({ t: 'memory.updated', storyId, objectIds: Array.from(affected) });
   };
 }
+
+/**
+ * Manual memory re-scan (UI "re-scan turns" button): re-run the memory scribe
+ * over the last few completed exchanges. For when a pass missed something —
+ * the near-duplicate filter in applyMemoryDelta makes re-runs safe (already
+ * captured facts are skipped, missed ones land). Returns how many turn jobs
+ * were enqueued.
+ */
+export function enqueueMemoryRescan(deps: Pick<HandlerDeps, 'stories' | 'jobs'>, storyId: string, turns = 5): number {
+  const n = Math.min(Math.max(Math.floor(turns) || 1, 1), 20);
+  const completed = deps.stories
+    .recentTurns(storyId, n + 4)
+    .filter((t) => t.status === 'complete')
+    .slice(-n);
+  for (const t of completed) {
+    deps.jobs.enqueue('scribe_memory', { storyId, turnId: t.id, payload: { turnId: t.id } });
+  }
+  return completed.length;
+}

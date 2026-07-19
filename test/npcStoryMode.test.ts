@@ -7,7 +7,8 @@ import { createApp } from '../src/app.ts';
 import type { App } from '../src/app.ts';
 import { StorySettings } from '../src/domain.ts';
 import { mentionsNpc, shouldInvokeNpc } from '../src/orchestrator/npcRound.ts';
-import { npcEnter } from '../src/orchestrator/npc.ts';
+import { npcEnter, enterOrCreateNpc } from '../src/orchestrator/npc.ts';
+import { enqueueMemoryRescan } from '../src/orchestrator/memoryHandlers.ts';
 import type { NpcProfile } from '../src/db/stores/npcProfileStore.ts';
 import type { TurnEmitter } from '../src/orchestrator/turnPipeline.ts';
 import type { LlmDriver } from '../src/llm/types.ts';
@@ -33,6 +34,9 @@ function modeDriver(): LlmDriver {
     async chat(req, onDelta) {
       const sys = req.system ?? '';
       const reply = (text: string) => ({ text, usage: { inputTokens: 5, outputTokens: 10 }, model: req.model });
+      if (sys.includes('character designer')) {
+        return reply(JSON.stringify({ personality: 'Gruff gatekeeper, duty first.', notes: '- I guard the gate\n- The stranger asks about ledgers' }));
+      }
       if (sys.includes('Your private notes')) {
         const name = /You are \*\*(.+?)\*\*/.exec(sys)?.[1] ?? '?';
         if (name === 'Marta') {
@@ -218,6 +222,58 @@ describe('NPC Story Mode', () => {
       expect(app.npcProfiles.get(obj!.id)).toBeDefined();
       const types = app.db.prepare(`SELECT type, payload_json FROM jobs WHERE type = 'npc_seed'`).all<{ type: string; payload_json: string }>();
       expect(types.some((j) => JSON.parse(j.payload_json).objectId === obj!.id)).toBe(true);
+    });
+
+    it('npc_seed generation parses the raw story text, not just summaries', async () => {
+      // Two on-page turns establish canon about a character with no facts.
+      const t1 = app.stories.appendTurn({ storyId, playerInput: 'I enter the yard.' });
+      app.stories.updateTurn(t1.id, { narration: 'Guard Captain Held bars the gate, scarred hand on his sword.', status: 'complete' });
+      const t2 = app.stories.appendTurn({ storyId, playerInput: 'I ask about the ledger.' });
+      app.stories.updateTurn(t2.id, { narration: '"Ledgers are above my pay," Held grunts.', status: 'complete' });
+      const heldId = app.memory.createObject({ storyId, type: 'character', name: 'Held', aliases: [], summary: '', salience: 0.5, status: 'active' }).id;
+      app.jobs.enqueue('npc_seed', { storyId, payload: { objectId: heldId } });
+      await app.worker.drain();
+      // The generation request carried the verbatim story text and the premise.
+      const seedReq = app.threadLog
+        .query(storyId, { role: 'npc' })
+        .filter((l) => l.direction === 'request')
+        .map((l) => (l.payload as { system: string }).system)
+        .find((sys) => sys.includes('character designer'));
+      expect(seedReq).toBeDefined();
+      expect(seedReq).toContain('scarred hand on his sword');
+      expect(seedReq).toContain('parse first, invent second');
+      expect(app.npcProfiles.get(heldId)?.personality).toContain('Gruff gatekeeper');
+    });
+
+    it('re-scan enqueues a memory-scribe job per recent completed turn', () => {
+      const t1 = app.stories.appendTurn({ storyId, playerInput: 'one' });
+      app.stories.updateTurn(t1.id, { narration: 'n1', status: 'complete' });
+      const t2 = app.stories.appendTurn({ storyId, playerInput: 'two' });
+      app.stories.updateTurn(t2.id, { narration: 'n2', status: 'complete' });
+      app.stories.appendTurn({ storyId, playerInput: 'streaming — not eligible' });
+      const enqueued = enqueueMemoryRescan({ stories: app.stories, jobs: app.jobs }, storyId, 5);
+      expect(enqueued).toBe(2);
+      const jobs = app.db.prepare(`SELECT turn_id FROM jobs WHERE type = 'scribe_memory'`).all<{ turn_id: string }>();
+      expect(jobs.map((j) => j.turn_id).sort()).toEqual([t1.id, t2.id].sort());
+    });
+
+    it('enterOrCreateNpc creates and promotes by name in the default mode too', () => {
+      // A separate story WITHOUT NPC Story Mode.
+      const plain = app.stories.createStory({ title: 'Plain' });
+      const deps = { stories: app.stories, agents: app.agents, memory: app.memory, npcProfiles: app.npcProfiles, jobs: app.jobs, registry: app.registry, events: app.events };
+      const obj = enterOrCreateNpc(deps, plain.id, 'Brother Aldous');
+      expect(obj).toBeDefined();
+      // Promoted: active session + in the scene roster.
+      const scene = app.stories.getScene(plain.currentSceneId!)!;
+      expect(scene.activeNpcIds).toContain(obj!.id);
+      expect(app.agents.listSessions(plain.id).some((s) => s.role === 'npc' && s.npcObjectId === obj!.id && s.state === 'active')).toBe(true);
+      // Default mode builds the mind as a fact-sheet dossier, not a seed.
+      const types = app.db.prepare(`SELECT type FROM jobs WHERE story_id = ?`).all<{ type: string }>(plain.id).map((r) => r.type);
+      expect(types).toContain('npc_dossier');
+      expect(types).not.toContain('npc_seed');
+      // Re-adding the same name resolves instead of duplicating.
+      const again = enterOrCreateNpc(deps, plain.id, 'brother aldous');
+      expect(again?.id).toBe(obj!.id);
     });
 
     it('npc_seed converts an existing fact sheet mechanically (no LLM)', async () => {

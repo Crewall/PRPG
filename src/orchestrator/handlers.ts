@@ -13,6 +13,7 @@ import type { EventBus } from '../util/events.ts';
 import { ScribeStory } from '../agents/scribeStory.ts';
 import { NpcAgent } from '../agents/npcAgent.ts';
 import { renderPrompt } from '../agents/prompts.ts';
+import { estimateTokens } from '../util/tokens.ts';
 import type { JobHandler } from './postTurn.ts';
 
 export interface HandlerDeps {
@@ -159,21 +160,30 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
       }
     }
 
-    // Generation path: invent the mind from the story so far.
+    // Generation path: invent the mind from the story so far. The seeder
+    // PARSES the raw story text first (summaries lag and can be thin early
+    // on — and in NPC Story Mode there are no memory facts to lean on): as
+    // many recent completed turns as fit the budget, newest kept, presented
+    // chronologically.
     const profileName = story.settings.roles.npc ?? deps.registry.getForRole('npc').name;
     const bound = deps.registry.getProfile(profileName);
     const session = deps.agents.ensureSession(storyId, 'npc', profileName, objectId);
     const agent = new NpcAgent({ session, bound, threadLog: deps.threadLog, storyId });
-    const introduction = deps.stories
-      .recentTurns(storyId, 3)
-      .filter((t) => t.status === 'complete')
-      .map((t) => `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`)
-      .join('\n\n');
+    const SEED_STORY_TOKENS = 3000;
+    const turnBlocks: string[] = [];
+    let used = 0;
+    for (const t of deps.stories.recentTurns(storyId, 30).filter((x) => x.status === 'complete').reverse()) {
+      const block = `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`;
+      used += estimateTokens(block);
+      if (turnBlocks.length && used > SEED_STORY_TOKENS) break;
+      turnBlocks.push(block);
+    }
     const system = renderPrompt('npc-story-seed', {
       name: obj.name,
-      digest: deps.summaries.getStoryDigest(storyId)?.content || story.settings.premise || '(the story is just beginning)',
+      premise: story.settings.premise || '(none given)',
+      digest: deps.summaries.getStoryDigest(storyId)?.content || '(the story is just beginning)',
       sceneSummary: (story.currentSceneId ? deps.summaries.getSceneSummary(story.currentSceneId)?.content : '') || '(no scene summary yet)',
-      introduction: introduction || '(they have not appeared on the page yet)',
+      recentStory: turnBlocks.reverse().join('\n\n') || '(no story text yet)',
     });
     const seed = await agent.seed(
       { system, messages: [{ role: 'user', content: `Create the mind for ${obj.name}. Reply as JSON.` }] },

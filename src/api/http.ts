@@ -6,8 +6,8 @@ import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
 import { findNearDuplicate } from '../memory/similarity.ts';
 import type { KnowledgeScope } from '../memory/model.ts';
-import { promoteNpc, demoteNpc } from '../orchestrator/npc.ts';
-import { mergeMemoryObjects } from '../orchestrator/memoryHandlers.ts';
+import { promoteNpc, demoteNpc, enterOrCreateNpc } from '../orchestrator/npc.ts';
+import { mergeMemoryObjects, enqueueMemoryRescan } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
@@ -349,6 +349,20 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return { ok: true, jobId: job.id };
   });
 
+  // Manual re-scan (the "re-scan turns" button): re-run the memory scribe
+  // over the last few exchanges when a pass missed something. Safe to repeat —
+  // near-duplicate facts are filtered on apply.
+  server.post('/api/stories/:id/memory/rescan', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!stories.getStory(id)) {
+      reply.code(404);
+      return { error: 'not found' };
+    }
+    const body = z.object({ turns: z.number().int().min(1).max(20).default(5) }).parse(req.body ?? {});
+    const enqueued = enqueueMemoryRescan({ stories, jobs }, id, body.turns);
+    return { ok: true, enqueued };
+  });
+
   // ---- Layer 3b: suggestion inbox ----
   server.get('/api/stories/:id/memory/suggestions', async (req) => {
     const { id } = req.params as { id: string };
@@ -469,6 +483,20 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     const { id, oid } = req.params as { id: string; oid: string };
     demoteNpc(npcDeps, id, oid);
     return { ok: true };
+  });
+
+  // Manual "add major character" by name (the Present bar's + control):
+  // resolves an existing character or creates one, then promotes — no trip
+  // through the memory browser needed (which NPC Story Mode leaves idle).
+  server.post('/api/stories/:id/npcs/enter', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ name: z.string().min(1) }).parse(req.body);
+    const obj = enterOrCreateNpc(npcDeps, id, body.name);
+    if (!obj) {
+      reply.code(400);
+      return { error: 'could not add the character — does the story exist?' };
+    }
+    return { ok: true, object: obj };
   });
 
   // ---- NPC Story Mode: narrative profiles (docs/09). The player's window

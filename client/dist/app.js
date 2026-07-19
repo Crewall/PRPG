@@ -300,9 +300,19 @@ async function renderPlay(storyId) {
     } else {
       pcChip = h('button', { class: 'chip pc', title: 'A short interview (max 3 questions) creates your character sheet' , onclick: openCharacterCreator }, '🎭 create your character');
     }
+    // Manual "add major character": type a name, the engine finds-or-creates
+    // the character and promotes it — no trip through the memory browser.
+    const addChip = h('button', { class: 'chip', title: 'Make a character a major character (own mind & voice). New names are created on the spot; their description is filled from the story by an AI.', onclick: async () => {
+      const name = prompt('Character name to make major?', '');
+      if (!name || !name.trim()) return;
+      try { await api.post(`/api/stories/${storyId}/npcs/enter`, { name: name.trim() }); addStatus(`— ${name.trim()} is now a major character —`); }
+      catch (e) { alert('could not add: ' + e.message); }
+      refreshSceneHeader(); renderDrawer();
+    } }, '+');
     npcChips.replaceChildren(
       pcChip,
       ...(active.length ? active.map((a) => h('button', { class: 'chip', onclick: () => showDossier(a.npcObjectId) }, a.npc)) : [h('span', { class: 'sub' }, 'no major characters yet')]),
+      addChip,
     );
   }
 
@@ -564,8 +574,16 @@ async function renderPlay(storyId) {
       try { await api.post(`/api/stories/${storyId}/memory/maintenance`); } catch (e) { alert('cleanup failed: ' + e.message); }
       // The memory.updated WS event re-renders the tab when the job finishes.
     });
+    // Manual re-scan: re-run the memory scribe over recent turns when a pass
+    // missed something (duplicates are filtered automatically on apply).
+    const rescanBtn = h('button', { class: 'link', title: 'Re-run the memory scribe over the last few exchanges — use when it missed something important. Already-recorded facts are not duplicated.' }, 're-scan turns');
+    rescanBtn.addEventListener('click', async () => {
+      rescanBtn.textContent = 're-scanning…'; rescanBtn.disabled = true;
+      try { await api.post(`/api/stories/${storyId}/memory/rescan`, {}); } catch (e) { alert('re-scan failed: ' + e.message); }
+      // The memory.updated WS event re-renders the tab when the jobs finish.
+    });
     body.append(h('div', { class: 'row item-tools' },
-      h('span', { class: 'sub', title: 'Importance weighting & decay of memory objects. Off = salience frozen and ignored in ranking.' }, 'Salience system:'), salBtn, cleanBtn));
+      h('span', { class: 'sub', title: 'Importance weighting & decay of memory objects. Off = salience frozen and ignored in ranking.' }, 'Salience system:'), salBtn, cleanBtn, rescanBtn));
 
     // Suggestion inbox.
     let suggestions = [];
