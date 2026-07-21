@@ -440,14 +440,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       const recapParts: string[] = [];
       const digest = summaries.getStoryDigest(story.id);
       if (digest?.content.trim()) {
-        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), 400)}`);
+        recapParts.push(`The story's events so far, as you would plausibly know them: ${truncateToTokens(digest.content.trim(), 2000)}`);
       } else if (story.settings.premise.trim()) {
         // The digest lags early in a story — the premise anchors the world.
-        recapParts.push(`The world and situation of this story: ${truncateToTokens(story.settings.premise.trim(), 300)}`);
+        recapParts.push(`The world and situation of this story: ${truncateToTokens(story.settings.premise.trim(), 500)}`);
       }
       const scene = story.currentSceneId ? stories.getScene(story.currentSceneId) : undefined;
       if (scene?.locationObjectId) {
-        const loc = memory.getObjectView(scene.locationObjectId, { kind: 'perception' }, { maxTokens: 250 });
+        const loc = memory.getObjectView(scene.locationObjectId, { kind: 'perception' }, { maxTokens: 600 });
         if (loc && (loc.summary || loc.facts.length)) recapParts.push(`Where you are: ${renderObjectView(loc)}`);
       }
       const others = (scene?.activeNpcIds ?? [])
@@ -459,8 +459,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       if (sceneSummary?.content.trim()) {
         recapParts.push(
           witnessedThisScene
-            ? `The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 400)}`
-            : `The scene you find yourself in: ${truncateToTokens(sceneSummary.content.trim(), 400)}`,
+            ? `The scene so far, as you have witnessed it: ${truncateToTokens(sceneSummary.content.trim(), 1000)}`
+            : `The scene you find yourself in: ${truncateToTokens(sceneSummary.content.trim(), 1000)}`,
         );
       }
       const gap = input.lastPresentTurnIdx >= 0 ? input.turnIndex - 1 - input.lastPresentTurnIdx : 0;
@@ -472,7 +472,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       if (recapParts.length) messages.push({ role: 'user', content: recapParts.join('\n\n') });
       if (witnessed.length) {
         const lines = witnessed.map(
-          (t) => `Player: ${truncateToTokens(t.playerInput || '(the scene opens)', 150)}\nWhat happened: ${truncateToTokens(t.narration, 250)}`,
+          (t) => `Player: ${truncateToTokens(t.playerInput || '(the scene opens)', 350)}\nWhat happened: ${truncateToTokens(t.narration, 500)}`,
         );
         messages.push({ role: 'user', content: `Recent moments you witnessed:\n\n${lines.join('\n\n')}` });
       }
@@ -483,7 +483,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       if (lastTurn?.narration && !witnessed.some((t) => t.id === lastTurn.id)) {
         messages.push({
           role: 'user',
-          content: `What is happening right now, around you:\n${truncateToTokens(lastTurn.narration, 350)}`,
+          content: `What is happening right now, around you:\n${truncateToTokens(lastTurn.narration, 600)}`,
         });
       }
       messages.push({
