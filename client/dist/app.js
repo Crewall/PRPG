@@ -27,6 +27,21 @@ const api = {
   async del(p) { const r = await fetch(p, { method: 'DELETE' }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
 };
 
+// Clipboard copy that also works on plain-http LAN/Termux, where the async
+// Clipboard API is unavailable (needs a secure context): fall back to a hidden
+// textarea + execCommand. Returns true on success.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.opacity = '0';
+    document.body.append(ta); ta.focus(); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch { return false; }
+}
+
 function route() {
   const hash = location.hash.slice(1) || '/';
   if (hash.startsWith('/play/')) return renderPlay(hash.slice('/play/'.length));
@@ -588,25 +603,36 @@ async function renderPlay(storyId) {
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
 
-  // Feature: edit/delete ANY past message. Each transcript bubble carries ✎/×
-  // controls bound to its turn + field (player input or narration). Memory is
-  // left untouched server-side; later story flow may shift (accepted). A bubble
-  // whose sibling is also emptied drops the whole turn (server auto-cleanup).
+  // Feature: copy/edit/delete ANY past message. Each transcript bubble carries
+  // ⧉/✎/× controls; edit/delete are bound to its turn + field (player input or
+  // narration). Memory is left untouched server-side; later story flow may shift
+  // (accepted). A bubble whose sibling is also emptied drops the whole turn.
   function messageBubble(cls, text, turnId, field) {
     const b = h('div', { class: `bubble ${cls}` });
     const textEl = h('span', { class: 'msg-text' }, text);
+    const copyBtn = h('button', { class: 'link', title: 'copy this message' }, '⧉');
+    copyBtn.addEventListener('click', async () => {
+      const ok = await copyToClipboard(textEl.textContent);
+      copyBtn.textContent = ok ? '✓' : '✗';
+      setTimeout(() => (copyBtn.textContent = '⧉'), 1000);
+    });
     const tools = h('div', { class: 'msg-tools' },
+      copyBtn,
       h('button', { class: 'link', title: 'edit this message', onclick: () => editMessage(b, textEl, turnId, field, cls) }, '✎'),
       h('button', { class: 'link danger', title: 'delete this message', onclick: () => deleteMessage(b, turnId, field) }, '×'));
     b.append(textEl, tools);
     return b;
   }
   function editMessage(bubble, textEl, turnId, field, cls) {
-    const ta = h('textarea', { rows: '3' }); ta.value = textEl.textContent;
+    const ta = h('textarea', { rows: '4' }); ta.value = textEl.textContent;
     const saveB = h('button', { class: 'link' }, 'save');
     const cancelB = h('button', { class: 'link' }, 'cancel');
-    const form = h('div', { class: `bubble ${cls}` }, ta, h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, saveB, cancelB));
+    // A roomy, full-width editor — the display bubble shrinks to its text, which
+    // is far too small for editing longer messages.
+    const form = h('div', { class: `bubble ${cls} msg-editing` }, ta, h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, saveB, cancelB));
     bubble.replaceWith(form);
+    // Grow to fit the existing content (capped), so long messages open usable.
+    ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 480) + 'px';
     ta.focus();
     cancelB.addEventListener('click', () => form.replaceWith(bubble));
     saveB.addEventListener('click', async () => {
