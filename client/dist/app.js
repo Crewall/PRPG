@@ -564,6 +564,11 @@ async function renderPlay(storyId) {
   // its first line is on screen, and (b) while `follow` is on — i.e. the
   // reader put themselves at the bottom. Scrolling up during a stream turns
   // follow off; scrolling back to the bottom turns it on again.
+  // The live player bubble + turn id of the in-flight turn, so its two bubbles
+  // gain edit/delete controls the moment the turn completes (not only on reload).
+  // Declared here (before redrawTranscript, which references it) to stay clear
+  // of the temporal dead zone.
+  let pendingPlayerBubble = null, pendingPlayerText = '', currentTurnId = null;
   let follow = true;
   let progScrollAt = 0; // ignore the scroll events our own scrolls fire
   const nearBottom = () => scrollBox.scrollHeight - scrollBox.scrollTop - scrollBox.clientHeight < 48;
@@ -1012,9 +1017,6 @@ async function renderPlay(storyId) {
 
   // ---- WebSocket (with auto-reconnect and a tappable status dot) ----
   let ws = null, current = null, busy = false, lastInput = '';
-  // The live player bubble + turn id of the in-flight turn, so its two bubbles
-  // gain edit/delete controls the moment the turn completes (not only on reload).
-  let pendingPlayerBubble = null, pendingPlayerText = '', currentTurnId = null;
   let disposed = false, reconnectTimer = null;
   const wsInfo = { attempts: 0, since: null, lastClose: null, nextRetryAt: null };
   const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; };
