@@ -164,6 +164,23 @@ export function createStoryStore(db: Db) {
       );
     },
 
+    /**
+     * Edit a past turn's player/narration text in place (the transcript
+     * edit-message feature). Memory is untouched; the storyteller's future
+     * context reads from turns, so later story flow may shift — accepted.
+     */
+    setTurnText(turnId: string, patch: { playerInput?: string; narration?: string }): Turn | undefined {
+      const existing = this.getTurn(turnId);
+      if (!existing) return undefined;
+      db.prepare(`UPDATE turns SET player_input = ?, narration = ?, updated_at = ? WHERE id = ?`).run(
+        patch.playerInput ?? existing.playerInput,
+        patch.narration ?? existing.narration,
+        Date.now(),
+        turnId,
+      );
+      return this.getTurn(turnId);
+    },
+
     listTurns(storyId: string, opts: { fromIndex?: number; limit?: number } = {}): Turn[] {
       const from = opts.fromIndex ?? 0;
       const limit = opts.limit ?? 200;

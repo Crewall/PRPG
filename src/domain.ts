@@ -58,6 +58,10 @@ export const StorySettings = z.object({
       enabled: z.boolean().default(false),
       /** Max tokens kept of each NPC's private notes (server-side truncation). */
       notesTokens: z.number().int().positive().default(300),
+      /** Reply-length cap when a character's personality is first written (npc_seed). */
+      personalityTokens: z.number().int().positive().default(800),
+      /** Max tokens kept of an AI-written personality (server-side truncation). */
+      personalityMaxTokens: z.number().int().positive().default(400),
       /** How many recent present-turns each NPC sees verbatim. */
       presentTurns: z.number().int().positive().default(4),
       /** Cap on NPC calls per round (first-listed in the scene win). */

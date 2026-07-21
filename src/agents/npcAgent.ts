@@ -51,7 +51,7 @@ export class NpcAgent extends Agent {
   }
 
   /** NPC Story Mode: seed a personality + opening notes for a profile-less NPC. */
-  async seed(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<NpcSeedReply> {
+  async seed(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal; maxTokens?: number } = {}): Promise<NpcSeedReply> {
     return this.invokeJson(ctx, NpcSeedReply, opts);
   }
 }

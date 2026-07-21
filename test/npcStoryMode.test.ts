@@ -118,7 +118,7 @@ describe('NPC Story Mode', () => {
     beforeEach(() => {
       dir = mkdtempSync(join(tmpdir(), 'prpg-npcmode-'));
       app = createApp(config, { driverFactory: () => modeDriver(), dbPath: join(dir, 't.db'), startWorker: false });
-      const story = app.stories.createStory({ title: 'Flagon', settings: { npcStories: { enabled: true, notesTokens: 300, presentTurns: 4, maxNpcsPerRound: 4 } } });
+      const story = app.stories.createStory({ title: 'Flagon', settings: { npcStories: { enabled: true, notesTokens: 300, personalityTokens: 800, personalityMaxTokens: 400, presentTurns: 4, maxNpcsPerRound: 4 } } });
       storyId = story.id;
       martaId = app.memory.createObject({ storyId, type: 'character', name: 'Marta', aliases: [], summary: '', salience: 0.5, status: 'active' }).id;
       tomId = app.memory.createObject({ storyId, type: 'character', name: 'Old Tom', aliases: [], summary: '', salience: 0.5, status: 'active' }).id;
@@ -198,7 +198,7 @@ describe('NPC Story Mode', () => {
       const round2 = martaReqs[0].payload as { messages: { content: string }[] }; // newest first
       expect(round2.messages.some((m) => m.content.includes('Recent moments you witnessed'))).toBe(true);
       // Notes cap: server-side truncation to notesTokens.
-      app.stories.updateStory(storyId, { settings: { npcStories: { enabled: true, notesTokens: 10, presentTurns: 4, maxNpcsPerRound: 4 } } });
+      app.stories.updateStory(storyId, { settings: { npcStories: { enabled: true, notesTokens: 10, personalityTokens: 800, personalityMaxTokens: 400, presentTurns: 4, maxNpcsPerRound: 4 } } });
       await app.pipeline.run(storyId, 'Marta, once more.', emitter());
       const clamped = app.npcProfiles.get(martaId)!.notes;
       expect(clamped.length).toBeLessThanOrEqual(10 * 4 + 2); // tokens×4 chars + ellipsis

@@ -128,7 +128,7 @@ async function renderPlay(storyId) {
   const input = h('textarea', { rows: '1', placeholder: 'What do you do?  (Ctrl+Enter to send · /look <name>, /scene, /retry)' });
   const sendBtn = h('button', { class: 'primary' }, 'Send');
   const cancelBtn = h('button', { class: 'ghost', disabled: true }, 'Stop');
-  const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, '↶ Edit');
+  const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, 'Edit');
   const drawer = h('div', { class: 'drawer' });
 
   // Agent status bar (feature): a live view of what each AI agent is doing this
@@ -240,6 +240,25 @@ async function renderPlay(storyId) {
       budgetIn('retrievedMemoryTokens', 'retrieved memory tokens', 'Budget for memory facts retrieved for the turn.', 200, 6000),
       budgetIn('recentTurns', 'recent raw turns', 'How many of the latest exchanges are passed verbatim (chat-history mode).', 1, 20));
 
+    // NPC minds (major characters): the personality-writing budgets. The seed
+    // pass caps its reply at "creation tokens"; the stored personality is then
+    // truncated to "max length". Notes have their own per-round cap.
+    const npc = { notesTokens: 300, personalityTokens: 800, personalityMaxTokens: 400, ...(s.npcStories || {}) };
+    const npcNumIn = (key, label, hint, min, max) => {
+      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(npc[key]), style: 'width:6em' });
+      inp.addEventListener('change', async () => {
+        const v = Math.max(min, Math.min(max, Number(inp.value) || npc[key]));
+        inp.value = String(v); npc[key] = v;
+        await patchSettings({ npcStories: { ...npc } });
+      });
+      return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
+    };
+    const npcBlock = h('details', {},
+      h('summary', { class: 'sub' }, 'Major-character minds (personality)'),
+      npcNumIn('personalityTokens', 'personality creation tokens', 'Reply-length cap when a major character\'s personality is first written by the AI. Bigger = a richer initial personality, more tokens per seed.', 100, 4000),
+      npcNumIn('personalityMaxTokens', 'personality max length (tokens)', 'The AI-written personality is truncated to this many tokens before it is stored. Your own manual edits are never truncated.', 50, 4000),
+      npcNumIn('notesTokens', 'private-notes length (tokens)', 'How much of each major character\'s private notes is kept (they rewrite these each round they act).', 50, 4000));
+
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
@@ -250,10 +269,11 @@ async function renderPlay(storyId) {
         toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
           !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
         toggle('NPC story mode (narrative minds)', 'Replaces the structured memory system for NPCs: each present character acts every round from its own personality + private notes, and the storyteller weaves the replies. Memory extraction is paused while this is on.',
-          !!s.npcStories?.enabled, async (on) => { await patchSettings({ npcStories: { enabled: on } }); renderDrawer(); }),
+          !!s.npcStories?.enabled, async (on) => { await patchSettings({ npcStories: { ...(story.settings.npcStories || {}), enabled: on } }); renderDrawer(); }),
         toggle('Salience system', 'Importance weighting & decay of memory objects.',
           s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
         budgetBlock,
+        npcBlock,
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -513,10 +533,16 @@ async function renderPlay(storyId) {
       catch (e) { alert('save failed: ' + e.message); }
     } }, '✎');
 
+    // NPC Story Mode: a jump from this character's memories (the dossier) to its
+    // mind — personality & private notes — in the NPC minds drawer tab.
+    const mindLink = story.settings?.npcStories?.enabled
+      ? h('button', { class: 'link', title: 'Open this character\'s mind (personality & private notes) in the NPC minds panel', onclick: () => openMind(oid) }, '🧠 mind')
+      : null;
+
     const close = () => { openDossier = null; modal.remove(); };
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) close(); } },
       h('div', { class: 'modal dossier' },
-        h('h3', {}, view?.name || 'Unknown', ' ', rebuildBtn),
+        h('h3', {}, view?.name || 'Unknown', ' ', rebuildBtn, mindLink ? ' ' : null, mindLink),
         h('div', { class: 'row', style: 'gap:6px' }, summaryEl, summaryEdit),
         portraitBlock,
         facts.length ? h('div', { class: 'filter-bar' }, chipRow(['major', 'mid', 'minor'], 'tier'), chipRow(['visible', 'known', 'secret', 'hidden'], 'lvl'), cats.length > 1 ? chipRow(cats, 'cat') : null, sortSel) : null,
@@ -557,14 +583,55 @@ async function renderPlay(storyId) {
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
 
+  // Feature: edit/delete ANY past message. Each transcript bubble carries ✎/×
+  // controls bound to its turn + field (player input or narration). Memory is
+  // left untouched server-side; later story flow may shift (accepted). A bubble
+  // whose sibling is also emptied drops the whole turn (server auto-cleanup).
+  function messageBubble(cls, text, turnId, field) {
+    const b = h('div', { class: `bubble ${cls}` });
+    const textEl = h('span', { class: 'msg-text' }, text);
+    const tools = h('div', { class: 'msg-tools' },
+      h('button', { class: 'link', title: 'edit this message', onclick: () => editMessage(b, textEl, turnId, field, cls) }, '✎'),
+      h('button', { class: 'link danger', title: 'delete this message', onclick: () => deleteMessage(b, turnId, field) }, '×'));
+    b.append(textEl, tools);
+    return b;
+  }
+  function editMessage(bubble, textEl, turnId, field, cls) {
+    const ta = h('textarea', { rows: '3' }); ta.value = textEl.textContent;
+    const saveB = h('button', { class: 'link' }, 'save');
+    const cancelB = h('button', { class: 'link' }, 'cancel');
+    const form = h('div', { class: `bubble ${cls}` }, ta, h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, saveB, cancelB));
+    bubble.replaceWith(form);
+    ta.focus();
+    cancelB.addEventListener('click', () => form.replaceWith(bubble));
+    saveB.addEventListener('click', async () => {
+      saveB.disabled = true;
+      try {
+        const r = await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: ta.value });
+        if (r.deleted) { form.remove(); return; }
+        textEl.textContent = ta.value;
+        form.replaceWith(bubble);
+      } catch (e) { alert('save failed: ' + e.message); saveB.disabled = false; }
+    });
+  }
+  async function deleteMessage(bubble, turnId, field) {
+    if (!confirm('Delete this message? Memory is unaffected; later story flow may shift.')) return;
+    try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); }
+    catch (e) { alert('delete failed: ' + e.message); }
+  }
+
   // Load (or reload, after a rewind) the transcript from the server.
   let turnCount = 0;
   async function redrawTranscript() {
     transcript.replaceChildren();
+    pendingPlayerBubble = null;
     try {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
       turnCount = turns.length;
-      for (const t of turns) { if (t.playerInput) addBubble('player', t.playerInput); if (t.narration) addBubble('narration', t.narration); }
+      for (const t of turns) {
+        if (t.playerInput) { transcript.append(messageBubble('player', t.playerInput, t.id, 'playerInput')); }
+        if (t.narration) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+      }
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange
     } catch {}
@@ -602,6 +669,21 @@ async function renderPlay(storyId) {
 
   // ---- Drawer tabs (Memory always; Summaries/Threads under debug) ----
   let activeTab = 'memory';
+  // Set by "open mind" (from a dossier) so the NPC minds tab expands & scrolls
+  // to that character on its next render.
+  let pendingMindExpand = null;
+
+  // Jump from a major character's dossier straight to its mind (personality &
+  // private notes) in the NPC minds drawer tab.
+  async function openMind(oid) {
+    if (!story.settings?.npcStories?.enabled) { alert('Character minds live in NPC story mode — enable it in ⚙ Story.'); return; }
+    document.querySelectorAll('.modal-bg').forEach((m) => m.remove());
+    openDossier = null;
+    pendingMindExpand = oid;
+    activeTab = 'minds';
+    drawer.classList.add('open'); // matters on narrow screens where the drawer is off-canvas
+    await renderDrawer();
+  }
   async function renderDrawer() {
     const tabs = [['memory', 'Memory']];
     // NPC Story Mode: each character's mind (personality + private notes) is a
@@ -623,6 +705,7 @@ async function renderPlay(storyId) {
   // ---- NPC minds (NPC Story Mode): view & repair each character's head. ----
   async function renderMinds(body) {
     body.replaceChildren();
+    const expandOid = pendingMindExpand; pendingMindExpand = null;
     let profiles = [];
     try { profiles = await api.get(`/api/stories/${storyId}/npc-profiles`); } catch {}
     if (!profiles.length) {
@@ -643,11 +726,19 @@ async function renderPlay(storyId) {
         h('div', { class: 'sub' }, 'Personality (stable — who they are)'), persona,
         h('div', { class: 'sub' }, 'Private notes (their own memory — they rewrite these each round they act)'), notes,
         h('div', { class: 'row', style: 'gap:8px' }, save, status));
-      body.append(h('div', { class: 'mem-obj' },
+      const card = h('div', { class: 'mem-obj' },
         h('div', { class: 'mem-head' },
           h('span', { class: 'mem-name', onclick: () => details.classList.toggle('hidden') }, p.name),
           h('span', { class: 'sub', onclick: () => details.classList.toggle('hidden') }, p.personality ? 'mind' : 'seeding…')),
-        details));
+        details);
+      body.append(card);
+      // Arrived here via a dossier's "mind" link → open this one and reveal it.
+      if (expandOid && p.objectId === expandOid) {
+        details.classList.remove('hidden');
+        card.classList.add('mind-focus');
+        requestAnimationFrame(() => card.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        setTimeout(() => card.classList.remove('mind-focus'), 1600);
+      }
     }
   }
 
@@ -921,6 +1012,9 @@ async function renderPlay(storyId) {
 
   // ---- WebSocket (with auto-reconnect and a tappable status dot) ----
   let ws = null, current = null, busy = false, lastInput = '';
+  // The live player bubble + turn id of the in-flight turn, so its two bubbles
+  // gain edit/delete controls the moment the turn completes (not only on reload).
+  let pendingPlayerBubble = null, pendingPlayerText = '', currentTurnId = null;
   let disposed = false, reconnectTimer = null;
   const wsInfo = { attempts: 0, since: null, lastClose: null, nextRetryAt: null };
   const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; };
@@ -984,22 +1078,25 @@ async function renderPlay(storyId) {
   function onWsMessage(ev) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
-      case 'turn.accepted': current = addBubble('narration cursor', ''); showReplyStart(current); break;
+      case 'turn.accepted': currentTurnId = m.turnId; current = addBubble('narration cursor', ''); showReplyStart(current); break;
       case 'turn.status': addStatus(m.text); break;
       case 'turn.delta': if (!current) { current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
       case 'turn.final':
-        if (current) { current.className = 'bubble narration'; current.textContent = m.narration; }
+        // Swap the live bubbles for edit/delete-capable ones now that the turn
+        // has a persisted id — no reload needed to fix a just-written message.
+        if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration'); current.replaceWith(nb); current = nb; }
+        if (pendingPlayerBubble) { const pb = messageBubble('player', pendingPlayerText, m.turnId, 'playerInput'); pendingPlayerBubble.replaceWith(pb); pendingPlayerBubble = null; }
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown(); break;
-      case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; setBusy(false); break;
+      case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'turn.error':
         if (current) current.remove();
         addBubble('error', `The turn failed — ${m.message}`);
         // Don't lose the message: put it back in the box for another try.
         if (!input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
-        current = null; setBusy(false); break;
+        current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
@@ -1040,7 +1137,9 @@ async function renderPlay(storyId) {
   function submitText(text, isRetry) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return false; }
     if (!wsOpen()) { addStatus('(not connected — your message is kept; tap the status dot for details)'); return false; }
-    if (!isRetry && text) { addBubble('player', text); scrollDown(true); }
+    currentTurnId = null;
+    if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); pendingPlayerText = text; scrollDown(true); }
+    else pendingPlayerBubble = null;
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
