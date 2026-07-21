@@ -179,6 +179,40 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     }
   });
 
+  // Edit any past message: rewrite a turn's player input and/or narration text
+  // (the transcript ✎ control). Memory is left as-is; if both sides end up
+  // empty the turn is dropped entirely (same as deleting the message).
+  server.patch('/api/stories/:id/turns/:turnId', async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const body = z.object({ playerInput: z.string().optional(), narration: z.string().optional() }).parse(req.body ?? {});
+    const turn = stories.getTurn(turnId);
+    if (!turn || turn.storyId !== id) {
+      reply.code(404);
+      return { error: 'turn not found' };
+    }
+    const updated = stories.setTurnText(turnId, body)!;
+    if (!updated.playerInput.trim() && !updated.narration.trim()) {
+      stories.deleteTurn(turnId);
+      app.agents.deleteMessagesForTurn(turnId);
+      return { ok: true, deleted: true };
+    }
+    return { ok: true, turn: updated };
+  });
+
+  // Delete any past message/exchange: drop the turn and its transcript
+  // messages. Memory is untouched (accepted staleness).
+  server.delete('/api/stories/:id/turns/:turnId', async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const turn = stories.getTurn(turnId);
+    if (!turn || turn.storyId !== id) {
+      reply.code(404);
+      return { error: 'turn not found' };
+    }
+    stories.deleteTurn(turnId);
+    app.agents.deleteMessagesForTurn(turnId);
+    return { ok: true, deleted: true };
+  });
+
   server.get('/api/stories/:id/summaries', async (req) => {
     const { id } = req.params as { id: string };
     return summaries.listForStory(id);

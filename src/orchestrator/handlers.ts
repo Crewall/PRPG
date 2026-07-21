@@ -14,6 +14,7 @@ import { ScribeStory } from '../agents/scribeStory.ts';
 import { NpcAgent } from '../agents/npcAgent.ts';
 import { renderPrompt } from '../agents/prompts.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { truncateToTokens } from './contextBuilder.ts';
 import type { JobHandler } from './postTurn.ts';
 
 export interface HandlerDeps {
@@ -172,8 +173,9 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
         noteLines.push(`- ${k.objectName}: ${k.content}`);
       }
       if (personaLines.length || noteLines.length) {
+        const personaMax = story.settings.npcStories.personalityMaxTokens;
         deps.npcProfiles.upsert(storyId, objectId, {
-          personality: personaLines.join('\n') || (view.summary ? `- ${view.summary}` : ''),
+          personality: truncateToTokens(personaLines.join('\n') || (view.summary ? `- ${view.summary}` : ''), personaMax),
           ...(!force && existing?.notes.trim() ? {} : { notes: noteLines.join('\n') }),
         });
         deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: [objectId] });
@@ -199,12 +201,13 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
     });
     const seed = await agent.seed(
       { system, messages: [{ role: 'user', content: `Create the mind for ${obj.name}. Reply as JSON.` }] },
+      { maxTokens: story.settings.npcStories.personalityTokens },
     );
     if (!deps.memory.getObject(objectId)) return; // deleted/rewound while generating
     const current = deps.npcProfiles.get(objectId);
     if (!force && current?.personality.trim()) return; // seeded/edited meanwhile — keep theirs
     deps.npcProfiles.upsert(storyId, objectId, {
-      personality: seed.personality,
+      personality: truncateToTokens(seed.personality, story.settings.npcStories.personalityMaxTokens),
       ...(!force && current?.notes.trim() ? {} : { notes: seed.notes }),
     });
     deps.events.emit({ t: 'npc.profile.updated', storyId, objectIds: [objectId] });
