@@ -63,8 +63,11 @@ list's metadata where available) and editable.
 
 - **DeepSeek** at time of writing: `deepseek-flash` and `deepseek-v4-pro`. Both have 1M context; both offer
   thinking and non-thinking modes per request.
-- **OpenRouter:** some models are reasoning-mandatory (switching reasoning off is rejected), so they get
-  `reasoning: 'always'`.
+- **OpenRouter:** some models are reasoning-mandatory (switching reasoning off is rejected with a 400, e.g.
+  Baidu ERNIE), so they get `reasoning: 'always'`. **List models** reads this from the listing's
+  `reasoning.mandatory` and keeps the model's `reasoning.supported_efforts` as `caps.efforts`; a tier effort the
+  model doesn't support is dropped rather than sent. As a safety net, the driver retries a request once without
+  its reasoning parameters when the provider rejects them, and remembers that model for the rest of the run.
 
 Model names change; use **List models** rather than hardcoding.
 
