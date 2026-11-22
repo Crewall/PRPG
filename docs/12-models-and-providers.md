@@ -1,7 +1,8 @@
 # 12 — Models, providers, tiers and caching
 
-**Status: draft spec, not built.** Milestone M1 of [doc 10](10-minds-engine.md) (Claude support is M1b, low
-priority). It applies to all engines, not only Minds.
+**Status: M1 built** (connections, tiers, DeepSeek + OpenRouter, usage capture, Settings page). **M1b (Claude via
+the official SDK) not built**, low priority. Milestone of [doc 10](10-minds-engine.md); it applies to all engines,
+not only Minds.
 
 **Focus: DeepSeek (direct) and OpenRouter.** Claude/Anthropic follows later.
 
@@ -91,7 +92,7 @@ Tier = { id, label, modelId, maxTokens, temperature?: number /* empty = don't se
 | `compactor` | Minds | Light |
 | `seeder` | Minds | Medium |
 | `player_intake` (interviewer) | all | Medium |
-| `randomizer` | all | Light |
+| `randomizer` | all | Heavy (one call per premise; it used the storyteller's model before it had a role) |
 | `storyteller` | classic / NPC Story Mode | Heavy |
 | `npc` | classic / NPC Story Mode | Medium |
 | `scribe_story`, `scribe_memory`, `context_planner`, `adjudicator`, `overseer` | classic / NPC Story Mode | Light |
@@ -155,13 +156,14 @@ are exactly that kind of drift. When done:
 
 - **JSON:**
   - when the model's endpoints support structured outputs (`caps.json = 'schema'`), send
-    `response_format: { type: "json_schema", json_schema: { name, strict: true, schema } }` with the schema
+    `response_format: { type: "json_schema", json_schema: { name, strict: false, schema } }` with the schema
     generated from the Zod contract, and `provider: { require_parameters: true }` so only supporting endpoints
     are used;
   - otherwise `json_object` (support varies by upstream);
   - otherwise a prompt-only instruction plus `extractJson` and the repair retry.
 
-  `strict` is a hint on some upstreams, so the Zod validation stays authoritative.
+  `strict` stays `false`: strict mode on OpenAI-style upstreams demands that every property be required, and our
+  contracts have optional fields. Zod validation after the call stays authoritative either way.
 - **Reasoning:** `reasoning: { enabled: false }` when the tier says off, `reasoning: { effort }` when on. For
   reasoning-mandatory models (`caps.reasoning = 'always'`) nothing is sent to disable it. Reasoning streams as
   `delta.reasoning_details`; display ignores it.
@@ -220,13 +222,13 @@ OpenRouter `:free` models allow **20 requests per minute**. Per day: **50** if f
 purchased, **1000** with at least 10 (the owner's account has the 1000 tier). A Minds round makes about 4 calls
 (doc 10 §5): 50 a day is only about 12 rounds, 1000 a day about 250.
 
-- **Counting:** requests per connection per day, from `thread_log`. For OpenRouter, `GET /api/v1/key` →
-  `free_model_daily_requests` (`used`, `limit`, `remaining`) is the authority when available.
-- **Display:** a small "requests today: 37 / 50" next to each OpenRouter tier in Settings, and in the status bar
-  when a tier using a `:free` model is over 80%.
-- **Behaviour at the limit:** the call fails with a clear message ("OpenRouter free limit reached for today:
-  switch the Light tier to DeepSeek or add credits"), never a silent retry loop. Automatic fallback to another
-  tier is a TODO.
+- **Counting (built):** every model call increments `request_counts` (connection × UTC day) through a registry
+  hook. For OpenRouter, **Check limits** reads `GET /api/v1/key` → `free_model_daily_requests` (`used`,
+  `limit`, `remaining`), the authority for free models.
+- **Display (built):** each tier row shows its provider's requests today; each provider block shows its own count.
+  *TODO:* a status-bar warning when a tier on a `:free` model passes 80% of its daily limit.
+- **Behaviour at the limit (built):** an OpenRouter 429 fails the call with a plain-language message (limits,
+  what to do), after the bounded backoff, never a silent retry loop. *TODO:* automatic fallback to another tier.
 
 ## 7. Settings migration (lossless)
 
@@ -238,10 +240,12 @@ From today's `runtimeConfig`:
 3. Tiers: **Heavy** ← the `storyteller` binding, **Medium** ← the `npc` binding, **Light** ← the `scribe_memory`
    binding (model + temperature + max tokens). Every other role points at the tier with an identical binding; if
    none matches, a tier named after the role is created, so behaviour is unchanged.
-4. Per-story overrides (`settings.roles`: profile names) → story-level role → tier overrides. A tier is created if
-   no existing tier uses that model.
-5. The old fields stay readable for one version.
-6. `config.example.json` switches to a DeepSeek + OpenRouter example.
+4. Per-story overrides (`settings.roles`: profile names) keep working as they are: `fav:<model>` and `role:<role>`
+   profiles still compile, `tier:<id>` is the new form, and an override that no longer resolves falls back to the
+   role's own model with a logged warning instead of failing the turn.
+5. The old blob is kept under the settings key `runtimeConfigV1Backup`.
+6. `config.example.json` is a DeepSeek + OpenRouter example (named `connections`, profiles on a `connection`).
+   The old `providers` shape is still accepted.
 
 ## 8. Acceptance tests (M1)
 

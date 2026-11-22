@@ -50,14 +50,16 @@ src/
     prompts/*.md        every prompt template (editable in Settings → prompts)
   llm/
     types.ts            ChatRequest/ChatResult/LlmDriver contract, SSE parser
-    anthropicDriver.ts  Anthropic Messages API (raw fetch, streaming)
-    openaiDriver.ts     OpenAI-compatible chat completions (OpenRouter, DeepSeek, local)
-    registry.ts         model profile → bound driver; live config
-    jsonCall.ts         JSON extraction, repair retry, max-token escalation
+    anthropicDriver.ts  Anthropic Messages API (raw fetch, streaming; low priority, see §9)
+    openaiDriver.ts     OpenAI-compatible chat completions; DeepSeek / OpenRouter extras switched on by preset
+    registry.ts         profile → bound driver, one driver per connection; getForRole(role, storyOverride)
+    jsonCall.ts         JSON extraction, repair retry, max-token escalation, per-attempt usage
+    jsonSchema.ts       Zod → JSON Schema (structured outputs)
     http.ts             retry with backoff (429/5xx)
   config/
-    config.ts           config.json schema (providers, modelProfiles, roles)
-    settingsService.ts  runtime settings in the DB (keys, favourites, per-role models, prompts, style, performance)
+    config.ts           config.json schema, provider presets, model caps, the EffectiveConfig type
+    settingsService.ts  runtime settings in the DB: connections, models, tiers, role → tier map, prompts, style,
+                        performance; migration from the old per-role shape
   db/
     db.ts, migrations/001–005.sql, stores/*.ts (one store per table group)
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
@@ -127,7 +129,8 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `scenes` | per story: index, title, `active_npc_ids` (present cast), open/closed. `location_object_id` exists but nothing sets it. |
 | `turns` | player input, narration, status, `meta_json` (timings, model, rolls, present cast) |
 | `agent_sessions` / `agent_messages` | one session per (story, role[, character]); messages are logged, not read back |
-| `thread_log` | every request and response of every AI call (the debug view) |
+| `thread_log` | every request and response of every AI call (the debug view), with tokens, cache read/write, reasoning tokens, cost and connection |
+| `request_counts` | model calls per provider connection per UTC day (free-model limits) |
 | `memory_objects` | roster: characters, items, places, factions, events, lore (+ aliases, salience) |
 | `memory_facts` + `memory_fts` | classic engine: atomic facts with category, detail level, tier, game time; full-text index |
 | `knowledge_links` | classic engine: which character (or the player) knows which fact |
@@ -142,11 +145,25 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 ## 5. Models and settings
 
 - `config.json` (copy from `config.example.json`) is only the **first-boot seed**. After that the DB holds the
-  settings, edited in the UI: provider keys (one Anthropic + one OpenAI-compatible slot), a favourites list of
-  models, a model + temperature + max tokens per role, prompt overrides, style strings, job concurrency, request
-  timeout.
+  settings (key `runtimeConfig`, version 2), edited on the Settings page:
+  - **Providers:** named connections, several at once (presets: DeepSeek, OpenRouter, OpenAI, local, Anthropic,
+    custom).
+  - **Models:** a model id on a connection, with caps (accepts temperature; reasoning none / switchable / always;
+    JSON via JSON mode, structured outputs or prompt only).
+  - **Tiers:** a model + max tokens + optional temperature + reasoning + effort. Heavy / Medium / Light by
+    default, more can be added.
+  - **Role mapping:** each role points at a tier.
+  - Plus prompt overrides, style strings, job concurrency and request timeout.
+
+  Old per-role settings migrate on load without changing any role's model or parameters (see doc 12 §7).
+- The compiled `EffectiveConfig` has profiles `tier:<id>`, `role:<role>` and `fav:<model>`. A story can override a
+  role with any of these names in its settings; a stale override falls back to the role's model.
 - Roles: `storyteller`, `npc`, `scribe_memory`, `scribe_story`, `context_planner`, `adjudicator`,
-  `player_intake`, `overseer` (unused). A story can override a role's model in its settings.
+  `player_intake`, `randomizer`, `overseer` (unused).
+- **Per-provider behaviour** (`openaiDriver.ts`): temperature only when set; DeepSeek gets the `thinking`
+  switch and `reasoning_effort`; OpenRouter gets `session_id` per agent thread (sticky routing for cache hits),
+  the `reasoning` object, and `json_schema` + `provider.require_parameters` for structured outputs. Usage (cache
+  read/write, reasoning tokens, cost) is normalized and logged per call.
 - Per-story switches live in `StorySettings` (`src/domain.ts`): premise, genre, tone, verbosity, player
   character, budgets, summary-driven context, NPC Story Mode, adjudicator, salience, debug.
 
@@ -168,7 +185,9 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
 - **Stories:** CRUD, randomize premise, turns (list, edit, delete), rewind, new scene, summaries, failed jobs.
 - **Memory:** objects and facts CRUD, merge, knowledge links, maintenance, rescan, suggestions, "look at".
 - **Characters:** promote, demote, enter by name, rebuild mind, NPC profiles, NPC knowledge, player interview.
-- **Settings:** config (masked keys), key test, OpenRouter credit check, prompts, seeds, style.
+- **Settings:** config (masked keys) for connections / models / tiers / roles, per-connection test, model listing
+  (with caps from OpenRouter metadata), OpenRouter credits and free-model limits, requests today, prompts, seeds,
+  style.
 - **Debug:** thread log per story/turn, agent sessions.
 
 WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`,
@@ -178,7 +197,7 @@ WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updat
 
 ```bash
 npm install
-npm test            # Vitest, 131 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 148 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -190,9 +209,10 @@ in that style.
 
 ## 9. Known gaps in the current code
 
-- The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both.
-- Only one OpenAI-compatible provider at a time (DeepSeek **or** OpenRouter).
-- No prompt caching support; cache usage isn't recorded; JSON calls log 0 input tokens.
+- The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both
+  (fix planned as M1b, low priority).
+- Prompts are rebuilt from scratch every turn, so provider caches rarely hit (the Minds engine's append-only
+  threads fix this; cache usage is already recorded per call).
 - NPC Story Mode: the storyteller sees present characters only by name (their one-liner reads memory facts,
   which that mode never writes).
 - Scene location is never set, so location-based prompt blocks never appear.

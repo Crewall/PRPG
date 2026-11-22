@@ -9,9 +9,9 @@ design docs (the original 01–08 plan) are in [`/old`](../old/README.md); don't
 | Doc | What it specifies | Status |
 |---|---|---|
 | [09-npc-story-mode](09-npc-story-mode.md) | NPC Story Mode: narrative character minds in the current code | **Built.** Two gaps: §5 storyteller one-liners, §4 scene location (see ARCHITECTURE §9). |
-| [10-minds-engine](10-minds-engine.md) | Next engine: one narrator, a thread per character, briefs, referee, dialogue mode, advanced mode, help panel | **Draft spec, not built.** Build order in §13. |
+| [10-minds-engine](10-minds-engine.md) | Next engine: one narrator, a thread per character, briefs, dialogue mode, advanced mode, help panel | **Spec.** M1 built; M2–M8 not built. Build order in §13. |
 | [11-character-sheets](11-character-sheets.md) | Description, appearance, state, scenario variables, self-written thoughts | **Draft spec, not built.** |
-| [12-models-and-providers](12-models-and-providers.md) | Provider connections (DeepSeek, OpenRouter first), model tiers, caching | **Draft spec, not built.** Milestone M1. |
+| [12-models-and-providers](12-models-and-providers.md) | Provider connections (DeepSeek, OpenRouter first), model tiers, caching | **M1 built.** M1b (Claude via the official SDK) not built. |
 
 ## Conventions
 

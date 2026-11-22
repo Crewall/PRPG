@@ -24,14 +24,16 @@ is right.
 - **Built and working:**
   - two engines: classic (fact-extraction memory) and NPC Story Mode;
   - adjudicator + hidden dice, rewind/edit, the player interview, the premise randomizer, the Settings UI;
-  - 131 passing tests.
+  - **M1: provider connections + model tiers** (DeepSeek and OpenRouter at once, presets, per-provider
+    parameters, usage and request counting);
+  - 148 passing tests.
 - **Designed, not built:** the **Minds engine** (docs 10–12):
   - one narrator, one persistent thread per character, per-character briefs;
   - scenario variables, states, self-written tagged thoughts;
   - dialogue mode, advanced mode with POV filter, a help panel;
   - model tiers, DeepSeek + OpenRouter providers.
 
-  Build order: doc 10 §13 (M1 first: providers and tiers).
+  Build order: doc 10 §13. M1 is done; **M2 (sheets data layer) is next**.
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on
   current Claude models (see ARCHITECTURE §9) and gets fixed later.
 

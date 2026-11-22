@@ -46,12 +46,12 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 - **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)) —
   a per-story switch replacing the structured memory pipeline with per-NPC
   narrative minds (proactive rounds, skip gate, seeding, NPC-minds panel).
-- **Settings UI (extra):** in-app page to set provider API keys (with a live
-  "test key" button), curate a favourites list of models, pick a model +
-  temperature + max-tokens per AI role, and edit each role's prompt. All
-  persisted in the DB and auto-loaded; `config.json` is just the initial seed.
-- **Next: the Minds engine** (docs 10–12): designed, not built. Build order in doc 10 §13; first milestone is
-  provider connections (DeepSeek + OpenRouter) and model tiers.
+- **Settings UI (extra):** in-app page for provider connections (DeepSeek, OpenRouter and others at once, with
+  test, model listing and limits), models, **model tiers** (Heavy / Medium / Light + your own; every AI role
+  follows its tier), role mapping and each role's prompt. All persisted in the DB; `config.json` is just the
+  initial seed.
+- **Minds engine** (docs 10–12): M1 (providers + tiers) ✅ built; the rest is designed, not built. Build order in
+  doc 10 §13.
 
 ## Running it
 

@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: draft spec, not built.** Companion docs:
+**Status: spec. M1 (providers and tiers, doc 12) is built; M2–M8 are not.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -466,7 +466,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 | # | Milestone | Done when |
 |---|---|---|
-| M1 | **Providers and tiers** (doc 12): multiple named connections with DeepSeek + OpenRouter presets, tiers (3 default + custom), role → tier mapping, settings migration, DeepSeek/OpenRouter specifics (thinking/reasoning switches, JSON modes, sticky sessions), cache and request-count capture. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek and OpenRouter usage fields, reasoning off, whitespace-only JSON. |
+| M1 ✅ | **Providers and tiers** (doc 12, built): multiple named connections with DeepSeek + OpenRouter presets, tiers (3 default + custom), role → tier mapping, settings migration, DeepSeek/OpenRouter specifics (thinking/reasoning switches, JSON modes, sticky sessions), cache and request-count capture. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek and OpenRouter usage fields, reasoning off, whitespace-only JSON. |
 | M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
 | M2 | **Sheets data layer** (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
 | M3 | **Thread builders**: system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |

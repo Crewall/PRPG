@@ -207,7 +207,8 @@ export function seedFromConfig(base: Config): RuntimeSettings {
   const presetOf = (connId: string) => connections.find((c) => c.id === connId)?.preset ?? 'custom';
   const models: ModelEntry[] = Object.entries(base.modelProfiles).map(([name, p]) => {
     const providerId = profileConnectionId(base, p);
-    return { id: name, label: name, providerId, model: p.model, caps: defaultCaps(presetOf(providerId)) };
+    // Label by the model id: profile names ("heavy") read like tier names in the UI.
+    return { id: name, label: p.model, providerId, model: p.model, caps: defaultCaps(presetOf(providerId)) };
   });
   const bindingOf = (profileName: string | undefined): Binding | undefined => {
     const p = profileName ? base.modelProfiles[profileName] : undefined;
