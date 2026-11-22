@@ -10,6 +10,7 @@ export type ServerEvent =
   | { t: 'scene.changed'; storyId: string; sceneId: string }
   | { t: 'npc.profile.updated'; storyId: string; objectIds: string[] }
   | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }
+  | { t: 'minds.updated'; storyId: string; objectIds: string[] }
   | {
       t: 'thread.activity';
       storyId: string | null;

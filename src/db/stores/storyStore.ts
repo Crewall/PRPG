@@ -59,6 +59,7 @@ function rowToScene(r: Row): Scene {
     title: (r.title as string) ?? null,
     locationObjectId: (r.location_object_id as string) ?? null,
     activeNpcIds: JSON.parse((r.active_npc_ids as string) || '[]'),
+    itemHandles: JSON.parse((r.items_json as string) || '[]'),
     status: r.status as Scene['status'],
   };
 }
@@ -248,6 +249,14 @@ export function createStoryStore(db: Db) {
       const scene = this.getScene(sceneId);
       if (!scene) return;
       this.setActiveNpcs(sceneId, scene.activeNpcIds.filter((n) => n !== npcObjectId));
+    },
+
+    setSceneLocation(sceneId: string, locationObjectId: string | null): void {
+      db.prepare(`UPDATE scenes SET location_object_id = ?, updated_at = ? WHERE id = ?`).run(locationObjectId, Date.now(), sceneId);
+    },
+
+    setSceneItems(sceneId: string, handles: string[]): void {
+      db.prepare(`UPDATE scenes SET items_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(Array.from(new Set(handles))), Date.now(), sceneId);
     },
   };
 }

@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: spec. M1 (providers and tiers), M2 (sheets data layer) and M3 (thread builders) are built; M4–M8 are not.** Companion docs:
+**Status: M1–M4 are built: a Minds story is playable (engine selector in Story options). M5–M8 are not.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -159,6 +159,23 @@ Reuses `shouldInvokeNpc`. A present character is called when any of these holds:
 
 Present but not called: no call, but its pending brief stays pending, so the next time it is called it reads
 everything it witnessed, in order. Cap: `maxCharactersPerRound` (default 4; spotlighted characters first).
+
+### 5.2 Settled while building M4
+
+- **The player's words, once.** A called character hears the player's words in its round message ("Right
+  now"), so its brief's *Heard* list leaves them out; characters not called get them in the *Heard* list.
+- **The opening round.** The first round of a story with an empty message carries an out-of-character note
+  asking the narrator to set the scene and bring in the first characters (`cast.enter`, with briefs). The client
+  sends that empty message automatically when a story with no turns is opened.
+- **Narrator changes are computed from the start of the round** (the state the narrator saw); a character's own
+  change to the same key that round is logged as *overridden*.
+- **Names and handles in the block** are resolved leniently: `#handle`, the character's name, or a slug of the
+  name; `#player` / `player` mean the player character. Unknown holders are recorded in the turn's
+  `blockProblems`, never fatal.
+- **Turn meta** keeps the gate's choices and reasons, every declaration (with errors and parse problems), the
+  parsed block, where it came from (`narrator` / `distributor` / `fallback`), and change counts.
+- **Scene items** are stored on the scene (`items_json`, migration 009); the narrator's `scene.location` and
+  `scene.items` create roster objects for names it hasn't introduced.
 
 ## 6. The player's input
 
@@ -479,7 +496,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 | M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
 | M2 ✅ | **Sheets data layer** (built) (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
 | M3 ✅ | **Thread builders** (built): system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
-| M4 | **Normal round**: parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
+| M4 ✅ | **Normal round** (built): parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
 | M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
 | M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
@@ -487,6 +504,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 14. TODO (explicitly later)
 
+- A sheet view on the cast chips (M7); today the chips show appearance and visible values as a tooltip.
 - Show a character its tag vocabulary when it changes (doc 11 §5.3); today only the narrator gets the tags in use.
 - Tell a character when the user revokes one of its thoughts in advanced mode (it stays visible in older log messages).
 - Referee + dice for special cases (§9.4), reusing `resolution.ts` and the adjudicator.

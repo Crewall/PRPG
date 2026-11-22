@@ -77,7 +77,7 @@ export async function callJson<S extends z.ZodTypeAny>(
   bound: BoundDriver,
   ctx: JsonCallContext,
   schema: S,
-  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta; maxTokens?: number; onUsage?: (usage: Usage) => void } = {},
+  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta; maxTokens?: number; onUsage?: (usage: Usage) => void; jsonSchema?: object } = {},
 ): Promise<z.infer<S>> {
   const messages: ChatMessage[] = [...ctx.messages];
   let lastRaw = '';
@@ -92,7 +92,7 @@ export async function callJson<S extends z.ZodTypeAny>(
   let escalations = 0;
   let emptyRetries = 0;
   // The real schema: drivers use it for structured outputs when the model supports them.
-  const jsonSchema = zodToJsonSchema(schema);
+  const jsonSchema = opts.jsonSchema ?? zodToJsonSchema(schema);
 
   for (let attempt = 0; attempt < MAX_REPAIRS + MAX_ESCALATIONS + MAX_EMPTY_RETRIES + 1; attempt++) {
     const result = await bound.chat(

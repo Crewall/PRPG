@@ -166,6 +166,8 @@ export interface Scene {
   title: string | null;
   locationObjectId: string | null;
   activeNpcIds: string[];
+  /** Minds engine: roster handles of items in view (the narrator's scene.items). */
+  itemHandles: string[];
   status: SceneStatus;
 }
 

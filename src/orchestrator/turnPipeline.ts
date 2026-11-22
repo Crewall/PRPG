@@ -32,6 +32,11 @@ import type { NpcRoundOutcome } from './npcRound.ts';
 import { truncateToTokens } from './contextBuilder.ts';
 import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import type { Story, Turn } from '../domain.ts';
+import type { Db } from '../db/db.ts';
+import type { SheetStore, ThoughtStore, VariableStore } from '../db/stores/mindsStore.ts';
+import type { ThreadStore } from '../db/stores/threadStore.ts';
+import { runMindsRound } from '../minds/round.ts';
+import type { RoundDeps } from '../minds/round.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
 // forward events to the client; tests implement it to collect events.
@@ -58,6 +63,18 @@ export interface PipelineDeps {
   events: EventBus;
   /** Dice source for adjudicated actions — injectable for deterministic tests. */
   rng?: () => number;
+  // Minds engine (docs/10).
+  db: Db;
+  sheets: SheetStore;
+  variables: VariableStore;
+  thoughts: ThoughtStore;
+  threads: ThreadStore;
+  verbosityOverride?: () => Record<string, string>;
+}
+
+export interface RunOptions {
+  /** Minds engine: characters the user forces to act this round. */
+  force?: string[];
 }
 
 export interface RewindResult {
@@ -125,11 +142,20 @@ export class TurnPipeline {
     });
   }
 
-  async run(storyId: string, playerInput: string, out: TurnEmitter): Promise<Turn | undefined> {
-    return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out));
+  async run(storyId: string, playerInput: string, out: TurnEmitter, opts: RunOptions = {}): Promise<Turn | undefined> {
+    return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out, opts));
   }
 
-  private async runLocked(storyId: string, playerInput: string, out: TurnEmitter): Promise<Turn | undefined> {
+  private roundDeps(): RoundDeps {
+    const d = this.deps;
+    return {
+      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts,
+      agents: d.agents, threads: d.threads, registry: d.registry, threadLog: d.threadLog, jobs: d.jobs, events: d.events,
+      verbosityOverride: d.verbosityOverride,
+    };
+  }
+
+  private async runLocked(storyId: string, playerInput: string, out: TurnEmitter, opts: RunOptions = {}): Promise<Turn | undefined> {
     const { stories, agents, threadLog, jobs, registry, contexts } = this.deps;
 
     // Step 0 — preflight.
@@ -150,6 +176,18 @@ export class TurnPipeline {
     let stage = 'setup';
 
     try {
+      // Minds engine (docs/10): its own round — characters declare, the narrator
+      // writes, one commit. Same lock, snapshot, cancel and error handling.
+      if (story.settings.engine === 'minds') {
+        const finalTurn = await runMindsRound(this.roundDeps(), story, turn, playerInput, out, {
+          signal: aborter.signal,
+          force: opts.force,
+          setStage: (s) => (stage = s),
+        });
+        out.final(finalTurn);
+        return finalTurn;
+      }
+
       // NPC Story Mode (docs/09): NPCs act FIRST — every present NPC the
       // mechanical gate lets through replies (parallel) with what it says and
       // intends, then ONE storyteller pass weaves the round. The structured
