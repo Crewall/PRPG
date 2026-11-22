@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M4 are built: a Minds story is playable (engine selector in Story options). M5–M8 are not.** Companion docs:
+**Status: M1–M6 are built: a Minds story is playable (engine selector in Story options), with dialogue mode and thread compaction. M7–M8 are not.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -222,6 +222,24 @@ prose (optional, may be empty) and a block: briefs for **bystanders** (what they
 and variable changes, tags. The partner's own thread already holds the whole conversation, so it gets no brief
 unless something happened around it.
 
+**Settled while building M5** (`src/minds/dialogue.ts`, the wrap-up in `src/minds/round.ts`):
+
+- **Each exchange is its own turn** (`meta.mode: 'dialogue'`, `meta.partner`, `meta.reply`), so rewind and edit work
+  on single exchanges. The server keeps no dialogue state: the open conversation is the run of dialogue turns at
+  the end of the story. The client sends `turn.submit` with `dialogue: { partner }`.
+- **The partner's round message** carries its waiting briefs as usual, then `Right now:` with the player's line
+  (`#kael Kael: "…" (gesture)`), and asks for the conversation format (§9.2). The reply is stored byte-exact in its
+  thread; `state` and memory operations apply as in a round; the player reads `Marta: "…" (gesture)`.
+- **Ending is just a normal message.** Any normal turn after open dialogue turns is the **wrap-up**
+  (`meta.mode: 'wrapup'`): nobody is called; the narrator's round message gets the transcript and the instruction
+  to bridge back, resolve what the player (and the partner, if it acted) now try, and brief every bystander. An
+  empty message = "End conversation"; text sent with **Act** = the player's action. When the partner's reply has
+  `act`, the client ends the conversation itself and sends the wrap-up; the act is the partner's declaration.
+- **The player's line in dialogue** follows the input syntax (§6): speech in quotes, a gesture outside them, an
+  OOC note in `((…))`. The OOC note reaches the narrator at the wrap-up (in the transcript), never the partner.
+- **UI:** tap a character in the Present bar → confirm → a banner ("💬 Talking with Marta — only they hear you",
+  End conversation, Act); Send becomes Say. An open conversation is restored after a reload.
+
 **TODO (automatic dialogue mode):** detect a conversation (the player addresses one character with speech only,
 twice in a row) and suggest entering dialogue mode; later, switch automatically. Not in v1.
 
@@ -299,6 +317,27 @@ default 32k), a Light-tier compactor folds the **oldest half** of the log into t
 The new recap replaces the old one (it is rewritten to include it), and the folded messages are flagged
 `compacted`. Cost: one cache miss for that thread on its next call. A compaction is tied to the turn that
 triggered it, so rewind undoes it (§12).
+
+**Settled while building M6** (`src/minds/compaction.ts`):
+
+- **When:** after a round (or a dialogue exchange) commits, each thread it touched is measured (live log tokens,
+  estimated); one over its threshold gets a `minds_compact` job, at most one queued per thread. The player never
+  waits for it.
+- **What is folded:** whole rounds (a round message + its reply) from the oldest, until they hold half the log's
+  tokens. The newest round always stays live, so a thread with one round is never folded.
+- **The compactor** is a stateless helper (role `compactor`, Light tier by default) with one fixed system prompt
+  (`minds-compactor`, editable in Settings) for every thread, so it caches across calls. It reads whose thread it
+  is, the earlier recap (to fold in) and the folded rounds (the narrator's hidden blocks left out), and replies
+  `{ "recap": "…", "pins": [{ "text", "tags" }] }`. Recap caps: 350 words (character), 900 (narrator).
+- **The stored recap** is the compactor's text plus what must not be lost, rendered by the server: the owner's
+  pinned thoughts, a character's tag vocabulary, the narrator's roster (handle, name, appearance). The restated
+  pins are marked recalled at the compaction's turn, so round messages don't repeat them. Up to three `pins` a
+  character's compactor proposes become pinned thoughts (source `compactor`), shown once on its next turn under
+  "Always on your mind", where it keeps or forgets them.
+- **Safety:** the fold applies in one transaction, and only if the folded rows are still the oldest live ones and
+  the recap is still the one folded in; a job whose turn was rewound does nothing. A failing compactor leaves the
+  thread as it was (the job retries, then fails).
+- **Thresholds** are in Story options → Minds engine.
 
 ## 9. Output contracts
 
@@ -497,8 +536,8 @@ Each milestone is committed on its own and keeps the existing engines working.
 | M2 ✅ | **Sheets data layer** (built) (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
 | M3 ✅ | **Thread builders** (built): system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
 | M4 ✅ | **Normal round** (built): parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
-| M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
-| M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
+| M5 ✅ | **Dialogue mode** (manual) + wrap-up (built). | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
+| M6 ✅ | **Compaction** for character and narrator threads (built). | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
 | M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
 | M8 | **Docs and cleanup**: update docs/README, ARCHITECTURE, README status; remove the old engines from the active line (the backup keeps them). **Keep the dice/adjudication code.** | — |
 
@@ -509,6 +548,8 @@ Each milestone is committed on its own and keeps the existing engines working.
 - Tell a character when the user revokes one of its thoughts in advanced mode (it stays visible in older log messages).
 - Referee + dice for special cases (§9.4), reusing `resolution.ts` and the adjudicator.
 - Automatic dialogue mode (detect, then suggest, then switch).
+- The compactor proposing thought merges for a character at `maxActiveThoughts` (doc 11 §5); today it only
+  proposes up to three pins.
 - Whispering: private `say` with `to` for characters; a whisper selector for the player.
 - Relation variables (a value per holder × target, e.g. Marta's trust in the player).
 - Derived variables and triggers (e.g. "health reaches 0 → the narrator is told the character is down").

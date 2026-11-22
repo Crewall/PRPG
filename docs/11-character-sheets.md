@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2 and M4 of doc 10)**, seeding included; recaps after compaction wait for M6. Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4 and M6 of doc 10)**, seeding and recaps after compaction included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -274,7 +274,7 @@ app can bring the right ones back at the right time.
 - Pinned thoughts over `pinnedTokens` (default 400): the round message adds "Your pinned thoughts are long;
   unpin or merge some."
 - More than `maxActiveThoughts` (default 80) active thoughts: new `remember`s are rejected with a note, and the
-  compactor proposes merges.
+  compactor proposes merges *(not built yet: doc 10 §14)*.
 
 **The narrator** uses the same store and the same recall (owner `narrator`): its `notes` in the round block are
 its thoughts, and recalled ones appear in its round message. If `narratorSeesThoughts` is on, the narrator's

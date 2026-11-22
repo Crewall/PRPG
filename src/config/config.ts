@@ -24,6 +24,7 @@ export const RoleName = z.enum([
   'character',
   'distributor',
   'seeder',
+  'compactor',
 ]);
 export type RoleName = z.infer<typeof RoleName>;
 export const ALL_ROLES: RoleName[] = RoleName.options;
@@ -42,6 +43,7 @@ export const ROLE_LABELS: Record<RoleName, string> = {
   character: 'Character mind (Minds)',
   distributor: 'Round-block fallback (Minds)',
   seeder: 'New-character seeder (Minds)',
+  compactor: 'Thread compactor (Minds)',
 };
 
 const ServerSchema = z.object({
@@ -90,8 +92,34 @@ export const ModelCaps = z.object({
   sampling: z.boolean().default(true),
   reasoning: z.enum(['none', 'toggle', 'always']).default('none'),
   json: z.enum(['schema', 'json_object', 'prompt']).default('json_object'),
+  /** Effort levels the model accepts (from the provider's model list); absent = unknown, send what the tier says. */
+  efforts: z.array(z.string()).optional(),
 });
 export type ModelCaps = z.infer<typeof ModelCaps>;
+
+/**
+ * Caps from an OpenAI-compatible model-list entry. OpenRouter adds
+ * `supported_parameters` and a `reasoning` object
+ * ({ mandatory, supported_efforts, … }): mandatory reasoning → 'always' (it
+ * can't be switched off), and only the listed effort levels are sent.
+ */
+export function capsFromListing(
+  m: { supported_parameters?: string[]; reasoning?: { mandatory?: boolean; supported_efforts?: string[] } | null },
+  preset: ProviderPreset,
+): ModelCaps {
+  const params = m.supported_parameters;
+  const r = m.reasoning ?? undefined;
+  if (!params && !r) return defaultCaps(preset);
+  const p = params ?? [];
+  const hasReasoning = !!r || p.includes('reasoning') || p.includes('reasoning_effort');
+  const efforts = r?.supported_efforts?.filter((e) => ['low', 'medium', 'high', 'max'].includes(e));
+  return {
+    sampling: params ? p.includes('temperature') : true,
+    reasoning: !hasReasoning ? 'none' : r?.mandatory ? 'always' : 'toggle',
+    json: p.includes('structured_outputs') ? 'schema' : p.includes('response_format') ? 'json_object' : 'prompt',
+    ...(efforts && efforts.length ? { efforts } : {}),
+  };
+}
 
 export function defaultCaps(preset: ProviderPreset): ModelCaps {
   if (preset === 'deepseek' || preset === 'openrouter') return { sampling: true, reasoning: 'toggle', json: 'json_object' };

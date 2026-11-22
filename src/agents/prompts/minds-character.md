@@ -40,3 +40,14 @@ one else reads it.
 }
 For a number you may also use "delta" instead of "set"; for a list, "add" or "remove" with one item. Leave out
 "vars", "remember" and "forget" when you have nothing for them.
+
+## In a direct conversation
+When the round message says you are in a direct conversation, it is a quick back-and-forth: reply with this
+JSON object instead.
+{
+  "say": "your words",
+  "gesture": "optional: a small visible action, at most 15 words",
+  "state": "optional: how you feel now, one sentence",
+  "remember": [], "forget": [],
+  "act": "optional: if you decide to DO something that matters (leave, attack, hand something over), what you try; this ends the conversation"
+}

@@ -144,6 +144,30 @@ async function renderPlay(storyId) {
   const sendBtn = h('button', { class: 'primary' }, 'Send');
   const cancelBtn = h('button', { class: 'ghost', disabled: true }, 'Stop');
   const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, 'Edit');
+
+  // Dialogue mode (Minds, docs/10 §7): a direct back-and-forth with one character.
+  // Ending it = sending a normal message (or an empty one); the server wraps it up.
+  let dialogue = null; // { partner, name }
+  const dialogueLabel = h('span', {});
+  const endTalkBtn = h('button', { class: 'small', title: 'End the conversation; the narrator wraps it up and tells everyone else what they noticed' }, 'End conversation');
+  const actBtn = h('button', { class: 'small', title: 'End the conversation by doing something: what you typed is sent as a normal action' }, 'Act');
+  const dialogueBar = h('div', { class: 'dialogue-bar', style: 'display:none' }, dialogueLabel, endTalkBtn, actBtn);
+  const DEFAULT_PLACEHOLDER = input.placeholder;
+  function setDialogue(d) {
+    dialogue = d;
+    dialogueBar.style.display = d ? '' : 'none';
+    dialogueLabel.textContent = d ? `💬 Talking with ${d.name} — only they hear you.` : '';
+    input.placeholder = d ? `"What you say" (small gestures outside the quotes) — Ctrl+Enter to send` : DEFAULT_PLACEHOLDER;
+    sendBtn.textContent = d ? 'Say' : 'Send';
+    refreshSceneHeader();
+  }
+  endTalkBtn.addEventListener('click', () => { if (busy) return; setDialogue(null); submitText('', false); });
+  actBtn.addEventListener('click', () => {
+    if (busy) return;
+    const text = input.value.trim();
+    setDialogue(null);
+    if (submitText(text, false)) { input.value = ''; input.style.height = 'auto'; }
+  });
   const drawer = h('div', { class: 'drawer' });
 
   // Agent status bar (feature): a live view of what each AI agent is doing this
@@ -275,6 +299,23 @@ async function renderPlay(storyId) {
       npcNumIn('personalityMaxTokens', 'personality max length (tokens)', 'The AI-written personality is truncated to this many tokens before it is stored. Your own manual edits are never truncated.', 50, 4000),
       npcNumIn('notesTokens', 'private-notes length (tokens)', 'How much of each major character\'s private notes is kept (they rewrite these each round they act).', 50, 4000));
 
+    // Minds engine budgets (docs/10 §8.4, §12).
+    const minds = { ...(s.minds || {}) };
+    const mindsNumIn = (key, label, hint, min, max) => {
+      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(minds[key] ?? ''), style: 'width:7em' });
+      inp.addEventListener('change', async () => {
+        const v = Math.max(min, Math.min(max, Math.round(Number(inp.value)) || minds[key]));
+        inp.value = String(v); minds[key] = v;
+        await patchSettings({ minds: { ...minds } });
+      });
+      return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
+    };
+    const mindsBlock = h('details', {},
+      h('summary', { class: 'sub' }, 'Minds engine'),
+      mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
+      mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
+      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
+
     // Which engine plays this story (docs/10 §4).
     const ENGINES = [
       ['classic', 'Classic — one storyteller, extracted memory'],
@@ -285,7 +326,7 @@ async function renderPlay(storyId) {
     const engineHints = {
       classic: 'One storyteller voices everyone; a scribe extracts memory facts after each turn.',
       npc_stories: 'Present characters act every round from their own personality and notes; the storyteller weaves them in.',
-      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story.',
+      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story. Tap a character in the Present bar to talk with them directly (dialogue mode); end the conversation to let the narrator wrap it up.',
     };
     const engineSel = h('select', { onchange: async (e) => {
       engineHint.textContent = engineHints[e.target.value] || '';
@@ -311,6 +352,7 @@ async function renderPlay(storyId) {
           s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
         budgetBlock,
         npcBlock,
+        mindsBlock,
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -338,7 +380,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, dialogueBar, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   let activeNpcIds = new Set();
@@ -355,7 +397,12 @@ async function renderPlay(storyId) {
       const tip = (c) => [c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
       npcChips.replaceChildren(
         pc ? h('span', { class: 'chip pc', title: tip(pc) }, `🎭 ${pc.name}`) : h('span', { class: 'sub' }, '🎭 no player character'),
-        ...(here.length ? here.map((c) => h('span', { class: 'chip', title: tip(c) }, c.name)) : [h('span', { class: 'sub' }, 'nobody else here yet')]),
+        ...(here.length
+          ? here.map((c) => h('button', { class: 'chip', title: `${tip(c)}\n\nTap to talk with ${c.name} directly.`, onclick: () => {
+              if (busy || dialogue?.partner === c.objectId) return;
+              if (confirm(`Talk with ${c.name}?\n\nYour messages go to ${c.name} only, back and forth, until you end the conversation. Then the narrator wraps it up.`)) setDialogue({ partner: c.objectId, name: c.name });
+            } }, dialogue?.partner === c.objectId ? `💬 ${c.name}` : c.name))
+          : [h('span', { class: 'sub' }, 'nobody else here yet')]),
       );
       return;
     }
@@ -700,6 +747,12 @@ async function renderPlay(storyId) {
       for (const t of turns) {
         if (t.playerInput) { transcript.append(messageBubble('player', t.playerInput, t.id, 'playerInput')); }
         if (t.narration) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+      }
+      const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
+      if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
+        let name = 'them';
+        try { name = (await api.get(`/api/memory/objects/${lastTurn.meta.partner}`))?.name || name; } catch {}
+        setDialogue({ partner: lastTurn.meta.partner, name });
       }
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange
@@ -1155,7 +1208,13 @@ async function renderPlay(storyId) {
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
-        current = null; setBusy(false); scrollDown(); break;
+        current = null; setBusy(false); scrollDown();
+        if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
+          addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
+          setDialogue(null);
+          setTimeout(() => submitText('', false), 300);
+        } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
+        break;
       case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'turn.error':
         if (current) current.remove();
@@ -1210,7 +1269,7 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text }));
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}) }));
     return true;
   }
 
@@ -1238,7 +1297,7 @@ async function renderPlay(storyId) {
 // ---------------- Settings ----------------
 // Provider connections → models → tiers → role mapping (docs/12). The user
 // normally only touches the Tiers card: every role on a tier follows it.
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder', compactor: 'Compactor' };
 const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
 const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
 const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);
@@ -1292,7 +1351,9 @@ async function renderSettings() {
       const info = h('div', { class: 'sub tier-info' },
         used.length ? `Used by: ${used.join(', ')}` : 'Not used by any role yet',
         c ? ` · ${c.label}: ${reqs} request${reqs === 1 ? '' : 's'} today` : '',
-        m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '');
+        m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
+        m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
+        m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
       return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), rm), info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
@@ -1330,7 +1391,9 @@ async function renderSettings() {
       const sampling = h('input', { type: 'checkbox', ...(m.caps.sampling ? { checked: true } : {}), onchange: (e) => (m.caps.sampling = e.target.checked) });
       return h('div', { class: 'model-block' },
         h('div', { class: 'model-row' }, label, provider, model, test, rm),
-        h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning, h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
+        h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning,
+          m.caps.efforts ? h('span', { title: 'Effort levels this model accepts (from the provider)' }, `efforts: ${m.caps.efforts.join(' / ')}`) : null,
+          h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
     });
     const lists = Object.entries(modelLists).map(([cid, list]) => h('datalist', { id: 'ml-' + cid }, ...list.map((x) => h('option', { value: x.id }, x.name))));
     const add = h('button', { class: 'small', disabled: !st.connections.length, onclick: () => { const c = st.connections[0]; st.models.push({ id: newSettingsId('m'), label: '', providerId: c.id, model: '', caps: capsForPreset(c.preset) }); paint(); } }, '+ Add model');

@@ -270,3 +270,7 @@ button.link[disabled] { opacity: .35; cursor: not-allowed; }
   .tier-row { grid-template-columns: 1fr 1fr; }
   .model-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* Dialogue mode (Minds) */
+.dialogue-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel-2); font-size: 14px; }
+.dialogue-bar span { flex: 1 1 auto; }

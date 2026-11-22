@@ -61,11 +61,13 @@ src/
     settingsService.ts  runtime settings in the DB: connections, models, tiers, role → tier map, prompts, style,
                         performance; migration from the old per-role shape
   db/
-    db.ts, migrations/001–008.sql, stores/*.ts (one store per table group)
+    db.ts, migrations/001–009.sql, stores/*.ts (one store per table group)
     stores/mindsStore.ts   Minds: character sheets, variables (defs, values, change log), thoughts
-    stores/threadStore.ts  Minds: append-only threads on agent_messages (log, pending, recap)
+    stores/threadStore.ts  Minds: append-only threads on agent_messages (log, pending, recap, compaction flags)
   minds/                Minds engine (docs/10–11)
-    round.ts            the round: gate → characters → narrator → block → one commit
+    round.ts            the round: gate → characters → narrator → block → one commit (and the dialogue wrap-up)
+    dialogue.ts         dialogue mode: one exchange with one character per turn; the transcript for the wrap-up
+    compaction.ts       minds_compact job: fold a thread's oldest half into a recap
     contracts.ts        player input lanes, character reply, round block (lenient parsing)
     gate.ts             who acts this round
     seed.ts             minds_seed job: a mind for a newly introduced character
@@ -75,7 +77,7 @@ src/
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
     builders.ts         character / narrator prompts and round messages; commit; POV preview
-  agents/mindAgent.ts   Minds agents: declare (raw reply kept), distribute, seed
+  agents/mindAgent.ts   Minds agents: declare and converse (raw reply kept), distribute, seed, compact
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
   util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases
   data/story-seeds.txt  premise randomizer seed phrases
@@ -139,9 +141,17 @@ A story runs one of three engines, chosen per story (`settings.engine`: Story op
    or broken block goes to the distributor (Light tier), then to plain briefs.
 5. One transaction commits everything: threads, thoughts, cast and scene changes, variable and state changes by
    the rules, the narrator's notes, each character's brief plus the exact words it heard, the clock, the turn.
-6. New characters get a `minds_seed` job. No scribes run.
+6. New characters get a `minds_seed` job; threads over their threshold get a `minds_compact` job. No scribes run.
 
-Threads only ever append, so each request is a prefix of the next one (cache hits).
+Threads only ever append, so each request is a prefix of the next one (cache hits). When one grows past its
+threshold (8k tokens for a character, 32k for the narrator), a Light-tier compactor folds its oldest half into a
+recap after the round (doc 10 §8.4); that thread pays one cache miss.
+
+**Dialogue mode** (`src/minds/dialogue.ts`): `turn.submit` with `dialogue: { partner }` makes the turn one
+exchange: only the partner is called (on its own thread, in the conversation format), its line streams as
+`Marta: "…" (gesture)`, the clock moves one minute. The next normal turn is the wrap-up: nobody is called, and the
+narrator gets the transcript, resolves what happens next and briefs the bystanders. Dialogue state is derived
+from the turns (`meta.mode`), so the server keeps none.
 
 The Minds engine (docs 10–12) is designed to fix these three points.
 
@@ -214,6 +224,7 @@ and `compacted` for Minds threads.
 | `npc_dossier` | promoting a character (classic) | focused single-character sheet + prose portrait |
 | `npc_seed` | new character in NPC Story Mode | personality + opening notes |
 | `minds_seed` | a character the Minds narrator introduces | description, state, starting values, thoughts |
+| `minds_compact` | a Minds thread over its threshold after a turn | fold its oldest half into a recap (rewind undoes it) |
 
 Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot), and report failures on the bus.
 
@@ -229,7 +240,8 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
   style.
 - **Debug:** thread log per story/turn, agent sessions.
 
-WebSocket in: `turn.submit` (optional `force`: character ids that must act, Minds), `turn.cancel`.
+WebSocket in: `turn.submit` (Minds options: `force`, character ids that must act; `dialogue: { partner }`, one
+dialogue exchange), `turn.cancel`.
 WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`, `minds.updated`,
 `scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `thread.activity` (live agent status bar).
 
@@ -237,7 +249,7 @@ WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updat
 
 ```bash
 npm install
-npm test            # Vitest, 191 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 208 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -252,9 +264,8 @@ in that style.
 - The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both
   (fix planned as M1b, low priority).
 - Classic and NPC Story Mode rebuild prompts every turn, so provider caches rarely hit (Minds threads fix this).
-- Minds: **threads are never compacted yet** (M6), so very long stories keep growing every thread's context.
-  Dialogue mode (M5) and the sheets / scenario / advanced-mode UI (M7) are not built; scenario variables and
-  sheets are edited through the API for now.
+- Minds: the sheets / scenario / advanced-mode UI and the help panel (M7) are not built; scenario variables and
+  sheets are edited through the API for now. Dialogue is manual only (automatic mode is a TODO).
 - NPC Story Mode: the storyteller sees present characters only by name (their one-liner reads memory facts,
   which that mode never writes).
 - Classic and NPC Story Mode never set a scene's location (the Minds narrator does).

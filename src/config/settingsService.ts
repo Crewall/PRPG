@@ -127,6 +127,7 @@ export const DEFAULT_ROLE_TIER: Record<RoleName, string> = {
   character: 'medium',
   distributor: 'light',
   seeder: 'medium',
+  compactor: 'light',
 };
 
 // Roles added after the original config shape: when absent, they inherit an
@@ -156,6 +157,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'minds-character', label: 'Minds — character mind' },
   { name: 'minds-distributor', label: 'Minds — round-block fallback' },
   { name: 'minds-seed', label: 'Minds — new-character seeder' },
+  { name: 'minds-compactor', label: 'Minds — thread compactor' },
 ];
 
 // ---- Building tiers from per-role bindings (seed + migration share this) ----
@@ -357,7 +359,8 @@ export function compileSettings(s: RuntimeSettings, llm: { maxRetries: number })
       temperature: m.caps.sampling ? t.temperature : undefined,
       maxTokens: t.maxTokens,
       reasoning,
-      effort: m.caps.reasoning === 'none' ? undefined : t.effort,
+      // An effort level the model doesn't accept is dropped (the provider's default applies).
+      effort: m.caps.reasoning === 'none' || (t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort)) ? undefined : t.effort,
     };
   }
   // role:<role> — what each role runs (its tier's profile).

@@ -46,6 +46,8 @@ export interface CharacterCallInput {
   situationTags?: string[];
   /** What happens right now, before the character declares (the player's words this round). */
   now?: string;
+  /** Dialogue mode (docs/10 §7): who the character is talking with — switches the ask to the conversation format. */
+  conversationWith?: string;
 }
 
 export interface PreparedCall {
@@ -75,6 +77,8 @@ export interface NarratorCallInput {
   presentIds: string[];
   declarations: Declaration[];
   situationTags?: string[];
+  /** Extra context for this round, e.g. a conversation that just ended (dialogue wrap-up). */
+  context?: string;
 }
 
 export const NARRATOR_OWNER = 'narrator';
@@ -108,20 +112,32 @@ function turnIndexOf(deps: ThreadDeps, turnId: string | null): number | undefine
   return turnId ? deps.stories.getTurn(turnId)?.index : undefined;
 }
 
+/** Where a thread's memory stands: what is still in the thread starts at turn `liveFrom`. */
+interface ThreadWindow {
+  liveFrom: number;
+}
+
+function threadWindow(deps: ThreadDeps, recap: ThreadMessage | undefined, log: ThreadMessage[]): ThreadWindow {
+  if (!recap) return { liveFrom: -1 };
+  // After a compaction only the recap and the live log are in the thread. The recap restates the pinned
+  // thoughts of its time, which the compaction marks recalled at its own turn (compaction.ts).
+  const recapAt = turnIndexOf(deps, recap.turnId) ?? Number.MAX_SAFE_INTEGER;
+  const firstLive = log.length ? turnIndexOf(deps, log[0].turnId) : undefined;
+  return { liveFrom: Math.min(firstLive ?? recapAt, recapAt) };
+}
+
 /**
  * Is a thought already visible in this thread (so it must not be shown again)?
- * Visible = shown in a round message since the last compaction, written by the
- * owner in its own reply since then, or (after a compaction) restated in the recap.
+ * Visible = shown in a round message (or restated in the recap) still in the
+ * thread, or written by the owner in its own reply there.
  */
-function visibleInThread(deps: ThreadDeps, t: Thought, recap: ThreadMessage | undefined): boolean {
-  const cut = recap ? turnIndexOf(deps, recap.turnId) ?? -1 : -1;
-  const after = (turnId: string | null) => {
+function visibleInThread(deps: ThreadDeps, t: Thought, w: ThreadWindow): boolean {
+  const live = (turnId: string | null) => {
     const idx = turnIndexOf(deps, turnId);
-    return idx !== undefined && idx >= cut;
+    return idx !== undefined && idx >= w.liveFrom;
   };
-  if (t.lastRecalledTurnId && after(t.lastRecalledTurnId)) return true;
-  if (t.source === 'self' && t.createdTurnId && after(t.createdTurnId)) return true;
-  if (recap && t.pinned && (turnIndexOf(deps, t.createdTurnId) ?? -1) < cut) return true; // restated in the recap
+  if (t.lastRecalledTurnId && live(t.lastRecalledTurnId)) return true;
+  if (t.source === 'self' && t.createdTurnId && live(t.createdTurnId)) return true;
   return false;
 }
 
@@ -130,11 +146,11 @@ function visibleInThread(deps: ThreadDeps, t: Thought, recap: ThreadMessage | un
  * visible in the thread, plus the tagged thoughts the active tags evoke. The
  * active set gets the owner's own tags found in `perceived` text added first.
  */
-function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, recap: ThreadMessage | undefined, active: Set<string>, perceived: string, budget: number) {
+function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number) {
   const all = deps.thoughts.list(storyId, owner);
   const vocabulary = deps.thoughts.vocabulary(storyId, owner).map((v) => v.tag);
   for (const t of tagsMentioned(perceived, vocabulary)) active.add(t);
-  const shown = new Set(all.filter((t) => visibleInThread(deps, t, recap)).map((t) => t.id));
+  const shown = new Set(all.filter((t) => visibleInThread(deps, t, window)).map((t) => t.id));
   const pinnedNew = all.filter((t) => t.pinned && !shown.has(t.id));
   const recalled = selectRecall(all, active, shown, budget);
   const pinnedTokens = all.filter((t) => t.pinned).reduce((n, t) => n + estimateTokens(renderThought(t)), 0);
@@ -223,7 +239,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   for (const i of here.items) active.add(`#${i.handle}`);
   if (here.location) active.add(`#${here.location.handle}`);
   const perceived = [...pending.map((p) => p.content), input.now ?? ''].join('\n');
-  const chosen = chooseThoughts(deps, storyId, objectId, recap, active, perceived, settings?.thoughtRecallTokens ?? 300);
+  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300);
   const recalled = chosen.recalled;
 
   const parts: string[] = [];
@@ -244,7 +260,11 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (chosen.pinnedNew.length) parts.push(`Always on your mind:\n${chosen.pinnedNew.map(renderThought).join('\n')}`);
   if (recalled.length) parts.push(`You recall:\n${recalled.map(renderThought).join('\n')}`);
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
-  parts.push('Declare what you say and what you try to do. Reply as JSON.');
+  parts.push(
+    input.conversationWith
+      ? `You are in a direct conversation with ${input.conversationWith}. Reply as JSON in the conversation format.`
+      : 'Declare what you say and what you try to do. Reply as JSON.',
+  );
   const roundMessage = parts.join('\n\n');
 
   return {
@@ -330,6 +350,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
 
   const parts: string[] = [];
   if (pending.length) parts.push(pending.map((p) => p.content.trim()).join('\n\n'));
+  if (input.context?.trim()) parts.push(input.context.trim());
 
   const p = input.player;
   const said = [p.say?.trim() ? `says "${p.say.trim()}"` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
@@ -366,7 +387,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   const active = new Set<string>(input.situationTags ?? []);
   for (const oid of present) active.add(`#${holders.get(oid)?.handle}`);
   const declared = [p.say ?? '', p.do ?? '', ...input.declarations.flatMap((d) => [d.say ?? '', d.intent ?? ''])].join('\n');
-  const chosen = chooseThoughts(deps, storyId, NARRATOR_OWNER, recap, active, declared, story.settings.minds.thoughtRecallTokens);
+  const chosen = chooseThoughts(deps, storyId, NARRATOR_OWNER, threadWindow(deps, recap, log), active, declared, story.settings.minds.thoughtRecallTokens);
   const notes = [...chosen.pinnedNew, ...chosen.recalled];
   if (notes.length) parts.push(`Your notes in mind:\n${notes.map(renderThought).join('\n')}`);
 
