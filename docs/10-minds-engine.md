@@ -41,6 +41,10 @@ character perceived. The app (code, not AI) checks that output and delivers each
 | Model tiers | User-defined; three by default (Heavy, Medium, Light). Doc 12. |
 | Visibility | A character always sees its own description, state and non-hidden variables; the narrator sees all of them for everyone. |
 | Advanced mode | Shows everything, allows editing everything, and has a POV filter (§10). |
+| Player input syntax | `"…"` = speech, `((…))` = out-of-character note to the narrator, the rest = action (§6). Made obvious in the UI: placeholder hint, live preview, and the help panel. |
+| Help | A **?** button opens a help panel that briefly explains every user-facing feature: syntax, modes, sheets, settings (§11.1). |
+| Dice | The adjudicator + hidden dice **stay**. In this engine they become the referee pass (§5 step 3, §9.4). Never removed. |
+| Providers | DeepSeek and OpenRouter first. Claude moves to the official SDK later, at low priority (doc 12 §5.1). |
 
 ### Proposed (please confirm or change: §15)
 
@@ -49,7 +53,7 @@ character perceived. The app (code, not AI) checks that output and delivers each
 | What characters hear of the player's turn | They hear the player's **spoken words** at once (the player has initiative). They do **not** see the player's *action*; they learn its outcome from the narrator. |
 | Uncertain actions | A **referee pass** before narration judges every declared action at once (player and characters). Dice decide, and the narrator writes once with the outcomes known. This replaces the mid-narration `resolve_action` pause. |
 | Narrator and thoughts | The narrator does **not** read characters' thoughts by default (they are private; characters reveal things through speech and intent). Per-story setting to allow it. |
-| Old engines | Kept untouched until Minds reaches parity, then reconsidered. |
+| Old engines | The current code is preserved as a backup (backup method: owner's choice, see §15), and Minds replaces the old engines in the active line. The dice system is kept regardless. |
 
 ## 3. Vocabulary
 
@@ -138,6 +142,18 @@ nobody declares an action. The classic engine worst case is up to three storytel
 player sees nothing until the end. The heavy background scribes are gone; the only post-round work is occasional
 compaction.
 
+**Requests per round** matter for rate-limited free models (OpenRouter `:free`: 20 per minute and 50 per day
+without purchased credits; doc 12 §6.1).
+
+| Case | Calls |
+|---|---|
+| Typical round | 1 narrator + 1 referee + 1 per called character (≤ `maxCharactersPerRound`). With 3 characters: **5**. |
+| Occasional | + distributor (broken block), + compactor (per thread over its threshold), + seeder (new character) |
+| Dialogue mode | **1** per exchange; 1 narrator call at wrap-up |
+
+The UI shows the day's request count per provider (doc 12 §6.1) so a free quota running out is visible before it
+fails.
+
 ### 5.1 Who gets called (the gate)
 
 Reuses `shouldInvokeNpc`. A present character is called when any of these holds:
@@ -161,8 +177,14 @@ One input box, three lanes, parsed mechanically:
 | **Do** | everything else | Narrator and referee only. Characters learn the outcome from their brief. |
 | **OOC** | text inside double parentheses `((…))` | Narrator only, as an out-of-character note ("make it rain", "skip to evening") |
 
-A preview line under the box shows "heard: …" before sending, so a stray quote doesn't leak an intention. Empty
-input = "continue / wait".
+Making it obvious:
+
+- the empty box's placeholder reads `"Say this" · do that · ((note to narrator))`;
+- a live preview under the box splits the text as it will be read: **heard:** … / **doing:** … / **to narrator:**
+  …, so a stray quote can't leak an intention;
+- a small **?** next to the box opens the syntax entry of the help panel (§11.1).
+
+Empty input = "continue / wait".
 
 ## 7. Dialogue mode (manual)
 
@@ -398,6 +420,31 @@ UI pieces:
 - **Cast bar** chips: tap → sheet; long-press → Talk (dialogue), Force act.
 - **Input preview** line for say / do / OOC.
 - **Advanced** toggle and the **POV** selector.
+- **Help** (**?**) button in the header (§11.1).
+
+### 11.1 Help panel
+
+A **?** button in the header opens a side panel of short, scannable entries: a few sentences and one example
+each, grouped:
+
+| Group | Entries |
+|---|---|
+| Playing | Input syntax (say / do / OOC, with examples) · what a round is · what the narrator decides vs what you decide · dice and chance (described, never numbers) |
+| Characters | Dialogue mode (enter, exit, what bystanders notice) · the cast bar · forcing a character to act |
+| Sheets | Description vs appearance · state · variables (types, visibility, who may change them) · thoughts and tags |
+| Modes | Advanced mode · the POV filter · prompt viewer |
+| Story setup | Scenario variables and templates · the player character · premise, tone, verbosity |
+| Settings | Providers (DeepSeek, OpenRouter) · tiers and roles · free-model request limits · cache stats |
+
+Rules:
+
+- **Context links:** small **?** icons next to features (input box, Advanced toggle, scenario editor, tier rows)
+  open the panel at the matching entry.
+- **One source:** all entries live in one file, `client/dist/help.json` (`{ id, group, title, body, example }`),
+  so text is edited in one place and the panel needs no code changes for new entries.
+- **Definition of done:** a user-facing feature isn't finished until it has a help entry (CLAUDE.md conventions).
+- **First run:** a dismissible one-line hint on the first story ("New here? Tap ? for how to play") remembered in
+  browser storage.
 
 ## 12. Data model summary
 
@@ -422,14 +469,15 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 | # | Milestone | Done when |
 |---|---|---|
-| M1 | **Providers and tiers** (doc 12): multiple named providers, DeepSeek preset, tiers (3 default + custom), role → tier mapping, settings migration, Anthropic driver fixes, cache usage captured in `thread_log`. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek usage fields and Anthropic without temperature/prefill. |
+| M1 | **Providers and tiers** (doc 12): multiple named connections with DeepSeek + OpenRouter presets, tiers (3 default + custom), role → tier mapping, settings migration, DeepSeek/OpenRouter specifics (thinking/reasoning switches, JSON modes, sticky sessions), cache and request-count capture. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek and OpenRouter usage fields, reasoning off, whitespace-only JSON. |
+| M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
 | M2 | **Sheets data layer** (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
 | M3 | **Thread builders**: system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
 | M4 | **Normal round**: parse input, gate, character calls, referee, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
 | M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
-| M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer. | Manual smoke on desktop and phone width; http tests for every new endpoint. |
-| M8 | **Docs and cleanup**: update docs/README, README status, decide the fate of the old engines. | — |
+| M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
+| M8 | **Docs and cleanup**: update docs/README, ARCHITECTURE, README status; remove the old engines from the active line (the backup keeps them). **Keep the dice/adjudication code.** | — |
 
 ## 14. TODO (explicitly later)
 
@@ -448,7 +496,7 @@ Each milestone is committed on its own and keeps the existing engines working.
    rounds be strictly simultaneous, with everyone reacting only to the last narration?
 2. **Narrator and thoughts:** should the narrator be blind to characters' thoughts (proposed) or see the
    recalled ones?
-3. **Input convention:** are `"…"` for speech and `((…))` for out-of-character notes good for you, or would you
-   rather have separate Say and Do fields?
-4. **Old engines:** keep them as options or retire them once Minds works?
-5. **Anthropic driver:** keep the hand-written fetch driver or switch to the official SDK (doc 12 §5.1)?
+3. **Backup of the current code:** a frozen branch/tag in this repository, or a new repository (owner to pick).
+
+Settled since the first draft: the input syntax (with a help panel), retiring the old engines from the active
+line while keeping a backup, keeping the dice, moving Claude to the official SDK at low priority.

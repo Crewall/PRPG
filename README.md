@@ -22,25 +22,18 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 | Rule enforcement | Optional overseer validates outputs against user-defined rules and requests regeneration when violated |
 | Hidden threads | Support threads invisible to the player by default; a debug setting exposes every thread and prompt for troubleshooting |
 
-## Documentation / development plan
+## Documentation
 
-**Start at [`docs/README.md`](docs/README.md)**: it lists every doc with its status (current, original plan,
-or draft), where the code drifted from the plan, and how a chat turn works today.
-
-The original design is in `docs/`, ordered as a reading path and as a build guideline:
-
-1. [`docs/01-tech-stack.md`](docs/01-tech-stack.md) — recommended languages, frameworks, storage, and why
-2. [`docs/02-architecture.md`](docs/02-architecture.md) — system architecture, processes, module layout
-3. [`docs/03-data-model.md`](docs/03-data-model.md) — entities, schemas, persistence layout
-4. [`docs/04-agents.md`](docs/04-agents.md) — every agent thread: role, inputs, outputs, prompt design
-5. [`docs/05-memory-system.md`](docs/05-memory-system.md) — memory objects, detail levels, retrieval, scribe pipeline
-6. [`docs/06-orchestration.md`](docs/06-orchestration.md) — the turn loop: how a player input flows through all agents
-7. [`docs/07-api-and-ui.md`](docs/07-api-and-ui.md) — HTTP/WebSocket API surface and the web client
-8. [`docs/08-roadmap.md`](docs/08-roadmap.md) — layered build plan: milestones, inputs/outputs, acceptance criteria
-9. [`docs/09-npc-story-mode.md`](docs/09-npc-story-mode.md) — NPC Story Mode (built)
-10. [`docs/10-minds-engine.md`](docs/10-minds-engine.md) — **next:** narrator + character minds, briefs, dialogue mode, advanced mode (draft)
-11. [`docs/11-character-sheets.md`](docs/11-character-sheets.md) — description, state, variables, self-written thoughts (draft)
-12. [`docs/12-models-and-providers.md`](docs/12-models-and-providers.md) — providers incl. DeepSeek, model tiers, prompt caching (draft)
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md)**: how the system works today (source map, turn flow, data, jobs, API,
+  known gaps).
+- **[`docs/`](docs/README.md)**: specs with their status:
+  - [09](docs/09-npc-story-mode.md) NPC Story Mode (built);
+  - [10](docs/10-minds-engine.md) the next engine: narrator + character minds, briefs, dialogue mode, advanced mode
+    (draft);
+  - [11](docs/11-character-sheets.md) description, state, variables, self-written thoughts (draft);
+  - [12](docs/12-models-and-providers.md) providers (DeepSeek, OpenRouter), model tiers, prompt caching (draft).
+- **[`CLAUDE.md`](CLAUDE.md)**: the briefing for AI coding sessions (read order, conventions, what to keep).
+- `old/` holds the obsolete original design (docs 01–08). Don't use it as a reference.
 
 ## Implementation status
 
@@ -49,7 +42,7 @@ The original design is in `docs/`, ordered as a reading path and as a build guid
 - **Layer 2 — Story compression (job queue, scribe_story, bounded context):** ✅ implemented.
 - **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
 - **Layer 4 — NPC agents (personas, isolation, consult loop):** ✅ implemented.
-- Layers 5–6 (rule overseer, debug/polish): designed in `docs/`, not yet built.
+- Layers 5–6 (rule overseer, debug/polish): designed in the original plan (`old/`), not built.
 - **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)) —
   a per-story switch replacing the structured memory pipeline with per-NPC
   narrative minds (proactive rounds, skip gate, seeding, NPC-minds panel).
@@ -57,6 +50,8 @@ The original design is in `docs/`, ordered as a reading path and as a build guid
   "test key" button), curate a favourites list of models, pick a model +
   temperature + max-tokens per AI role, and edit each role's prompt. All
   persisted in the DB and auto-loaded; `config.json` is just the initial seed.
+- **Next: the Minds engine** (docs 10–12): designed, not built. Build order in doc 10 §13; first milestone is
+  provider connections (DeepSeek + OpenRouter) and model tiers.
 
 ## Running it
 
