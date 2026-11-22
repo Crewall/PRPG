@@ -9,7 +9,15 @@ import { RoleName } from './config/config.ts';
 // Settings → Storyteller style.
 export const DEFAULT_TONE = 'immersive, second-person present tense';
 
+// Which engine plays the story (docs/10 §4). 'classic' = fact-extraction
+// memory; 'npc_stories' = NPC Story Mode (docs/09); 'minds' = narrator +
+// character minds (docs/10–11). Replaces the old npcStories.enabled flag,
+// which is kept in sync for code that still reads it.
+export const StoryEngine = z.enum(['classic', 'npc_stories', 'minds']);
+export type StoryEngine = z.infer<typeof StoryEngine>;
+
 export const StorySettings = z.object({
+  engine: StoryEngine.default('classic'),
   // Per-role model-profile overrides (fall back to config.roles when absent).
   roles: z.record(RoleName, z.string()).default({}),
   // Free-text opening premise the storyteller builds the world from.
@@ -68,6 +76,23 @@ export const StorySettings = z.object({
       maxNpcsPerRound: z.number().int().positive().default(4),
     })
     .default({}),
+  // Minds engine (docs/10 §12, docs/11): budgets and switches.
+  minds: z
+    .object({
+      maxCharactersPerRound: z.number().int().positive().default(4),
+      briefMaxWords: z.number().int().positive().default(70),
+      characterLogTokens: z.number().int().positive().default(8000),
+      narratorLogTokens: z.number().int().positive().default(32000),
+      descriptionMaxWords: z.number().int().positive().default(250),
+      thoughtRecallTokens: z.number().int().positive().default(300),
+      pinnedTokens: z.number().int().positive().default(400),
+      maxActiveThoughts: z.number().int().positive().default(80),
+      narratorSeesThoughts: z.boolean().default(false),
+      playerSpeechHeardImmediately: z.boolean().default(true),
+      // The narrator's secret setup notes (plans, twists): only the narrator sees them.
+      narratorNotes: z.string().default(''),
+    })
+    .default({}),
   // The adjudicator: uncertain, consequential attempts are judged by a
   // separate impartial AI (difficulty + circumstances) and decided by a real
   // hidden dice roll, instead of the storyteller deciding outcomes itself.
@@ -94,6 +119,27 @@ export type StorySettings = z.infer<typeof StorySettings>;
 
 export function defaultStorySettings(): StorySettings {
   return StorySettings.parse({});
+}
+
+/**
+ * Parse story settings, applying `patch` on top of `base` (shallow, per
+ * top-level key), with the engine resolved consistently:
+ *  - stored settings without `engine` derive it from the old npcStories flag;
+ *  - a patch that only flips npcStories.enabled moves the engine with it
+ *    (the existing NPC Story Mode toggle keeps working);
+ *  - npcStories.enabled always mirrors engine === 'npc_stories'.
+ */
+export function resolveStorySettings(base: Record<string, unknown>, patch: Record<string, unknown> = {}): StorySettings {
+  const flagOf = (x: Record<string, unknown>) => (x.npcStories as { enabled?: unknown } | undefined)?.enabled;
+  const baseEngine = (base.engine as StoryEngine | undefined) ?? (flagOf(base) === true ? 'npc_stories' : 'classic');
+  let engine = (patch.engine as StoryEngine | undefined) ?? baseEngine;
+  const flag = flagOf(patch);
+  if (patch.engine === undefined && typeof flag === 'boolean' && flag !== (baseEngine === 'npc_stories')) {
+    engine = flag ? 'npc_stories' : baseEngine === 'npc_stories' ? 'classic' : baseEngine;
+  }
+  const settings = StorySettings.parse({ ...base, ...patch, engine });
+  settings.npcStories.enabled = settings.engine === 'npc_stories';
+  return settings;
 }
 
 export type StoryStatus = 'active' | 'archived';

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { App } from '../app.ts';
-import { StorySettings, DEFAULT_TONE } from '../domain.ts';
+import { StorySettings, DEFAULT_TONE, defaultStorySettings, resolveStorySettings } from '../domain.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { NewMemoryObject, NewFact, DetailLevel, FactTier } from '../memory/model.ts';
 import { findNearDuplicate } from '../memory/similarity.ts';
@@ -12,6 +12,7 @@ import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS, ModelEntry, TierCfg } from '../config/settingsService.ts';
 import { PRESETS, ProviderKind, ProviderPreset, defaultCaps } from '../config/config.ts';
 import { utcDay } from '../db/stores/usageStore.ts';
+import { registerMindsRoutes } from './mindsRoutes.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
 import { callJson } from '../llm/jsonCall.ts';
 import { rollSeeds, parseSeeds, defaultSeedsText } from '../util/seeds.ts';
@@ -103,7 +104,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     const toneDefault = app.settingsService.toneDefault();
     const merged = { ...(body.settings ?? {}), premise: body.seed || body.settings?.premise || '' };
     if (!merged.tone && toneDefault) merged.tone = toneDefault;
-    const settings = StorySettings.parse(merged);
+    const settings = resolveStorySettings({ ...defaultStorySettings(), engine: undefined }, merged);
     const story = stories.createStory({ title: body.title, settings });
     reply.code(201);
     return story;
@@ -830,4 +831,6 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     svc.update(patch);
     return { ok: true };
   });
+
+  await registerMindsRoutes(server, app);
 }

@@ -61,7 +61,16 @@ src/
     settingsService.ts  runtime settings in the DB: connections, models, tiers, role → tier map, prompts, style,
                         performance; migration from the old per-role shape
   db/
-    db.ts, migrations/001–005.sql, stores/*.ts (one store per table group)
+    db.ts, migrations/001–008.sql, stores/*.ts (one store per table group)
+    stores/mindsStore.ts   Minds: character sheets, variables (defs, values, change log), thoughts
+    stores/threadStore.ts  Minds: append-only threads on agent_messages (log, pending, recap)
+  minds/                Minds engine (docs/10–11; the round itself is not built yet)
+    variables.ts        variable definitions, validation, visibility, the change pipeline, rendering
+    thoughts.ts         remember/forget preparation, recall selection, tag mentions
+    text.ts             handles, tag normalization, word limits
+    templates.ts        scenario templates
+    service.ts          the operations with I/O: apply changes, thought ops, create characters, views
+    builders.ts         character / narrator prompts and round messages; commit; POV preview
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
   util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases
   data/story-seeds.txt  premise randomizer seed phrases
@@ -110,7 +119,7 @@ A story runs one of two engines, chosen per story (`settings.npcStories.enabled`
 ### Common to both
 
 - Every call rebuilds its prompt from scratch.
-- `agent_messages` are written but never read back, so there are no real conversation threads.
+- `agent_messages` are written but never read back by these engines, so there are no real conversation threads.
 - Prompt prefixes change every turn, so provider caches rarely hit.
 
 The Minds engine (docs 10–12) is designed to fix these three points.
@@ -141,6 +150,12 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `jobs` | background work queue |
 | `settings` | runtime settings (`runtimeConfig`), seeded from `config.json` on first boot |
 | `rules` | unused (the overseer was never built) |
+| `character_sheets` | Minds: description, appearance, one-sentence state, player flag, tier override |
+| `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
+| `thoughts` / `thought_tags` | Minds: self-written memories with tags, pinned / active / revoked |
+
+`memory_objects.handle` (unique per story) gives every roster object a `#handle`. `agent_messages` gained `kind`
+and `compacted` for Minds threads.
 
 ## 5. Models and settings
 
@@ -185,6 +200,8 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
 - **Stories:** CRUD, randomize premise, turns (list, edit, delete), rewind, new scene, summaries, failed jobs.
 - **Memory:** objects and facts CRUD, merge, knowledge links, maintenance, rescan, suggestions, "look at".
 - **Characters:** promote, demote, enter by name, rebuild mind, NPC profiles, NPC knowledge, player interview.
+- **Minds** (`src/api/mindsRoutes.ts`): scenario variable definitions and templates, character sheets (normal or
+  `?advanced=1` view), values, change log, thoughts, and POV: a mind's thread and its exact next/last prompt.
 - **Settings:** config (masked keys) for connections / models / tiers / roles, per-connection test, model listing
   (with caps from OpenRouter metadata), OpenRouter credits and free-model limits, requests today, prompts, seeds,
   style.
@@ -197,7 +214,7 @@ WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updat
 
 ```bash
 npm install
-npm test            # Vitest, 148 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 179 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: spec. M1 (providers and tiers, doc 12) is built; M2–M8 are not.** Companion docs:
+**Status: spec. M1 (providers and tiers), M2 (sheets data layer) and M3 (thread builders) are built; M4–M8 are not.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -231,6 +231,14 @@ at the end of each user input and each model output, so a thread that only appen
 - Adjacent same-role messages are merged by one fixed rule (newline join), the same every time.
 - Edits that rewrite the system prompt or old log messages (description edits, editing a past brief in advanced
   mode) are allowed. They cost one cache miss and are marked in `thread_log`.
+- **Building is read-only.** `buildCharacterCall` / `buildNarratorCall` (`src/minds/builders.ts`) only read, so the
+  advanced-mode "next prompt" preview uses the same function as the round. `commitCall` then stores the round
+  message **together with** its reply (a failed call stores nothing, so no dangling message can break the
+  prefix), marks the pending items delivered and the shown thoughts recalled.
+- **Which thoughts a round message shows** (settled while building M3): pinned thoughts not yet visible in the
+  thread are shown once ("Always on your mind"), which covers seeded and user-added pins before any compaction;
+  tagged thoughts follow doc 11 §5.4. "Already visible" means shown in a round message since the last
+  compaction, or written by the owner in its own reply since then.
 
 ### 8.1 A character's thread
 
@@ -449,12 +457,13 @@ Sheets, variables and thoughts are in doc 11 §7. Threads reuse the existing ses
 
 - `agent_sessions` — role `narrator` | `character` (plus helper roles). For characters, `npc_object_id` = the
   character. New column `tier_id` (nullable override).
-- `agent_messages` — **read back for the first time**. New columns: `kind` (`log` | `recap` | `pending_brief`),
-  `compacted` (0/1), `round_turn_id`. The stored `content` is the exact string sent or received.
+- `agent_messages` — **read back for the first time** (migration 008). New columns: `kind` (`log` | `pending` |
+  `delivered` | `recap` | `recap_old`) and `compacted` (0/1); the existing `turn_id` ties a row to its round. The
+  stored `content` is the exact string sent or received.
 - `turns.meta` — declarations, round block, per-call timings, cache usage (later: referee rulings with numbers).
 - `stories.settings` — `engine`; a `minds` block: `maxCharactersPerRound`, `briefMaxWords`, `characterLogTokens`,
   `narratorLogTokens`, `descriptionMaxWords`, `thoughtRecallTokens`, `pinnedTokens`, `maxActiveThoughts`,
-  `narratorSeesThoughts`, `playerSpeechHeardImmediately`.
+  `narratorSeesThoughts`, `playerSpeechHeardImmediately`, `narratorNotes` (the narrator's secret setup notes).
 
 **Snapshots/rewind.** The payload gains character sheets, variable values, the variable change log watermark,
 thoughts (status included), and the `compacted`/`kind` flags of messages (the rowid watermark alone can't undo a
@@ -468,8 +477,8 @@ Each milestone is committed on its own and keeps the existing engines working.
 |---|---|---|
 | M1 ✅ | **Providers and tiers** (doc 12, built): multiple named connections with DeepSeek + OpenRouter presets, tiers (3 default + custom), role → tier mapping, settings migration, DeepSeek/OpenRouter specifics (thinking/reasoning switches, JSON modes, sticky sessions), cache and request-count capture. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek and OpenRouter usage fields, reasoning off, whitespace-only JSON. |
 | M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
-| M2 | **Sheets data layer** (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
-| M3 | **Thread builders**: system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
+| M2 ✅ | **Sheets data layer** (built) (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
+| M3 ✅ | **Thread builders** (built): system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
 | M4 | **Normal round**: parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
 | M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
@@ -478,6 +487,8 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 14. TODO (explicitly later)
 
+- Show a character its tag vocabulary when it changes (doc 11 §5.3); today only the narrator gets the tags in use.
+- Tell a character when the user revokes one of its thoughts in advanced mode (it stays visible in older log messages).
 - Referee + dice for special cases (§9.4), reusing `resolution.ts` and the adjudicator.
 - Automatic dialogue mode (detect, then suggest, then switch).
 - Whispering: private `say` with `to` for characters; a whisper selector for the player.

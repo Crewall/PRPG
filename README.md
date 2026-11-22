@@ -50,8 +50,8 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   test, model listing and limits), models, **model tiers** (Heavy / Medium / Light + your own; every AI role
   follows its tier), role mapping and each role's prompt. All persisted in the DB; `config.json` is just the
   initial seed.
-- **Minds engine** (docs 10–12): M1 (providers + tiers) ✅ built; the rest is designed, not built. Build order in
-  doc 10 §13.
+- **Minds engine** (docs 10–12): M1 (providers + tiers), M2 (character sheets, scenario variables, thoughts)
+  and M3 (thread builders) ✅ built; not playable yet (M4, the round, is next). Build order in doc 10 §13.
 
 ## Running it
 

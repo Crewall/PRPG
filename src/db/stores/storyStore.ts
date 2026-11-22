@@ -1,6 +1,7 @@
 import type { Db, Row } from '../db.ts';
 import { id } from '../../util/id.ts';
-import { StorySettings, defaultStorySettings } from '../../domain.ts';
+import { defaultStorySettings, resolveStorySettings } from '../../domain.ts';
+import type { StorySettings } from '../../domain.ts';
 import { CLOCK_START_MIN, MAX_ADVANCE_MINUTES } from '../../util/gameClock.ts';
 import type { Scene, Story, Turn, TurnStatus } from '../../domain.ts';
 
@@ -26,7 +27,7 @@ function rowToStory(r: Row): Story {
   return {
     id: r.id as string,
     title: r.title as string,
-    settings: StorySettings.parse(JSON.parse(r.settings_json as string)),
+    settings: resolveStorySettings(JSON.parse(r.settings_json as string)),
     currentSceneId: (r.current_scene_id as string) ?? null,
     clockMin: (r.clock_min as number) ?? CLOCK_START_MIN,
     status: r.status as Story['status'],
@@ -67,7 +68,7 @@ export function createStoryStore(db: Db) {
     createStory(input: NewStory): Story {
       const now = Date.now();
       const storyId = id();
-      const settings = StorySettings.parse({ ...defaultStorySettings(), ...(input.settings ?? {}) });
+      const settings = resolveStorySettings({ ...defaultStorySettings(), engine: undefined }, (input.settings ?? {}) as Record<string, unknown>);
       db.transaction(() => {
         db.prepare(
           `INSERT INTO stories (id, title, settings_json, current_scene_id, status, created_at, updated_at)
@@ -99,7 +100,7 @@ export function createStoryStore(db: Db) {
     updateStory(storyId: string, patch: { title?: string; settings?: Partial<StorySettings>; status?: Story['status'] }): Story | undefined {
       const existing = this.getStory(storyId);
       if (!existing) return undefined;
-      const settings = patch.settings ? StorySettings.parse({ ...existing.settings, ...patch.settings }) : existing.settings;
+      const settings = patch.settings ? resolveStorySettings(existing.settings, patch.settings as Record<string, unknown>) : existing.settings;
       db.prepare(`UPDATE stories SET title = ?, settings_json = ?, status = ?, updated_at = ? WHERE id = ?`).run(
         patch.title ?? existing.title,
         JSON.stringify(settings),
