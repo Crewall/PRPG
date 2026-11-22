@@ -144,6 +144,30 @@ async function renderPlay(storyId) {
   const sendBtn = h('button', { class: 'primary' }, 'Send');
   const cancelBtn = h('button', { class: 'ghost', disabled: true }, 'Stop');
   const rewindBtn = h('button', { class: 'ghost', title: 'Delete the last response and edit your message (restores summaries & memory to before it)' }, 'Edit');
+
+  // Dialogue mode (Minds, docs/10 §7): a direct back-and-forth with one character.
+  // Ending it = sending a normal message (or an empty one); the server wraps it up.
+  let dialogue = null; // { partner, name }
+  const dialogueLabel = h('span', {});
+  const endTalkBtn = h('button', { class: 'small', title: 'End the conversation; the narrator wraps it up and tells everyone else what they noticed' }, 'End conversation');
+  const actBtn = h('button', { class: 'small', title: 'End the conversation by doing something: what you typed is sent as a normal action' }, 'Act');
+  const dialogueBar = h('div', { class: 'dialogue-bar', style: 'display:none' }, dialogueLabel, endTalkBtn, actBtn);
+  const DEFAULT_PLACEHOLDER = input.placeholder;
+  function setDialogue(d) {
+    dialogue = d;
+    dialogueBar.style.display = d ? '' : 'none';
+    dialogueLabel.textContent = d ? `💬 Talking with ${d.name} — only they hear you.` : '';
+    input.placeholder = d ? `"What you say" (small gestures outside the quotes) — Ctrl+Enter to send` : DEFAULT_PLACEHOLDER;
+    sendBtn.textContent = d ? 'Say' : 'Send';
+    refreshSceneHeader();
+  }
+  endTalkBtn.addEventListener('click', () => { if (busy) return; setDialogue(null); submitText('', false); });
+  actBtn.addEventListener('click', () => {
+    if (busy) return;
+    const text = input.value.trim();
+    setDialogue(null);
+    if (submitText(text, false)) { input.value = ''; input.style.height = 'auto'; }
+  });
   const drawer = h('div', { class: 'drawer' });
 
   // Agent status bar (feature): a live view of what each AI agent is doing this
@@ -285,7 +309,7 @@ async function renderPlay(storyId) {
     const engineHints = {
       classic: 'One storyteller voices everyone; a scribe extracts memory facts after each turn.',
       npc_stories: 'Present characters act every round from their own personality and notes; the storyteller weaves them in.',
-      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story.',
+      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story. Tap a character in the Present bar to talk with them directly (dialogue mode); end the conversation to let the narrator wrap it up.',
     };
     const engineSel = h('select', { onchange: async (e) => {
       engineHint.textContent = engineHints[e.target.value] || '';
@@ -338,7 +362,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, dialogueBar, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   let activeNpcIds = new Set();
@@ -355,7 +379,12 @@ async function renderPlay(storyId) {
       const tip = (c) => [c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
       npcChips.replaceChildren(
         pc ? h('span', { class: 'chip pc', title: tip(pc) }, `🎭 ${pc.name}`) : h('span', { class: 'sub' }, '🎭 no player character'),
-        ...(here.length ? here.map((c) => h('span', { class: 'chip', title: tip(c) }, c.name)) : [h('span', { class: 'sub' }, 'nobody else here yet')]),
+        ...(here.length
+          ? here.map((c) => h('button', { class: 'chip', title: `${tip(c)}\n\nTap to talk with ${c.name} directly.`, onclick: () => {
+              if (busy || dialogue?.partner === c.objectId) return;
+              if (confirm(`Talk with ${c.name}?\n\nYour messages go to ${c.name} only, back and forth, until you end the conversation. Then the narrator wraps it up.`)) setDialogue({ partner: c.objectId, name: c.name });
+            } }, dialogue?.partner === c.objectId ? `💬 ${c.name}` : c.name))
+          : [h('span', { class: 'sub' }, 'nobody else here yet')]),
       );
       return;
     }
@@ -700,6 +729,12 @@ async function renderPlay(storyId) {
       for (const t of turns) {
         if (t.playerInput) { transcript.append(messageBubble('player', t.playerInput, t.id, 'playerInput')); }
         if (t.narration) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+      }
+      const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
+      if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
+        let name = 'them';
+        try { name = (await api.get(`/api/memory/objects/${lastTurn.meta.partner}`))?.name || name; } catch {}
+        setDialogue({ partner: lastTurn.meta.partner, name });
       }
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange
@@ -1155,7 +1190,13 @@ async function renderPlay(storyId) {
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
-        current = null; setBusy(false); scrollDown(); break;
+        current = null; setBusy(false); scrollDown();
+        if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
+          addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
+          setDialogue(null);
+          setTimeout(() => submitText('', false), 300);
+        } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
+        break;
       case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'turn.error':
         if (current) current.remove();
@@ -1210,7 +1251,7 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text }));
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}) }));
     return true;
   }
 

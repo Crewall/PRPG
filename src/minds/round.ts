@@ -21,6 +21,7 @@ import { applyChanges, applyThoughtOps, createCharacter } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { slugify } from './text.ts';
+import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 
 // One normal round of the Minds engine (docs/10 §5): characters declare (in
 // parallel) → the narrator writes prose + a round block (streamed; the block
@@ -115,14 +116,18 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   const mset = story.settings.minds;
   const playerId = ensurePlayerSheet(deps, story);
   const scene = deps.stories.getScene(story.currentSceneId!)!;
-  const previous = deps.stories
-    .recentTurns(storyId, 4)
-    .filter((t) => t.status === 'complete' && t.index < turn.index)
-    .at(-1);
+  const completed = deps.stories.recentTurns(storyId, 60).filter((t) => t.status === 'complete' && t.index < turn.index);
+  // The last real round (dialogue exchanges carry no block).
+  const previous = completed.filter((t) => t.meta.mode !== 'dialogue').at(-1);
   const lastBlock: RoundBlock = previous?.meta.block ? parseRoundBlock(previous.meta.block).block : emptyBlock();
 
+  // Dialogue mode (docs/10 §7): a round right after dialogue exchanges wraps the conversation up.
+  const dialogue = openDialogueTurns(deps, storyId, turn.index);
+  const partnerId = dialogue.length ? (dialogue.at(-1)!.meta.partner as string) : undefined;
+  const partnerAct = dialogue.length ? ((dialogue.at(-1)!.meta.reply as { act?: string } | undefined)?.act ?? undefined) : undefined;
+
   const decl: PlayerDeclaration = parsePlayerInput(playerInput);
-  if (!previous && !decl.say && !decl.do && !decl.ooc) decl.ooc = OPENING_NOTE;
+  if (!completed.length && !decl.say && !decl.do && !decl.ooc) decl.ooc = OPENING_NOTE;
 
   // Present characters (not the player). Roster objects without a sheet get a bare one.
   const presentIds = scene.activeNpcIds.filter((oid) => oid !== playerId && deps.memory.getObject(oid));
@@ -142,7 +147,9 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     else if (previous && last.turnId === previous.id) actedLast.add(oid);
   }
   const spotlight = new Set(lastBlock.spotlight.map((k) => resolveKey(deps, storyId, k, playerId)).filter((x): x is string => !!x));
-  const gate = chooseCallers({
+  const gate = dialogue.length
+    ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
+    : chooseCallers({
     present: candidates,
     playerText: `${decl.say}\n${decl.do}`,
     spotlight,
@@ -181,6 +188,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   const byId = new Map(results.map((r) => [r.objectId, r]));
   const declarations: Declaration[] = presentIds.map((oid) => {
     const r = byId.get(oid);
+    if (!r && oid === partnerId && partnerAct) return { objectId: oid, status: 'acted', intent: partnerAct };
     if (!r) return { objectId: oid, status: 'idle' };
     if (!r.reply) return { objectId: oid, status: 'unavailable' };
     return { objectId: oid, status: 'acted', say: r.reply.say, to: r.reply.to, intent: r.reply.intent, state: r.reply.state };
@@ -190,7 +198,15 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   stage('narrator');
   out.status('the narrator is writing…');
   const narratorBound = deps.registry.getForRole('narrator', story.settings.roles.narrator);
-  const nCall = buildNarratorCall(deps, { storyId, player: decl, presentIds, declarations, situationTags: lastBlock.tags });
+  let context: string | undefined;
+  if (dialogue.length && partnerId) {
+    const partnerName = deps.memory.getObject(partnerId)?.name ?? 'them';
+    context =
+      `A direct conversation between ${playerLabel} and ${label(deps, partnerId)} just ended:\n${renderTranscript(deps, storyId, dialogue)}\n\n` +
+      `Wrap it up: bridge back to the scene in a few sentences (or none if nothing else happens), resolve what the player${partnerAct ? ` and ${partnerName}` : ''} now try, ` +
+      `and give every other present character a brief of what they overheard or noticed. ${partnerName} was there, so their brief only needs what happens next.`;
+  }
+  const nCall = buildNarratorCall(deps, { storyId, player: decl, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
@@ -348,6 +364,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       status: 'complete',
       meta: {
         engine: 'minds',
+        mode: dialogue.length ? 'wrapup' : 'round',
+        ...(partnerId ? { partner: partnerId } : {}),
         durationMs: Date.now() - t0,
         model: narratorBound.profile.model,
         clockMin,

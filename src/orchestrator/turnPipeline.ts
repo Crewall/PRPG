@@ -36,6 +36,7 @@ import type { Db } from '../db/db.ts';
 import type { SheetStore, ThoughtStore, VariableStore } from '../db/stores/mindsStore.ts';
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
+import { runDialogueExchange } from '../minds/dialogue.ts';
 import type { RoundDeps } from '../minds/round.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
@@ -75,6 +76,8 @@ export interface PipelineDeps {
 export interface RunOptions {
   /** Minds engine: characters the user forces to act this round. */
   force?: string[];
+  /** Minds engine, dialogue mode: talk directly with this character (one exchange, nobody else called). */
+  dialogue?: { partner: string };
 }
 
 export interface RewindResult {
@@ -179,11 +182,13 @@ export class TurnPipeline {
       // Minds engine (docs/10): its own round — characters declare, the narrator
       // writes, one commit. Same lock, snapshot, cancel and error handling.
       if (story.settings.engine === 'minds') {
-        const finalTurn = await runMindsRound(this.roundDeps(), story, turn, playerInput, out, {
-          signal: aborter.signal,
-          force: opts.force,
-          setStage: (s) => (stage = s),
-        });
+        const finalTurn = opts.dialogue
+          ? await runDialogueExchange(this.roundDeps(), story, turn, playerInput, out, { signal: aborter.signal, partner: opts.dialogue.partner, setStage: (s) => (stage = s) })
+          : await runMindsRound(this.roundDeps(), story, turn, playerInput, out, {
+              signal: aborter.signal,
+              force: opts.force,
+              setStage: (s) => (stage = s),
+            });
         out.final(finalTurn);
         return finalTurn;
       }

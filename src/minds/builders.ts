@@ -46,6 +46,8 @@ export interface CharacterCallInput {
   situationTags?: string[];
   /** What happens right now, before the character declares (the player's words this round). */
   now?: string;
+  /** Dialogue mode (docs/10 §7): who the character is talking with — switches the ask to the conversation format. */
+  conversationWith?: string;
 }
 
 export interface PreparedCall {
@@ -75,6 +77,8 @@ export interface NarratorCallInput {
   presentIds: string[];
   declarations: Declaration[];
   situationTags?: string[];
+  /** Extra context for this round, e.g. a conversation that just ended (dialogue wrap-up). */
+  context?: string;
 }
 
 export const NARRATOR_OWNER = 'narrator';
@@ -244,7 +248,11 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (chosen.pinnedNew.length) parts.push(`Always on your mind:\n${chosen.pinnedNew.map(renderThought).join('\n')}`);
   if (recalled.length) parts.push(`You recall:\n${recalled.map(renderThought).join('\n')}`);
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
-  parts.push('Declare what you say and what you try to do. Reply as JSON.');
+  parts.push(
+    input.conversationWith
+      ? `You are in a direct conversation with ${input.conversationWith}. Reply as JSON in the conversation format.`
+      : 'Declare what you say and what you try to do. Reply as JSON.',
+  );
   const roundMessage = parts.join('\n\n');
 
   return {
@@ -330,6 +338,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
 
   const parts: string[] = [];
   if (pending.length) parts.push(pending.map((p) => p.content.trim()).join('\n\n'));
+  if (input.context?.trim()) parts.push(input.context.trim());
 
   const p = input.player;
   const said = [p.say?.trim() ? `says "${p.say.trim()}"` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');

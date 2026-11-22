@@ -6,7 +6,7 @@ import type { Turn } from '../domain.ts';
 import { logger } from '../util/logger.ts';
 
 const ClientMsg = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('turn.submit'), storyId: z.string(), input: z.string(), force: z.array(z.string()).optional() }),
+  z.object({ t: z.literal('turn.submit'), storyId: z.string(), input: z.string(), force: z.array(z.string()).optional(), dialogue: z.object({ partner: z.string() }).optional() }),
   z.object({ t: z.literal('turn.cancel'), storyId: z.string() }),
 ]);
 
@@ -50,7 +50,7 @@ export async function registerWsRoutes(server: FastifyInstance, app: App): Promi
         error: (turnId: string, message: string) => send({ t: 'turn.error', turnId, message }),
       };
 
-      app.pipeline.run(parsed.storyId, parsed.input, emitter, { force: parsed.force }).catch((err) => {
+      app.pipeline.run(parsed.storyId, parsed.input, emitter, { force: parsed.force, dialogue: parsed.dialogue }).catch((err) => {
         send({ t: 'turn.error', message: (err as Error).message });
       });
     });

@@ -216,3 +216,39 @@ export function entryToOp(entry: VarEntry, holder: string): VarOp | undefined {
   }
   return undefined;
 }
+
+// ---- Dialogue mode (docs/10 §7, §9.2) ----
+
+const DialogueReplyShape = {
+  say: Str.default(''),
+  gesture: Str.default(''),
+  state: Str.optional(),
+  remember: listOf(Remember),
+  forget: listOf(Forget),
+  act: Str.optional(),
+};
+export type DialogueReply = z.infer<z.ZodObject<typeof DialogueReplyShape>>;
+
+/** Parse + clamp a conversation reply (say ≤ 80 words, gesture ≤ 15, state and act ≤ 25). */
+export function parseDialogueReply(raw: unknown): DialogueReply & { problems: string[] } {
+  const { value, problems } = parseFields(DialogueReplyShape, raw);
+  const act = value.act?.trim() ? clampWords(value.act, 25).text : undefined;
+  return {
+    ...value,
+    say: clampWords(value.say, 80).text,
+    gesture: clampWords(value.gesture, 15).text,
+    state: value.state?.trim() ? clampWords(value.state, 25).text : undefined,
+    act,
+    problems,
+  };
+}
+export const DialogueReplySchema = z.unknown().transform((raw) => parseDialogueReply(raw));
+
+export const DialogueReplyWire = z.object({
+  say: z.string(),
+  gesture: z.string().optional(),
+  state: z.string().optional(),
+  remember: z.array(z.object({ text: z.string(), tags: z.array(z.string()), pin: z.boolean().optional() })).optional(),
+  forget: z.array(z.string()).optional(),
+  act: z.string().optional(),
+});

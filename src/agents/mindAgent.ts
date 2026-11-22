@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { Agent } from './agent.ts';
 import type { BuiltContext } from './agent.ts';
-import { CharacterReplySchema, CharacterReplyWire, RoundBlockSchema } from '../minds/contracts.ts';
+import { CharacterReplySchema, CharacterReplyWire, DialogueReplySchema, DialogueReplyWire, RoundBlockSchema } from '../minds/contracts.ts';
 import { zodToJsonSchema } from '../llm/jsonSchema.ts';
 
 const REPLY_WIRE_SCHEMA = zodToJsonSchema(CharacterReplyWire);
-import type { CharacterReply, RoundBlock } from '../minds/contracts.ts';
+const DIALOGUE_WIRE_SCHEMA = zodToJsonSchema(DialogueReplyWire);
+import type { CharacterReply, DialogueReply, RoundBlock } from '../minds/contracts.ts';
 
 // Minds engine agents (docs/10). Contexts come from src/minds/builders.ts (the
 // isolation boundary); replies are parsed leniently in src/minds/contracts.ts.
@@ -34,6 +35,12 @@ export class MindAgent extends Agent {
   /** A character's declaration for this round, plus its raw text (stored byte-exact in its thread). */
   async declare(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<{ reply: CharacterReply & { problems: string[] }; raw: string }> {
     const { value, raw } = await this.invokeJsonRaw(ctx, CharacterReplySchema, { ...opts, jsonSchema: REPLY_WIRE_SCHEMA });
+    return { reply: value, raw };
+  }
+
+  /** Dialogue mode: one conversational reply, plus its raw text (stored byte-exact). */
+  async converse(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<{ reply: DialogueReply & { problems: string[] }; raw: string }> {
+    const { value, raw } = await this.invokeJsonRaw(ctx, DialogueReplySchema, { ...opts, jsonSchema: DIALOGUE_WIRE_SCHEMA });
     return { reply: value, raw };
   }
 
