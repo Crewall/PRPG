@@ -53,7 +53,7 @@ character perceived. The app (code, not AI) checks that output and delivers each
 | What characters hear of the player's turn | They hear the player's **spoken words** at once (the player has initiative). They do **not** see the player's *action*; they learn its outcome from the narrator. |
 | Uncertain actions | A **referee pass** before narration judges every declared action at once (player and characters). Dice decide, and the narrator writes once with the outcomes known. This replaces the mid-narration `resolve_action` pause. |
 | Narrator and thoughts | The narrator does **not** read characters' thoughts by default (they are private; characters reveal things through speech and intent). Per-story setting to allow it. |
-| Old engines | The current code is preserved as a backup (backup method: owner's choice, see §15), and Minds replaces the old engines in the active line. The dice system is kept regardless. |
+| Old engines | The pre-Minds code is frozen on branch **`v1-backup`** (= `main` at `d506cd2`). Minds replaces the old engines on `main`, through PRs. The dice system is kept regardless. |
 
 ## 3. Vocabulary
 
@@ -496,7 +496,9 @@ Each milestone is committed on its own and keeps the existing engines working.
    rounds be strictly simultaneous, with everyone reacting only to the last narration?
 2. **Narrator and thoughts:** should the narrator be blind to characters' thoughts (proposed) or see the
    recalled ones?
-3. **Backup of the current code:** a frozen branch/tag in this repository, or a new repository (owner to pick).
+Settled since the first draft:
 
-Settled since the first draft: the input syntax (with a help panel), retiring the old engines from the active
-line while keeping a backup, keeping the dice, moving Claude to the official SDK at low priority.
+- the input syntax, with a help panel;
+- the backup: branch `v1-backup`; the old engines leave `main` later;
+- keeping the dice;
+- moving Claude to the official SDK at low priority.

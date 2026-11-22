@@ -35,11 +35,17 @@ is right.
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on
   current Claude models (see ARCHITECTURE §9) and gets fixed later.
 
+## Backup
+
+The pre-Minds code is frozen on branch **`v1-backup`** (`main` at `d506cd2`: classic engine + NPC Story Mode).
+**Never push to it.** New work goes to feature branches and reaches `main` through PRs.
+
 ## Keep (don't delete without the owner's say-so)
 
 - **The dice/adjudication system** (`src/orchestrator/resolution.ts`, `src/agents/adjudicator.ts`,
   `prompts/adjudicator.md`). The Minds engine reuses it as the referee.
-- The classic engine and NPC Story Mode stay until the owner decides their fate.
+- The classic engine and NPC Story Mode stay on `main` until the Minds engine replaces them (doc 10 §13, M8).
+  They remain available on `v1-backup` either way.
 
 ## Commands
 
