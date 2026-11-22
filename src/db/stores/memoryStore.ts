@@ -1,4 +1,5 @@
 import type { Db, Row } from '../db.ts';
+import { slugify } from '../../minds/text.ts';
 import { id } from '../../util/id.ts';
 import { estimateTokens } from '../../util/tokens.ts';
 import { discloseFact } from '../../memory/knowledge.ts';
@@ -21,6 +22,7 @@ function rowToObject(r: Row): MemoryObject {
     summary: r.summary as string,
     salience: r.salience as number,
     status: r.status as MemoryObject['status'],
+    handle: (r.handle as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };
@@ -63,10 +65,44 @@ export function createMemoryStore(db: Db) {
       const now = Date.now();
       const oid = id();
       db.prepare(
-        `INSERT INTO memory_objects (id, story_id, type, name, aliases_json, summary, salience, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(oid, o.storyId, o.type, o.name, JSON.stringify(o.aliases ?? []), o.summary ?? '', o.salience ?? 0.5, o.status ?? 'active', now, now);
+        `INSERT INTO memory_objects (id, story_id, type, name, aliases_json, summary, salience, status, handle, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(oid, o.storyId, o.type, o.name, JSON.stringify(o.aliases ?? []), o.summary ?? '', o.salience ?? 0.5, o.status ?? 'active', store.freeHandle(o.storyId, o.name), now, now);
       return store.getObject(oid)!;
+    },
+
+    /** A handle for `name` that no object in the story uses yet ("marta", then "marta-2"…). */
+    freeHandle(storyId: string, name: string): string {
+      const base = slugify(name, 28);
+      const taken = new Set(
+        db.prepare(`SELECT handle FROM memory_objects WHERE story_id = ? AND handle IS NOT NULL`).all<Row>(storyId).map((r) => r.handle as string),
+      );
+      if (!taken.has(base)) return base;
+      for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+    },
+
+    /** The object's handle, assigning one first if it has none (objects created before handles existed). */
+    ensureHandle(objectId: string): string | undefined {
+      const obj = store.getObject(objectId);
+      if (!obj) return undefined;
+      if (obj.handle) return obj.handle;
+      const handle = store.freeHandle(obj.storyId, obj.name);
+      db.prepare(`UPDATE memory_objects SET handle = ? WHERE id = ?`).run(handle, objectId);
+      return handle;
+    },
+
+    /** Look an object up by handle ('marta' or '#marta', case-insensitive). */
+    findByHandle(storyId: string, handle: string): MemoryObject | undefined {
+      const h = handle.trim().replace(/^#/, '').toLowerCase();
+      const r = db.prepare(`SELECT * FROM memory_objects WHERE story_id = ? AND handle = ?`).get<Row>(storyId, h);
+      return r ? rowToObject(r) : undefined;
+    },
+
+    /** Every handle in the story (without '#'). */
+    listHandles(storyId: string): Set<string> {
+      return new Set(
+        db.prepare(`SELECT handle FROM memory_objects WHERE story_id = ? AND handle IS NOT NULL`).all<Row>(storyId).map((r) => r.handle as string),
+      );
     },
 
     getObject(objectId: string): MemoryObject | undefined {

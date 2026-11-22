@@ -50,6 +50,8 @@ export interface MemoryObject {
   summary: string;
   salience: number;
   status: ObjectStatus;
+  /** Short unique-per-story id, shown as #handle (Minds engine, docs/11 §6). */
+  handle?: string | null;
   createdAt: number;
   updatedAt: number;
 }

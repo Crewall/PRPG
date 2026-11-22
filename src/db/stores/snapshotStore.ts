@@ -24,6 +24,12 @@ interface SnapshotPayload {
   links: Row[];
   suggestions: Row[];
   npcProfiles?: Row[]; // absent on snapshots from before NPC Story Mode
+  // Minds engine (docs/11 §7); absent on older snapshots.
+  sheets?: Row[];
+  variableValues?: Row[];
+  thoughts?: Row[];
+  thoughtTags?: Row[];
+  varChangeRowidWatermark?: number;
 }
 
 const KEEP_PER_STORY = 8; // how many rewind steps back a story supports
@@ -67,6 +73,13 @@ export function createSnapshotStore(db: Db) {
             .all<Row>(storyId),
           suggestions: db.prepare(`SELECT * FROM memory_suggestions WHERE story_id = ?`).all<Row>(storyId),
           npcProfiles: db.prepare(`SELECT * FROM npc_profiles WHERE story_id = ?`).all<Row>(storyId),
+          sheets: db.prepare(`SELECT * FROM character_sheets WHERE story_id = ?`).all<Row>(storyId),
+          variableValues: db.prepare(`SELECT * FROM variable_values WHERE story_id = ?`).all<Row>(storyId),
+          thoughts: db.prepare(`SELECT * FROM thoughts WHERE story_id = ?`).all<Row>(storyId),
+          thoughtTags: db
+            .prepare(`SELECT tt.* FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ?`)
+            .all<Row>(storyId),
+          varChangeRowidWatermark: Number(db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM variable_changes`).get<{ m: number }>()!.m),
         };
         db.prepare(
           `INSERT OR REPLACE INTO turn_snapshots (turn_id, story_id, turn_index, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -129,7 +142,7 @@ export function createSnapshotStore(db: Db) {
         // (and cascades knowledge links); reinserting fires the insert triggers.
         db.prepare(`DELETE FROM memory_facts WHERE object_id IN (SELECT id FROM memory_objects WHERE story_id = ?)`).run(storyId);
         db.prepare(`DELETE FROM memory_objects WHERE story_id = ?`).run(storyId);
-        for (const o of p.objects) upsert('memory_objects', o, ['story_id', 'type', 'name', 'aliases_json', 'summary', 'salience', 'status', 'created_at', 'updated_at']);
+        for (const o of p.objects) upsert('memory_objects', o, ['story_id', 'type', 'name', 'aliases_json', 'summary', 'salience', 'status', 'handle', 'created_at', 'updated_at']);
         for (const f of p.facts)
           upsert('memory_facts', f, ['object_id', 'category', 'subcategory', 'detail_level', 'tier', 'content', 'source_turn_id', 'supersedes_id', 'superseded', 'confidence', 'game_time_min', 'created_at', 'updated_at']);
         for (const l of p.links) upsert('knowledge_links', l, ['fact_id', 'knower_type', 'knower_npc_object_id', 'learned_turn_id', 'distortion', 'created_at', 'updated_at']);
@@ -143,6 +156,45 @@ export function createSnapshotStore(db: Db) {
             `INSERT OR REPLACE INTO npc_profiles (object_id, story_id, personality, notes, last_present_turn_idx, last_acted_turn_idx, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(np.object_id, np.story_id, np.personality, np.notes, np.last_present_turn_idx, np.last_acted_turn_idx, np.created_at, np.updated_at);
+        }
+
+        // 6c. Minds engine. Sheets are keyed by object_id and were cascaded away
+        // with the objects above; values and thoughts are small — wipe and
+        // reinsert. The change log is append-only: drop rows after the watermark.
+        if (p.sheets) {
+          db.prepare(`DELETE FROM character_sheets WHERE story_id = ?`).run(storyId);
+          for (const s of p.sheets) {
+            db.prepare(
+              `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, state, tier_id, seeded, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
+          }
+        }
+        if (p.variableValues) {
+          db.prepare(`DELETE FROM variable_values WHERE story_id = ?`).run(storyId);
+          for (const v of p.variableValues) {
+            db.prepare(`INSERT INTO variable_values (story_id, def_key, holder, value_json, updated_turn_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+              v.story_id,
+              v.def_key,
+              v.holder,
+              v.value_json,
+              v.updated_turn_id ?? null,
+              v.updated_at,
+            );
+          }
+        }
+        if (p.thoughts) {
+          db.prepare(`DELETE FROM thoughts WHERE story_id = ?`).run(storyId); // cascades thought_tags
+          for (const t of p.thoughts) {
+            db.prepare(
+              `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at);
+          }
+          for (const tt of p.thoughtTags ?? []) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
+        }
+        if (p.varChangeRowidWatermark !== undefined) {
+          db.prepare(`DELETE FROM variable_changes WHERE story_id = ? AND rowid > ?`).run(storyId, p.varChangeRowidWatermark);
         }
 
         // 7. Queued post-turn work is now stale.

@@ -368,6 +368,30 @@ export function mergeMemoryObjects(deps: HandlerDeps, keepId: string, mergeId: s
     // 7. Stale pending suggestions that reference the merged object.
     deps.db.prepare(`DELETE FROM memory_suggestions WHERE story_id = ? AND status = 'pending' AND (keep_id = ? OR merge_id = ?)`).run(storyId, mergeId, mergeId);
 
+    // 7b. Minds engine (docs/11): the merged character's sheet (when the kept
+    // one has none), variable values (where the kept one has no value of its
+    // own) and thoughts follow the merge; '#merged' tags point at the kept handle.
+    const keepHasSheet = !!deps.db.prepare(`SELECT object_id FROM character_sheets WHERE object_id = ?`).get(keepId);
+    if (!keepHasSheet) deps.db.prepare(`UPDATE character_sheets SET object_id = ?, updated_at = ? WHERE object_id = ?`).run(keepId, now, mergeId);
+    deps.db
+      .prepare(
+        `UPDATE variable_values SET holder = ? WHERE story_id = ? AND holder = ?
+           AND def_key NOT IN (SELECT def_key FROM variable_values WHERE story_id = ? AND holder = ?)`,
+      )
+      .run(keepId, storyId, mergeId, storyId, keepId);
+    deps.db.prepare(`DELETE FROM variable_values WHERE story_id = ? AND holder = ?`).run(storyId, mergeId);
+    const maxSeq = (deps.db.prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM thoughts WHERE story_id = ? AND owner = ?`).get<Row>(storyId, keepId)?.m as number) ?? 0;
+    deps.db.prepare(`UPDATE thoughts SET owner = ?, seq = seq + ?, updated_at = ? WHERE story_id = ? AND owner = ?`).run(keepId, maxSeq, now, storyId, mergeId);
+    const keepHandle = deps.memory.ensureHandle(keepId);
+    if (merge.handle && keepHandle) {
+      for (const r of deps.db
+        .prepare(`SELECT tt.thought_id AS tid FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ? AND tt.tag = ?`)
+        .all<Row>(storyId, `#${merge.handle}`)) {
+        deps.db.prepare(`DELETE FROM thought_tags WHERE thought_id = ? AND tag = ?`).run(r.tid, `#${merge.handle}`);
+        deps.db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(r.tid, `#${keepHandle}`);
+      }
+    }
+
     // 8. Fold identity into the kept object, then delete the merged one.
     const aliases = Array.from(new Set([...keep.aliases, merge.name, ...merge.aliases])).filter((a) => normalizeName(a) !== normalizeName(keep.name));
     deps.memory.updateObject(keepId, {
