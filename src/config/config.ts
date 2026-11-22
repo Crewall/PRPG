@@ -19,6 +19,9 @@ export const RoleName = z.enum([
   'adjudicator',
   'player_intake',
   'randomizer',
+  // Minds engine (docs/10).
+  'narrator',
+  'character',
 ]);
 export type RoleName = z.infer<typeof RoleName>;
 export const ALL_ROLES: RoleName[] = RoleName.options;
@@ -33,6 +36,8 @@ export const ROLE_LABELS: Record<RoleName, string> = {
   adjudicator: 'Adjudicator',
   player_intake: 'Character interviewer',
   randomizer: 'Premise randomizer',
+  narrator: 'Narrator (Minds)',
+  character: 'Character mind (Minds)',
 };
 
 const ServerSchema = z.object({

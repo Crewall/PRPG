@@ -13,6 +13,7 @@ import { createSnapshotStore } from './db/stores/snapshotStore.ts';
 import { createNpcProfileStore } from './db/stores/npcProfileStore.ts';
 import { createUsageStore } from './db/stores/usageStore.ts';
 import { createSheetStore, createVariableStore, createThoughtStore } from './db/stores/mindsStore.ts';
+import { createThreadStore } from './db/stores/threadStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
 import { createSettingsService } from './config/settingsService.ts';
@@ -46,6 +47,7 @@ export interface App {
   sheets: ReturnType<typeof createSheetStore>;
   variables: ReturnType<typeof createVariableStore>;
   thoughts: ReturnType<typeof createThoughtStore>;
+  threads: ReturnType<typeof createThreadStore>;
   settingsService: SettingsService;
   registry: LlmRegistry;
   pipeline: TurnPipeline;
@@ -72,6 +74,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const sheets = createSheetStore(db);
   const variables = createVariableStore(db);
   const thoughts = createThoughtStore(db);
+  const threads = createThreadStore(db);
 
   // Runtime settings: seed from config.json, then the DB is the source of truth.
   // The registry reads the compiled effective config live, and prompt overrides
@@ -113,6 +116,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     sheets,
     variables,
     thoughts,
+    threads,
     settingsService,
     registry,
     pipeline,

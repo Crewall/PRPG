@@ -123,6 +123,8 @@ export const DEFAULT_ROLE_TIER: Record<RoleName, string> = {
   context_planner: 'light',
   adjudicator: 'light',
   overseer: 'light',
+  narrator: 'heavy',
+  character: 'medium',
 };
 
 // Roles added after the original config shape: when absent, they inherit an
@@ -148,6 +150,8 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'adjudicator', label: 'Adjudicator — action resolution' },
   { name: 'player-intake', label: 'Character interviewer — player dossier' },
   { name: 'story-randomizer', label: 'Story randomizer — premise from seeds' },
+  { name: 'minds-narrator', label: 'Minds — narrator' },
+  { name: 'minds-character', label: 'Minds — character mind' },
 ];
 
 // ---- Building tiers from per-role bindings (seed + migration share this) ----

@@ -7,6 +7,8 @@ import { SCENARIO_TEMPLATES } from '../minds/templates.ts';
 import { applyChanges, applyThoughtOps, createCharacter, mindsView, updateSheet } from '../minds/service.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
+import { buildCharacterCall, buildNarratorCall, hereFromScene, NARRATOR_OWNER } from '../minds/builders.ts';
+import type { ThreadDeps } from '../minds/builders.ts';
 
 // Minds engine data layer API (docs/10 §11, docs/11): scenario variables,
 // character sheets, values, the change log and thoughts. `?advanced=1` is the
@@ -186,6 +188,53 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     const result = applyThoughtOps(deps, id, owner, { remember: [op] }, 'user');
     reply.code(result.added.length ? 201 : 200);
     return result;
+  });
+
+  // ---- POV (advanced mode, docs/10 §10) ----
+
+  const threadDeps: ThreadDeps = { ...deps, db: app.db, agents: app.agents, threads: app.threads, verbosityOverride: () => app.settingsService.verbosityOverride() };
+  const sessionFor = (storyId: string, oid: string) =>
+    app.agents.listSessions(storyId).find((s) => (oid === NARRATOR_OWNER ? s.role === 'narrator' : s.role === 'character' && s.npcObjectId === oid));
+
+  // What one mind has experienced: its thread (recap, log, items waiting for its next round).
+  server.get('/api/stories/:id/pov/:oid', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    if (!storyOr404(id, reply)) return { error: 'story not found' };
+    if (!isOwner(id, oid)) {
+      reply.code(404);
+      return { error: "not 'narrator' or a character of this story" };
+    }
+    const session = sessionFor(id, oid);
+    if (!session) return { recap: null, log: [], pending: [] };
+    const strip = (m: { role: string; content: string; turnId: string | null; createdAt: number }) => ({ role: m.role, content: m.content, turnId: m.turnId, createdAt: m.createdAt });
+    return {
+      recap: app.threads.recap(session.id)?.content ?? null,
+      log: app.threads.log(session.id).map(strip),
+      pending: app.threads.pending(session.id).map(strip),
+    };
+  });
+
+  // The exact prompt: 'next' is built by the same function the round uses; 'last' is what was actually sent.
+  server.get('/api/stories/:id/pov/:oid/prompt', async (req, reply) => {
+    const { id, oid } = req.params as { id: string; oid: string };
+    const story = storyOr404(id, reply);
+    if (!story) return { error: 'story not found' };
+    if (!isOwner(id, oid)) {
+      reply.code(404);
+      return { error: "not 'narrator' or a character of this story" };
+    }
+    const which = (req.query as { which?: string }).which === 'last' ? 'last' : 'next';
+    if (which === 'last') {
+      const session = sessionFor(id, oid);
+      const last = session ? app.threadLog.query(id, { limit: 500 }).find((e) => e.sessionId === session.id && e.direction === 'request') : undefined;
+      return last ? { which, sentAt: last.createdAt, ...(last.payload as object) } : { which, none: true };
+    }
+    const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+    const call =
+      oid === NARRATOR_OWNER
+        ? buildNarratorCall(threadDeps, { storyId: id, player: {}, presentIds: scene?.activeNpcIds ?? [], declarations: [] })
+        : buildCharacterCall(threadDeps, { storyId: id, objectId: oid, here: hereFromScene(threadDeps, id, oid) });
+    return { which, system: call.ctx.system, messages: call.ctx.messages };
   });
 
   server.patch('/api/thoughts/:tid', async (req, reply) => {

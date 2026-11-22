@@ -30,6 +30,8 @@ interface SnapshotPayload {
   thoughts?: Row[];
   thoughtTags?: Row[];
   varChangeRowidWatermark?: number;
+  /** Thread rows whose kind/compacted flag can change in place (pending → delivered, compaction). */
+  messageFlags?: { id: string; kind: string; compacted: number }[];
 }
 
 const KEEP_PER_STORY = 8; // how many rewind steps back a story supports
@@ -80,6 +82,12 @@ export function createSnapshotStore(db: Db) {
             .prepare(`SELECT tt.* FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ?`)
             .all<Row>(storyId),
           varChangeRowidWatermark: Number(db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM variable_changes`).get<{ m: number }>()!.m),
+          messageFlags: db
+            .prepare(
+              `SELECT m.id AS id, m.kind AS kind, m.compacted AS compacted FROM agent_messages m JOIN agent_sessions s ON s.id = m.session_id
+               WHERE s.story_id = ? AND (m.kind <> 'log' OR m.compacted = 1)`,
+            )
+            .all<{ id: string; kind: string; compacted: number }>(storyId),
         };
         db.prepare(
           `INSERT OR REPLACE INTO turn_snapshots (turn_id, story_id, turn_index, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -113,6 +121,13 @@ export function createSnapshotStore(db: Db) {
         db.prepare(
           `DELETE FROM agent_messages WHERE rowid > ? AND session_id IN (SELECT id FROM agent_sessions WHERE story_id = ?)`,
         ).run(p.messageRowidWatermark, storyId);
+
+        // 2b. Thread flags changed in place since the capture (pending briefs
+        // delivered, log rows compacted): back to what they were.
+        if (p.messageFlags) {
+          db.prepare(`UPDATE agent_messages SET compacted = 0 WHERE session_id IN (SELECT id FROM agent_sessions WHERE story_id = ?)`).run(storyId);
+          for (const f of p.messageFlags) db.prepare(`UPDATE agent_messages SET kind = ?, compacted = ? WHERE id = ?`).run(f.kind, f.compacted, f.id);
+        }
 
         // 3. Agent sessions: drop ones created during the turn, restore prior state on the rest.
         const keepSessions = new Set(p.sessions.map((s) => s.id as string));
