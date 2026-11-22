@@ -22,18 +22,18 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 | Rule enforcement | Optional overseer validates outputs against user-defined rules and requests regeneration when violated |
 | Hidden threads | Support threads invisible to the player by default; a debug setting exposes every thread and prompt for troubleshooting |
 
-## Documentation / development plan
+## Documentation
 
-The full design is in `docs/`, ordered as a reading path and as a build guideline:
-
-1. [`docs/01-tech-stack.md`](docs/01-tech-stack.md) — recommended languages, frameworks, storage, and why
-2. [`docs/02-architecture.md`](docs/02-architecture.md) — system architecture, processes, module layout
-3. [`docs/03-data-model.md`](docs/03-data-model.md) — entities, schemas, persistence layout
-4. [`docs/04-agents.md`](docs/04-agents.md) — every agent thread: role, inputs, outputs, prompt design
-5. [`docs/05-memory-system.md`](docs/05-memory-system.md) — memory objects, detail levels, retrieval, scribe pipeline
-6. [`docs/06-orchestration.md`](docs/06-orchestration.md) — the turn loop: how a player input flows through all agents
-7. [`docs/07-api-and-ui.md`](docs/07-api-and-ui.md) — HTTP/WebSocket API surface and the web client
-8. [`docs/08-roadmap.md`](docs/08-roadmap.md) — layered build plan: milestones, inputs/outputs, acceptance criteria
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md)**: how the system works today (source map, turn flow, data, jobs, API,
+  known gaps).
+- **[`docs/`](docs/README.md)**: specs with their status:
+  - [09](docs/09-npc-story-mode.md) NPC Story Mode (built);
+  - [10](docs/10-minds-engine.md) the next engine: narrator + character minds, briefs, dialogue mode, advanced mode
+    (draft);
+  - [11](docs/11-character-sheets.md) description, state, variables, self-written thoughts (draft);
+  - [12](docs/12-models-and-providers.md) providers (DeepSeek, OpenRouter), model tiers, prompt caching (draft).
+- **[`CLAUDE.md`](CLAUDE.md)**: the briefing for AI coding sessions (read order, conventions, what to keep).
+- `old/` holds the obsolete original design (docs 01–08). Don't use it as a reference.
 
 ## Implementation status
 
@@ -42,14 +42,16 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 - **Layer 2 — Story compression (job queue, scribe_story, bounded context):** ✅ implemented.
 - **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
 - **Layer 4 — NPC agents (personas, isolation, consult loop):** ✅ implemented.
-- Layers 5–6 (rule overseer, debug/polish): designed in `docs/`, not yet built.
+- Layers 5–6 (rule overseer, debug/polish): designed in the original plan (`old/`), not built.
 - **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)) —
   a per-story switch replacing the structured memory pipeline with per-NPC
   narrative minds (proactive rounds, skip gate, seeding, NPC-minds panel).
-- **Settings UI (extra):** in-app page to set provider API keys (with a live
-  "test key" button), curate a favourites list of models, pick a model +
-  temperature + max-tokens per AI role, and edit each role's prompt. All
-  persisted in the DB and auto-loaded; `config.json` is just the initial seed.
+- **Settings UI (extra):** in-app page for provider connections (DeepSeek, OpenRouter and others at once, with
+  test, model listing and limits), models, **model tiers** (Heavy / Medium / Light + your own; every AI role
+  follows its tier), role mapping and each role's prompt. All persisted in the DB; `config.json` is just the
+  initial seed.
+- **Minds engine** (docs 10–12): M1 (providers + tiers) ✅ built; the rest is designed, not built. Build order in
+  doc 10 §13.
 
 ## Running it
 
@@ -72,5 +74,5 @@ Then open `http://127.0.0.1:7777`, create a story with a premise, and play.
 ## Quick architectural summary
 
 - **Backend:** Node.js + TypeScript (Fastify), SQLite storage, provider-agnostic LLM adapter
-- **Frontend:** static single-page web app (Svelte) served by the backend, used from any browser — including the phone's own browser when hosted in Termux
+- **Frontend:** static single-page web app (vanilla JS, no build step; Svelte was planned) served by the backend, used from any browser — including the phone's own browser when hosted in Termux
 - **Orchestration:** an in-process turn pipeline (no external agent framework) that fans out to agent sessions, each with independently constructed context

@@ -130,7 +130,7 @@ export async function runNpcRound(
     }
   }
 
-  const profileName = story.settings.roles.npc ?? deps.registry.getForRole('npc').name;
+  const profileName = deps.registry.getForRole('npc', story.settings.roles.npc).name;
   const results = await Promise.all(
     invoked.map(async ({ obj, profile }): Promise<NpcRoundOutcome> => {
       try {

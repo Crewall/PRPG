@@ -1197,8 +1197,13 @@ async function renderPlay(storyId) {
 }
 
 // ---------------- Settings ----------------
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer' };
-const PROVIDER_LABELS = { anthropic: 'Anthropic', openai_compat: 'OpenAI-compatible (OpenRouter, etc.)' };
+// Provider connections → models → tiers → role mapping (docs/12). The user
+// normally only touches the Tiers card: every role on a tier follows it.
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer' };
+const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
+const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
+const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);
+const mini = (label, el) => h('div', { class: 'mini' }, h('span', { class: 'sub' }, label), el);
 
 async function renderSettings() {
   app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
@@ -1206,91 +1211,186 @@ async function renderSettings() {
   try { view = await api.get('/api/settings/config'); prompts = await api.get('/api/settings/prompts'); seedMeta = await api.get('/api/settings/seeds'); }
   catch (e) { app.replaceChildren(topbar(), h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Failed to load settings: ' + e.message))); return; }
   const seedNote = `${seedMeta.count} phrases · ${seedMeta.overridden ? 'customised' : 'default'} ›`;
+  const presets = view.presets;
 
-  const favs = view.favourites.map((f) => ({ ...f }));
-  const roles = JSON.parse(JSON.stringify(view.roles));
+  // Editable copy of the settings. A connection's apiKey here is only what the
+  // user typed in this visit ('' = keep the saved key).
+  let st, usage;
+  const load = (v) => {
+    st = {
+      connections: v.connections.map((c) => ({ ...c, apiKey: '' })),
+      models: v.models.map((m) => ({ ...m, caps: { ...m.caps } })),
+      tiers: v.tiers.map((t) => ({ ...t })),
+      roleTiers: { ...v.roleTiers },
+    };
+    usage = v.usage?.requests || {};
+  };
+  load(view);
   const perf = { jobConcurrency: 2, requestTimeoutMs: 180000, ...(view.performance || {}) };
-  const provInputs = {};
+  const modelLists = {}; // connection id → models fetched with "List models"
+  let rolesOpen = false;
 
-  function providerCard(kind) {
-    const p = view.providers[kind] || {};
-    const baseUrl = h('input', { placeholder: kind === 'openai_compat' ? 'https://openrouter.ai/api/v1' : 'https://api.anthropic.com (optional)', value: p.baseUrl || '' });
-    const apiKey = h('input', { type: 'password', placeholder: p.configured ? `saved (${p.hint}) — leave blank to keep` : 'paste your API key' });
-    const result = h('span', { class: 'sub' });
-    const testBtn = h('button', { class: 'small' }, 'Test key');
-    testBtn.addEventListener('click', async () => {
-      result.className = 'sub'; result.textContent = 'testing…';
-      try {
-        const r = await api.post('/api/settings/test', { provider: kind, apiKey: apiKey.value || undefined, baseUrl: baseUrl.value || undefined });
-        result.className = r.ok ? 'sub ok' : 'sub err';
-        result.textContent = r.ok ? `✓ OK (${r.latencyMs}ms · ${r.model})` : `✗ ${r.error}`;
-      } catch (e) { result.className = 'sub err'; result.textContent = '✗ ' + e.message; }
+  const conn = (id) => st.connections.find((c) => c.id === id);
+  const modelName = (m) => `${m.label || m.model || '(unnamed)'} · ${conn(m.providerId)?.label || '?'}`;
+  const rolesOnTier = (tid) => view.roles.filter((r) => st.roleTiers[r.role] === tid).map((r) => r.label);
+  const connTarget = (c) => ({ connectionId: c.id, preset: c.preset, kind: c.kind, baseUrl: c.baseUrl || undefined, apiKey: c.apiKey || undefined });
+  const status = h('span', { class: 'sub' });
+  const host = h('div');
+
+  function tiersCard() {
+    const rows = st.tiers.map((t) => {
+      const used = rolesOnTier(t.id);
+      const m = st.models.find((x) => x.id === t.modelId);
+      const c = m && conn(m.providerId);
+      const label = h('input', { value: t.label, placeholder: 'tier name', oninput: (e) => (t.label = e.target.value) });
+      const model = h('select', { onchange: (e) => { t.modelId = e.target.value; paint(); } }, opt('', '— pick a model —', t.modelId), ...st.models.map((x) => opt(x.id, modelName(x), t.modelId)));
+      const maxT = h('input', { type: 'number', min: '1', step: '1', value: t.maxTokens, oninput: (e) => (t.maxTokens = parseInt(e.target.value, 10) || 1) });
+      const temp = h('input', { type: 'number', min: '0', max: '2', step: '0.1', placeholder: '—', value: t.temperature ?? '', title: 'Empty = not sent (some models reject it)', oninput: (e) => { const v = e.target.value.trim(); t.temperature = v === '' ? undefined : parseFloat(v); } });
+      const reasoning = h('select', { onchange: (e) => (t.reasoning = e.target.value) }, opt('default', 'default', t.reasoning), opt('off', 'off', t.reasoning), opt('on', 'on', t.reasoning));
+      const effort = h('select', { onchange: (e) => (t.effort = e.target.value || undefined) }, opt('', '—', t.effort || ''), ...['low', 'medium', 'high', 'max'].map((x) => opt(x, x, t.effort)));
+      const rm = h('button', { class: 'link', disabled: used.length > 0 || st.tiers.length <= 1, title: used.length ? 'Reassign its roles first (Role mapping)' : '', onclick: () => { st.tiers = st.tiers.filter((x) => x !== t); paint(); } }, 'remove');
+      const reqs = c ? usage[c.id] || 0 : 0;
+      const info = h('div', { class: 'sub tier-info' },
+        used.length ? `Used by: ${used.join(', ')}` : 'Not used by any role yet',
+        c ? ` · ${c.label}: ${reqs} request${reqs === 1 ? '' : 's'} today` : '',
+        m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '');
+      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), rm), info);
     });
-    provInputs[kind] = { baseUrl, apiKey };
+    const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
+    const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model tiers'),
+      h('div', { class: 'sub', style: 'margin-bottom:10px' }, 'Every AI role runs on a tier. Change a tier\'s model once and all its roles follow. Temperature left empty is not sent. Reasoning "off" makes characters and helpers much faster.'),
+      ...rows, h('div', { class: 'row', style: 'gap:10px; flex-wrap:wrap' }, add, suggest));
+  }
 
-    // Feature 7: rate-limit / credits check (OpenRouter `GET /key`), with the
-    // result displayed inside the provider card.
-    const extras = [];
-    if (kind === 'openai_compat') {
+  function rolesCard() {
+    const rows = view.roles.map((r) => h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, r.label),
+      h('select', { onchange: (e) => { st.roleTiers[r.role] = e.target.value; paint(); } }, ...st.tiers.map((t) => opt(t.id, t.label, st.roleTiers[r.role])))));
+    return h('details', { class: 'card', ...(rolesOpen ? { open: true } : {}), ontoggle: (e) => (rolesOpen = e.target.open) },
+      h('summary', {}, h('b', {}, 'Role mapping'), h('span', { class: 'sub' }, ' — which tier each AI role uses')), h('div', { style: 'margin-top:10px' }, ...rows));
+  }
+
+  function modelsCard() {
+    const rows = st.models.map((m) => {
+      const inUse = st.tiers.some((t) => t.modelId === m.id);
+      const c = conn(m.providerId);
+      const label = h('input', { value: m.label, placeholder: 'label', oninput: (e) => (m.label = e.target.value) });
+      const provider = h('select', { onchange: (e) => { m.providerId = e.target.value; paint(); } }, ...st.connections.map((x) => opt(x.id, x.label, m.providerId)));
+      const model = h('input', { value: m.model, list: 'ml-' + m.providerId, placeholder: 'model id', oninput: (e) => (m.model = e.target.value),
+        onchange: () => { const known = (modelLists[m.providerId] || []).find((x) => x.id === m.model); if (known) { m.caps = { ...known.caps }; if (!m.label) m.label = known.name; paint(); } } });
+      const testRes = h('span', { class: 'sub' });
+      const test = h('button', { class: 'link', onclick: async () => {
+        if (!c) return;
+        testRes.className = 'sub'; testRes.textContent = '…';
+        try { const r = await api.post('/api/settings/test', { ...connTarget(c), model: m.model }); testRes.className = r.ok ? 'sub ok' : 'sub err'; testRes.textContent = r.ok ? `✓ ${r.latencyMs}ms` : `✗ ${r.error}`; }
+        catch (e) { testRes.className = 'sub err'; testRes.textContent = '✗ ' + e.message; }
+      } }, 'test');
+      const rm = h('button', { class: 'link', disabled: inUse, title: inUse ? 'A tier uses this model' : '', onclick: () => { st.models = st.models.filter((x) => x !== m); paint(); } }, 'remove');
+      const json = h('select', { onchange: (e) => (m.caps.json = e.target.value) }, opt('json_object', 'JSON mode', m.caps.json), opt('schema', 'structured outputs', m.caps.json), opt('prompt', 'prompt only', m.caps.json));
+      const reasoning = h('select', { onchange: (e) => (m.caps.reasoning = e.target.value) }, opt('toggle', 'switchable', m.caps.reasoning), opt('always', 'always on', m.caps.reasoning), opt('none', 'none', m.caps.reasoning));
+      const sampling = h('input', { type: 'checkbox', ...(m.caps.sampling ? { checked: true } : {}), onchange: (e) => (m.caps.sampling = e.target.checked) });
+      return h('div', { class: 'model-block' },
+        h('div', { class: 'model-row' }, label, provider, model, test, rm),
+        h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning, h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
+    });
+    const lists = Object.entries(modelLists).map(([cid, list]) => h('datalist', { id: 'ml-' + cid }, ...list.map((x) => h('option', { value: x.id }, x.name))));
+    const add = h('button', { class: 'small', disabled: !st.connections.length, onclick: () => { const c = st.connections[0]; st.models.push({ id: newSettingsId('m'), label: '', providerId: c.id, model: '', caps: capsForPreset(c.preset) }); paint(); } }, '+ Add model');
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Models'),
+      h('div', { class: 'sub', style: 'margin-bottom:10px' }, 'The models your tiers can use. "List models" under a provider fills the model id suggestions and the capabilities.'),
+      ...rows, ...lists, add);
+  }
+
+  function providersCard() {
+    const blocks = st.connections.map((c) => {
+      const used = st.models.some((m) => m.providerId === c.id);
+      const p = presets[c.preset] || presets.custom;
+      const preset = h('select', { onchange: (e) => {
+        const old = presets[c.preset] || presets.custom; const next = presets[e.target.value];
+        if (!c.baseUrl || c.baseUrl === old.baseUrl) c.baseUrl = next.baseUrl;
+        if (!c.label || c.label === old.label) c.label = next.label;
+        c.preset = e.target.value; c.kind = next.kind; paint();
+      } }, ...Object.entries(presets).map(([k, v]) => opt(k, v.label, c.preset)));
+      const label = h('input', { value: c.label, placeholder: 'name', oninput: (e) => (c.label = e.target.value) });
+      const baseUrl = h('input', { value: c.baseUrl, placeholder: p.baseUrl || 'https://…/v1', oninput: (e) => (c.baseUrl = e.target.value) });
+      const apiKey = h('input', { type: 'password', value: c.apiKey, placeholder: c.configured ? `saved (${c.hint}) — leave blank to keep` : p.keyOptional ? 'optional for local servers' : 'paste your API key', oninput: (e) => (c.apiKey = e.target.value) });
+      const result = h('div', { class: 'sub' });
+      const say = (ok, text) => { result.className = ok === null ? 'sub' : ok ? 'sub ok' : 'sub err'; result.replaceChildren(text); };
+      const firstModel = st.models.find((m) => m.providerId === c.id && m.model.trim());
+      const test = h('button', { class: 'small', onclick: async () => {
+        say(null, 'testing…');
+        try { const r = await api.post('/api/settings/test', { ...connTarget(c), model: firstModel?.model }); say(r.ok, r.ok ? `✓ OK (${r.latencyMs}ms · ${r.model})` : `✗ ${r.error}`); }
+        catch (e) { say(false, '✗ ' + e.message); }
+      } }, 'Test');
+      const list = c.kind === 'openai_compat' && h('button', { class: 'small', onclick: async () => {
+        say(null, 'listing models…');
+        try {
+          const r = await api.post('/api/settings/models', connTarget(c));
+          if (!r.ok) return say(false, '✗ ' + r.error);
+          modelLists[c.id] = r.models; paint();
+        } catch (e) { say(false, '✗ ' + e.message); }
+      } }, modelLists[c.id] ? `${modelLists[c.id].length} models listed` : 'List models');
       const limitsBox = h('div', { class: 'limits' });
-      const limitsBtn = h('button', { class: 'small' }, 'Check limits');
-      limitsBtn.addEventListener('click', async () => {
+      const limits = c.preset === 'openrouter' && c.configured && h('button', { class: 'small', onclick: async () => {
         limitsBox.replaceChildren(h('span', { class: 'sub' }, 'checking…'));
         try {
-          const r = await api.get('/api/settings/limits/openai_compat');
+          const r = await api.get('/api/settings/limits/' + encodeURIComponent(c.id));
           if (!r.ok) { limitsBox.replaceChildren(h('span', { class: 'sub err' }, '✗ ' + (r.error || 'failed'))); return; }
           const k = r.key || {};
-          const fmt = (n) => (typeof n === 'number' ? '$' + n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : String(n));
+          const fmt = (n) => (typeof n === 'number' ? '$' + n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : String(n ?? '—'));
+          const free = k.free_model_daily_requests;
           const rows = [
-            ['key', k.label || '—'],
-            ['credits', k.limit == null ? `${fmt(k.usage)} used · no limit` : `${fmt(k.limit_remaining)} remaining of ${fmt(k.limit)}${k.limit_reset ? ` (resets: ${k.limit_reset})` : ''}`],
+            ['credits', k.limit == null ? `${fmt(k.usage)} used · no limit` : `${fmt(k.limit_remaining)} remaining of ${fmt(k.limit)}`],
             ['usage', `today ${fmt(k.usage_daily)} · week ${fmt(k.usage_weekly)} · month ${fmt(k.usage_monthly)}`],
+            ...(free ? [['free models today', `${free.used ?? '?'} / ${free.limit ?? '?'} requests (${free.remaining ?? '?'} left)`]] : []),
             ['tier', k.is_free_tier ? 'free tier' : 'paid'],
           ];
           limitsBox.replaceChildren(...rows.map(([a, b]) => h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, a), h('span', { class: 'kv-val' }, b))));
         } catch (e) { limitsBox.replaceChildren(h('span', { class: 'sub err' }, '✗ ' + e.message)); }
-      });
-      extras.push(limitsBtn, limitsBox);
+      } }, 'Check limits');
+      const reqs = usage[c.id] || 0;
+      const rm = h('button', { class: 'link', disabled: used, title: used ? 'Models use this provider' : '', onclick: () => { st.connections = st.connections.filter((x) => x !== c); paint(); } }, 'remove');
+      return h('div', { class: 'conn-block' },
+        h('div', { class: 'conn-head' }, preset, label, rm),
+        h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
+        h('div', { class: 'row', style: 'margin-top:8px; gap:8px; flex-wrap:wrap; align-items:center' }, test, list, limits, h('span', { class: 'sub' }, `${reqs} request${reqs === 1 ? '' : 's'} today`)),
+        result, limitsBox);
+    });
+    const pick = h('select', {}, ...Object.entries(presets).map(([k, v]) => opt(k, v.label, 'deepseek')));
+    const add = h('button', { class: 'small', onclick: () => {
+      const k = pick.value, p = presets[k];
+      const taken = new Set(st.connections.map((c) => c.id));
+      st.connections.push({ id: taken.has(k) ? newSettingsId('c') : k, label: p.label, kind: p.kind, preset: k, baseUrl: p.baseUrl, apiKey: '', configured: false, hint: '' });
+      paint();
+    } }, '+ Add provider');
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Providers'),
+      h('div', { class: 'sub' }, 'API connections. You can have several, e.g. DeepSeek and OpenRouter at once. Keys stay on this server.'),
+      ...blocks, h('div', { class: 'row', style: 'margin-top:12px; gap:8px' }, pick, add));
+  }
+
+  // One-click starting point (docs/12 §4.3). Only edits this page; nothing is saved until "Save settings".
+  function applySuggestedSetup() {
+    let ds = st.connections.find((c) => c.preset === 'deepseek');
+    if (!ds) {
+      ds = { id: conn('deepseek') ? newSettingsId('c') : 'deepseek', label: 'DeepSeek', kind: 'openai_compat', preset: 'deepseek', baseUrl: presets.deepseek.baseUrl, apiKey: '', configured: false, hint: '' };
+      st.connections.push(ds);
     }
-
-    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, PROVIDER_LABELS[kind]),
-      h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
-      h('div', { class: 'row', style: 'margin-top:10px; gap:10px; flex-wrap:wrap' }, testBtn, result, ...extras.slice(0, 1)),
-      ...extras.slice(1));
+    const ensure = (model) => {
+      let m = st.models.find((x) => x.providerId === ds.id && x.model === model);
+      if (!m) { m = { id: newSettingsId('m'), label: model, providerId: ds.id, model, caps: capsForPreset('deepseek') }; st.models.push(m); }
+      return m;
+    };
+    const pro = ensure('deepseek-v4-pro'), flash = ensure('deepseek-flash');
+    const tier = (id, label) => st.tiers.find((t) => t.id === id) || st.tiers.find((t) => t.label === label);
+    const set = (t, m, reasoning) => { if (t) Object.assign(t, { modelId: m.id, reasoning, temperature: undefined, effort: undefined }); };
+    set(tier('heavy', 'Heavy'), pro, 'default');
+    set(tier('medium', 'Medium'), flash, 'off');
+    set(tier('light', 'Light'), flash, 'off');
+    paint();
+    status.className = 'sub';
+    status.textContent = ds.configured ? 'Suggested setup applied. Review it, then Save settings.' : 'Suggested setup applied. Paste your DeepSeek key under Providers, then Save settings.';
   }
 
-  const dynHost = h('div');
-  function paint() {
-    const favRows = favs.map((f, i) => {
-      const label = h('input', { value: f.label, placeholder: 'label', oninput: (e) => (f.label = e.target.value) });
-      const prov = h('select', { onchange: (e) => (f.provider = e.target.value) }, ...Object.keys(PROVIDER_LABELS).map((k) => h('option', { value: k, ...(k === f.provider ? { selected: true } : {}) }, k)));
-      const model = h('input', { value: f.model, placeholder: 'model id (e.g. anthropic/claude-sonnet-4.5)', oninput: (e) => (f.model = e.target.value) });
-      // Feature 6: live-test this specific model with the saved provider key.
-      const testRes = h('span', { class: 'sub' });
-      const test = h('button', { class: 'link', onclick: async () => {
-        testRes.className = 'sub'; testRes.textContent = '…';
-        try {
-          const r = await api.post('/api/settings/test', { provider: f.provider, model: f.model });
-          testRes.className = r.ok ? 'sub ok' : 'sub err';
-          testRes.textContent = r.ok ? `✓ ${r.latencyMs}ms` : `✗ ${r.error}`;
-        } catch (e) { testRes.className = 'sub err'; testRes.textContent = '✗ ' + e.message; }
-      } }, 'test');
-      const rm = h('button', { class: 'link', onclick: () => { favs.splice(i, 1); paint(); } }, 'remove');
-      return h('div', { class: 'fav-row' }, label, prov, model, test, testRes, rm);
-    });
-    const addFav = h('button', { class: 'small', onclick: () => { favs.push({ id: 'f' + Math.random().toString(36).slice(2, 8), label: 'New model', provider: 'openai_compat', model: '' }); paint(); } }, '+ Add model');
-    const favCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model favourites'), h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Curate the models you use; pick from these per role below.'), ...favRows, addFav);
-
-    const roleRows = Object.keys(ROLE_LABELS).map((role) => {
-      const binding = roles[role] || (roles[role] = { favouriteId: favs[0]?.id || '', temperature: 0.8, maxTokens: 2048 });
-      const sel = h('select', { onchange: (e) => (binding.favouriteId = e.target.value) }, ...favs.map((f) => h('option', { value: f.id, ...(f.id === binding.favouriteId ? { selected: true } : {}) }, `${f.label} (${f.model || '—'})`)));
-      const temp = h('input', { type: 'number', step: '0.1', min: '0', max: '2', value: binding.temperature, oninput: (e) => (binding.temperature = parseFloat(e.target.value)) });
-      const maxT = h('input', { type: 'number', step: '1', min: '1', value: binding.maxTokens, oninput: (e) => (binding.maxTokens = parseInt(e.target.value, 10)) });
-      return h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, ROLE_LABELS[role]), sel, h('div', { class: 'mini' }, h('span', { class: 'sub' }, 'temp'), temp), h('div', { class: 'mini' }, h('span', { class: 'sub' }, 'max tok'), maxT));
-    });
-    const roleCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model & parameters per role'), ...roleRows);
-    dynHost.replaceChildren(favCard, roleCard);
-  }
+  function paint() { host.replaceChildren(tiersCard(), rolesCard(), modelsCard(), providersCard()); }
   paint();
 
   const promptCard = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Prompts'),
@@ -1310,17 +1410,21 @@ async function renderSettings() {
     h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, 'Concurrent background jobs'), concInput),
     h('div', { class: 'role-row' }, h('div', { class: 'role-name' }, 'Request timeout (seconds)'), toInput));
 
-  const status = h('span', { class: 'sub' });
   const saveBtn = h('button', { class: 'primary' }, 'Save settings');
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true; status.className = 'sub'; status.textContent = 'saving…';
-    const providers = {};
-    for (const kind of Object.keys(provInputs)) {
-      const { baseUrl, apiKey } = provInputs[kind];
-      providers[kind] = { baseUrl: baseUrl.value, ...(apiKey.value ? { apiKey: apiKey.value } : {}) };
-    }
-    try { await api.put('/api/settings/config', { providers, favourites: favs, roles, performance: perf }); status.className = 'sub ok'; status.textContent = '✓ saved'; }
-    catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
+    const body = {
+      connections: st.connections.map((c) => ({ id: c.id, label: c.label, kind: c.kind, preset: c.preset, baseUrl: c.baseUrl, ...(c.apiKey ? { apiKey: c.apiKey } : {}) })),
+      models: st.models,
+      tiers: st.tiers,
+      roleTiers: st.roleTiers,
+      performance: perf,
+    };
+    try {
+      const v = await api.put('/api/settings/config', body);
+      view = { ...view, ...v }; load(v); paint();
+      status.className = 'sub ok'; status.textContent = '✓ saved';
+    } catch (e) { status.className = 'sub err'; status.textContent = '✗ ' + e.message; }
     saveBtn.disabled = false;
   });
 
@@ -1328,9 +1432,9 @@ async function renderSettings() {
     topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')),
     h('div', { class: 'scroll' }, h('div', { class: 'container' },
       h('h2', {}, 'Settings'),
-      providerCard('anthropic'), providerCard('openai_compat'),
-      dynHost, perfCard, promptCard,
-      h('div', { class: 'row', style: 'margin-top:16px; gap:12px' }, saveBtn, status),
+      host, perfCard,
+      h('div', { class: 'row save-row', style: 'margin:4px 0 16px; gap:12px' }, saveBtn, status),
+      promptCard,
     )),
   );
 }

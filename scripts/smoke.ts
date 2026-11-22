@@ -4,16 +4,15 @@
 // on any failure so it doubles as a health check on desktop and inside Termux.
 
 import { z } from 'zod';
-import { loadConfig } from '../src/config/config.ts';
+import { loadConfig, effectiveFromConfig } from '../src/config/config.ts';
 import { openDb, migrate } from '../src/db/db.ts';
 import { createRegistry } from '../src/llm/registry.ts';
 import { callJson } from '../src/llm/jsonCall.ts';
-import type { ProviderKind } from '../src/config/config.ts';
 
 const CONFIG_PATH = process.env.PRPG_CONFIG ?? 'config.json';
 
-function pickProfileFor(provider: ProviderKind, profiles: Record<string, { provider: ProviderKind }>): string | undefined {
-  return Object.entries(profiles).find(([, p]) => p.provider === provider)?.[0];
+function pickProfileFor(connectionId: string, profiles: Record<string, { connectionId?: string }>): string | undefined {
+  return Object.entries(profiles).find(([, p]) => p.connectionId === connectionId)?.[0];
 }
 
 async function main(): Promise<void> {
@@ -28,12 +27,14 @@ async function main(): Promise<void> {
   console.log(`✓ database opened at ${config.db.path} (${tableCount} tables, ${applied.length} migration(s) applied this run)`);
   db.close();
 
-  const registry = createRegistry(() => config);
-  const providers = Object.keys(config.providers) as ProviderKind[];
+  // Checks the connections declared in config.json (the boot seed), one model each.
+  const effective = effectiveFromConfig(config);
+  const registry = createRegistry(() => effective);
+  const providers = Object.keys(effective.connections);
 
   let failures = 0;
   for (const provider of providers) {
-    const profileName = pickProfileFor(provider, config.modelProfiles);
+    const profileName = pickProfileFor(provider, effective.modelProfiles);
     if (!profileName) {
       console.log(`- ${provider}: no model profile uses this provider, skipping`);
       continue;

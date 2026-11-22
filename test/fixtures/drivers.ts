@@ -13,10 +13,7 @@ export function asBound(driver: LlmDriver, name = 'test'): BoundDriver {
     profile,
     driver,
     chat: (req, onDelta) =>
-      driver.chat(
-        { model: profile.model, temperature: req.temperature ?? profile.temperature, maxTokens: req.maxTokens ?? profile.maxTokens, system: req.system, messages: req.messages, jsonSchema: req.jsonSchema, signal: req.signal },
-        onDelta,
-      ),
+      driver.chat({ ...req, model: profile.model, temperature: req.temperature ?? profile.temperature, maxTokens: req.maxTokens ?? profile.maxTokens }, onDelta),
   };
 }
 

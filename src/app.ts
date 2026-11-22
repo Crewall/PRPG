@@ -11,6 +11,7 @@ import { createMemoryStore } from './db/stores/memoryStore.ts';
 import { createSuggestionStore } from './db/stores/suggestionStore.ts';
 import { createSnapshotStore } from './db/stores/snapshotStore.ts';
 import { createNpcProfileStore } from './db/stores/npcProfileStore.ts';
+import { createUsageStore } from './db/stores/usageStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
 import { createSettingsService } from './config/settingsService.ts';
@@ -40,6 +41,7 @@ export interface App {
   suggestions: ReturnType<typeof createSuggestionStore>;
   snapshots: ReturnType<typeof createSnapshotStore>;
   npcProfiles: ReturnType<typeof createNpcProfileStore>;
+  usage: ReturnType<typeof createUsageStore>;
   settingsService: SettingsService;
   registry: LlmRegistry;
   pipeline: TurnPipeline;
@@ -62,13 +64,15 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const suggestions = createSuggestionStore(db);
   const snapshots = createSnapshotStore(db);
   const npcProfiles = createNpcProfileStore(db);
+  const usage = createUsageStore(db);
 
   // Runtime settings: seed from config.json, then the DB is the source of truth.
   // The registry reads the compiled effective config live, and prompt overrides
   // route through the settings service.
   const settingsService = createSettingsService(settings, config);
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
-  const registry = createRegistry(() => settingsService.effective(), opts.driverFactory);
+  // Every model call is counted per connection per UTC day (free-model limits, docs/12 §6.1).
+  const registry = createRegistry(() => settingsService.effective(), opts.driverFactory, { onRequest: (connectionId) => usage.increment(connectionId) });
   const contexts = createContextBuilder({ stories, summaries, memory, npcProfiles, verbosityOverride: () => settingsService.verbosityOverride() });
   const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng });
 
@@ -98,6 +102,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     suggestions,
     snapshots,
     npcProfiles,
+    usage,
     settingsService,
     registry,
     pipeline,

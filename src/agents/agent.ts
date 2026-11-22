@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type { BoundDriver } from '../llm/registry.ts';
-import type { ChatMessage, OnDelta } from '../llm/types.ts';
+import type { ChatMessage, OnDelta, Usage } from '../llm/types.ts';
+import { addUsage } from '../llm/types.ts';
 import { callJson } from '../llm/jsonCall.ts';
 import type { JsonCallContext } from '../llm/jsonCall.ts';
 import type { ThreadLog } from '../db/stores/threadLog.ts';
@@ -51,21 +52,27 @@ export abstract class Agent {
       sessionId: this.session.id,
       agentRole: this.session.role,
       direction: 'request',
+      connectionId: this.bound.profile.connectionId ?? this.bound.profile.provider,
       payload: { system: ctx.system, messages: ctx.messages, model: this.bound.profile.model },
       tokensIn: estimateTokens(ctx.system) + ctx.messages.reduce((n, m) => n + estimateTokens(m.content), 0),
     });
   }
 
-  protected logResponse(text: string, meta: { durationMs: number; tokensIn: number; tokensOut: number; turnId?: string; extra?: Record<string, unknown> }): void {
+  protected logResponse(text: string, meta: { durationMs: number; usage: Usage; turnId?: string; extra?: Record<string, unknown> }): void {
     this.threadLog.log({
       storyId: this.storyId,
       turnId: meta.turnId ?? null,
       sessionId: this.session.id,
       agentRole: this.session.role,
       direction: 'response',
+      connectionId: this.bound.profile.connectionId ?? this.bound.profile.provider,
       payload: { text, ...(meta.extra ?? {}) },
-      tokensIn: meta.tokensIn,
-      tokensOut: meta.tokensOut,
+      tokensIn: meta.usage.inputTokens,
+      tokensOut: meta.usage.outputTokens,
+      cacheRead: meta.usage.cacheReadTokens,
+      cacheWrite: meta.usage.cacheWriteTokens,
+      reasoningTokens: meta.usage.reasoningTokens,
+      cost: meta.usage.cost,
       durationMs: meta.durationMs,
     });
   }
@@ -80,12 +87,11 @@ export abstract class Agent {
     for (let attempt = 0; ; attempt++) {
       this.logRequest(ctx, opts.turnId);
       const t0 = Date.now();
-      const res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal }, onDelta);
+      const res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id }, onDelta);
       const empty = res.text.trim().length === 0;
       this.logResponse(res.text, {
         durationMs: Date.now() - t0,
-        tokensIn: res.usage.inputTokens,
-        tokensOut: res.usage.outputTokens,
+        usage: res.usage,
         turnId: opts.turnId,
         extra: { stopReason: res.stopReason, ...(empty ? { empty: true, attempt: attempt + 1 } : {}) },
       });
@@ -102,13 +108,20 @@ export abstract class Agent {
   protected async invokeJson<S extends z.ZodTypeAny>(ctx: BuiltContext, schema: S, opts: { turnId?: string; signal?: AbortSignal; maxTokens?: number } = {}): Promise<z.infer<S>> {
     this.logRequest(ctx, opts.turnId);
     const t0 = Date.now();
-    const jsonCtx: JsonCallContext = { system: ctx.system, messages: ctx.messages, signal: opts.signal };
+    const jsonCtx: JsonCallContext = { system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id };
     let lastRaw = '';
-    const result = await callJson(this.bound, jsonCtx, schema, { onRaw: (raw) => (lastRaw = raw), maxTokens: opts.maxTokens });
+    let usage: Usage = { inputTokens: 0, outputTokens: 0 };
+    const result = await callJson(this.bound, jsonCtx, schema, {
+      onRaw: (raw) => (lastRaw = raw),
+      onUsage: (u) => (usage = addUsage(usage, u)),
+      maxTokens: opts.maxTokens,
+    });
+    // Usage summed over every attempt (repairs/escalations are real calls);
+    // estimate output from text only when the provider reported nothing.
+    if (!usage.outputTokens) usage = { ...usage, outputTokens: estimateTokens(lastRaw) };
     this.logResponse(lastRaw, {
       durationMs: Date.now() - t0,
-      tokensIn: 0,
-      tokensOut: estimateTokens(lastRaw),
+      usage,
       turnId: opts.turnId,
       extra: { parsed: result },
     });

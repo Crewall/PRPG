@@ -179,8 +179,8 @@ export class TurnPipeline {
         ...(round.length ? { npcRound: round.map((r) => r.weave) } : {}),
       });
 
-      const profileName = story.settings.roles.storyteller ?? registry.getForRole('storyteller').name;
-      const bound = registry.getProfile(profileName);
+      const bound = registry.getForRole('storyteller', story.settings.roles.storyteller);
+      const profileName = bound.name;
       stage = `storyteller (${bound.profile.model})`;
       const session = agents.ensureSession(storyId, 'storyteller', profileName);
       const storyteller = new Storyteller({ session, bound, threadLog, storyId });
@@ -383,16 +383,7 @@ export class TurnPipeline {
   private async planContext(story: Story, playerInput: string, turnId: string, signal: AbortSignal): Promise<ContextPlan | undefined> {
     const { registry, agents, threadLog, stories, summaries, memory } = this.deps;
     try {
-      let bound;
-      const override = story.settings.roles.context_planner;
-      if (override) bound = registry.getProfile(override);
-      else {
-        try {
-          bound = registry.getForRole('context_planner');
-        } catch {
-          bound = registry.getForRole('scribe_memory'); // configs from before the role existed
-        }
-      }
+      const bound = registry.getForRole('context_planner', story.settings.roles.context_planner);
       const session = agents.ensureSession(story.id, 'context_planner', bound.name);
       const planner = new ContextPlanner({ session, bound, threadLog, storyId: story.id });
 
@@ -432,16 +423,7 @@ export class TurnPipeline {
   ): Promise<{ resolution?: ActionResolution; weave: ResolutionForWeave }> {
     const { memory, registry, agents, threadLog, stories } = this.deps;
     try {
-      let bound;
-      const override = story.settings.roles.adjudicator;
-      if (override) bound = registry.getProfile(override);
-      else {
-        try {
-          bound = registry.getForRole('adjudicator');
-        } catch {
-          bound = registry.getForRole('scribe_memory'); // configs from before the role existed
-        }
-      }
+      const bound = registry.getForRole('adjudicator', story.settings.roles.adjudicator);
       const session = agents.ensureSession(story.id, 'adjudicator', bound.name);
       const adjudicator = new Adjudicator({ session, bound, threadLog, storyId: story.id });
 
@@ -499,8 +481,8 @@ export class TurnPipeline {
     if (!obj) return { name: directive.npcName, error: 'unknown-npc' };
 
     try {
-      const profileName = story.settings.roles.npc ?? registry.getForRole('npc').name;
-      const bound = registry.getProfile(profileName);
+      const bound = registry.getForRole('npc', story.settings.roles.npc);
+      const profileName = bound.name;
       const sessionBefore = agents.listSessions(story.id).find((s) => s.role === 'npc' && s.npcObjectId === obj.id);
       const wasDormant = sessionBefore?.state === 'dormant';
       const session = agents.ensureSession(story.id, 'npc', profileName, obj.id);

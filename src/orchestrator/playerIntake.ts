@@ -25,16 +25,7 @@ export async function runPlayerInterview(
   const story = deps.stories.getStory(storyId);
   if (!story) throw new Error(`story '${storyId}' not found`);
 
-  let bound;
-  const override = story.settings.roles.player_intake;
-  if (override) bound = deps.registry.getProfile(override);
-  else {
-    try {
-      bound = deps.registry.getForRole('player_intake');
-    } catch {
-      bound = deps.registry.getForRole('storyteller'); // configs from before the role existed
-    }
-  }
+  const bound = deps.registry.getForRole('player_intake', story.settings.roles.player_intake);
   const session = deps.agents.ensureSession(storyId, 'player_intake', bound.name);
   const agent = new PlayerIntake({ session, bound, threadLog: deps.threadLog, storyId });
 

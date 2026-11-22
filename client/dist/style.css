@@ -251,3 +251,22 @@ button.small { padding: 5px 9px; font-size: 12px; }
 .opt-row { display: flex; gap: 10px; align-items: center; margin: 8px 0; font-size: 14px; color: var(--text); cursor: pointer; }
 .opt-row input[type=checkbox] { width: auto; }
 .chip.pc { border-color: var(--accent-2); }
+
+/* Settings: tiers, models, providers (docs/12) */
+.tier-block, .model-block { margin-bottom: 12px; }
+.tier-row { display: grid; grid-template-columns: 1fr 1.6fr auto auto auto auto auto; gap: 8px; align-items: end; }
+.model-row { display: grid; grid-template-columns: 1fr 1fr 1.6fr auto auto; gap: 8px; align-items: center; }
+.tier-info { margin-top: 4px; }
+.caps-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.caps-row select { padding: 5px 8px; font-size: 13px; width: auto; }
+.mini select { padding: 6px 8px; height: 100%; min-height: 38px; }
+.caps-row label.inline { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
+.caps-row input[type=checkbox] { width: auto; }
+.conn-block { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.conn-head { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+details.card > summary { cursor: pointer; }
+button.link[disabled] { opacity: .35; cursor: not-allowed; }
+@media (max-width: 620px) {
+  .tier-row { grid-template-columns: 1fr 1fr; }
+  .model-row { grid-template-columns: 1fr 1fr; }
+}

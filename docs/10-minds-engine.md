@@ -1,0 +1,499 @@
+# 10 — Minds engine: one narrator, character minds, per-character briefs
+
+**Status: spec. M1 (providers and tiers, doc 12) is built; M2–M8 are not.** Companion docs:
+[11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
+[12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
+
+A third engine beside the classic one and NPC Story Mode (see [docs/README](README.md) for those two). Every
+character is a persistent AI mind with its own thread. A single narrator resolves each round and writes two
+kinds of output: rich prose for the player and a short brief for each character, covering only what that
+character perceived. The app (code, not AI) checks that output and delivers each part to the right thread.
+
+---
+
+## 1. Requirements (from the owner's brief)
+
+| # | Requirement |
+|---|---|
+| R1 | A separate AI mind per character, each with its own persistent thread. |
+| R2 | Characters have a description, a state (one sentence: emotional and/or physical) and scenario variables (stats). |
+| R3 | Each character receives its **own brief version** of the story, limited to what it perceived. |
+| R4 | Characters only declare a **short intent** and their **exact words**. Everything that happens to them is told by the narrator. |
+| R5 | **Dialogue mode**: quick back-and-forth with one character instead of simultaneous rounds. Manual toggle first; automatic detection is a TODO. |
+| R6 | One narrator weaves the story: verbose prose for the player, brief versions for the AIs. The app routes each part. |
+| R7 | Threads are laid out for prompt-cache hits. |
+| R8 | Characters write, keep and revoke their **own thoughts** (memories). Thoughts carry tags. Tagged thoughts are recalled when the situation evokes their tags. The narrator can evoke tags, and object IDs work as tags. |
+| R9 | Variables are flexible: numbers with any range, text, choices, flags, lists. Each has rules: visibility (may be hidden even from its holder), who may change it, how and when. Defined per story scenario. The user sees and edits them in advanced mode. |
+| R10 | A character always sees its own description, state and non-hidden variables. The narrator sees everything. |
+| R11 | **Advanced mode**: everything visible and editable, plus a **POV filter** showing what each character sees, down to its exact prompt. |
+| R12 | Model **tiers** (3 by default, user can add more) instead of picking a model per role; DeepSeek as a provider. (Doc 12.) |
+
+## 2. Decisions
+
+### Settled with the owner
+
+| Topic | Decision |
+|---|---|
+| Narrator topology | **One central narrator.** Its single call returns prose for the player plus a hidden block of per-character briefs and state changes. The app does the routing; there is no AI "orchestrator". |
+| Variables | Many types (any numeric range, text, choices, flags, lists), with visibility and changer rules. Defined per scenario. Visible and editable by the user in advanced mode. Doc 11. |
+| Dialogue mode | Manual toggle in v1. Automatic detection: **TODO** (§14). |
+| Player character | Gets the same sheet (description, state, variables), set up with the story. No AI mind. |
+| Model tiers | User-defined; three by default (Heavy, Medium, Light). Doc 12. |
+| Visibility | A character always sees its own description, state and non-hidden variables; the narrator sees all of them for everyone. |
+| Advanced mode | Shows everything, allows editing everything, and has a POV filter (§10). |
+| Player input syntax | `"…"` = speech, `((…))` = out-of-character note to the narrator, the rest = action (§6). Made obvious in the UI: placeholder hint, live preview, and the help panel. |
+| Help | A **?** button opens a help panel that briefly explains every user-facing feature: syntax, modes, sheets, settings (§11.1). |
+| Dice | The adjudicator + hidden dice **stay in the code** but are **not part of the v1 round**: the narrator decides outcomes itself. They may come back later for special cases (§9.4, §14). Never deleted. |
+| Providers | DeepSeek and OpenRouter first. Claude moves to the official SDK later, at low priority (doc 12 §5.1). |
+
+### Settled after the first review
+
+| Topic | Decision |
+|---|---|
+| What characters hear of the player's turn | They hear the player's **spoken words** at once (the player has initiative). They do **not** see the player's *action*; they learn its outcome from the narrator. |
+| Uncertain actions | v1: the **narrator decides** outcomes (no dice in the round). A referee pass with dice is a later feature for special cases (§9.4). |
+| Narrator and thoughts | The narrator does **not** read characters' thoughts by default (they are private; characters reveal things through speech and intent). Per-story setting to allow it. |
+| Old engines | The pre-Minds code is frozen on branch **`v1-backup`** (= `main` at `d506cd2`). Minds replaces the old engines on `main`, through PRs. The dice system is kept regardless. |
+
+## 3. Vocabulary
+
+| Term | Meaning |
+|---|---|
+| **Round** | One beat of play in normal mode: everyone declares → narrator → distribution. One `turns` row. |
+| **Declaration** | What an actor puts in for a round: `say` (exact words) + `intent`/`do` (a short attempt, never an outcome). |
+| **Brief** | The narrator's short second-person account for one character of what it perceived this round and what happened to it. |
+| **Round block** | The fenced JSON the narrator appends after its prose: briefs, state and variable changes, tags, cast/scene/clock changes. Hidden from the player. |
+| **Thread** | One agent's persistent conversation (narrator, or one character): a frozen system prompt + an append-only log. |
+| **Sheet** | A character's description, appearance, state and variables. Doc 11. |
+| **Thought** | One self-written memory record with optional tags; can be revoked. Doc 11. |
+| **Handle** | A short `#name` ID for a roster object (character, place, item). Usable as a tag. |
+| **Referee** | *(Later, special cases.)* The impartial chance-judge (today's adjudicator) plus hidden dice. |
+| **Distributor** | A light fallback call that rebuilds a missing or broken round block from the narrator's prose. |
+| **Compactor** | A light call that folds the oldest part of a thread into a recap when the thread grows too long. |
+| **Tier** | A named model setting (Heavy / Medium / Light / user-defined) that roles point at. Doc 12. |
+
+## 4. Coexistence with the existing engines
+
+A story setting `engine: 'classic' | 'npc_stories' | 'minds'` replaces the `npcStories.enabled` flag. A migration
+maps the old flag: `true` → `npc_stories`, otherwise `classic`. Existing stories keep their engine. Once milestone
+M4 (§13) is in, new stories default to `minds`.
+
+**Reused as-is:** story lock, snapshots/rewind (extended, §12), streaming gate (hides fenced blocks), clock,
+scenes and the present-cast list, `memory_objects` as the roster (characters, places, items), the job queue,
+`thread_log`, settings plumbing, the player interview (for drafting the player character's sheet), the dice and
+outcome bands from `resolution.ts`.
+
+**Not used by Minds:** memory facts and knowledge links, retrieval, the context planner, `scribe_memory` and its
+cleanup jobs, `consult_npc`, scene summaries and the digest (the narrator's own thread plus compaction replace
+them), `npc_profiles`.
+
+## 5. A normal round
+
+```
+player input ──▶ parse {say, do, ooc}
+                    │
+   ┌────────────────┴──────────────────┐
+   ▼ (parallel, Medium tier)           │
+ character minds: declarations        │   stage 1
+   └────────────────┬──────────────────┘
+                    ▼ (Heavy tier, streamed to the player)
+ narrator: prose ⏎ ```round {briefs, states, vars, tags, …}```   stage 2
+                    ▼ (code)
+ validate → commit in one transaction → distribute briefs
+```
+
+0. **Preflight.** Take the story lock, create the turn row, capture the snapshot.
+1. **Parse the player's input** into a declaration (§6).
+2. **Character calls** (parallel, Medium tier or the character's own tier override). Present characters are
+   called when the gate passes (§5.1). Each call appends the round message to the character's thread and
+   returns a `CharacterReply` (§9.1). Replies are **held in memory**, not applied yet, so a failed round leaves
+   nothing behind. A failed call becomes "unavailable this round", as today.
+3. **No referee in v1.** The narrator decides what every attempt achieves, judging by the sheets it sees
+   (skills, health, state). The dice code stays; a referee for special cases is planned (§9.4).
+4. **Narrator** (Heavy tier, streamed). Its thread receives the round message (§8.2). It writes prose for the
+   player (verbosity setting applies), then a ```` ```round ```` block (§9.3). The existing gate stops
+   streaming at the fence.
+5. **Block check.** Parse and validate the block against the schema and the variable rules (doc 11 §4.6). If it
+   is missing or unparseable, run the **distributor** (Light tier) on the prose and the cast list to produce
+   one. If that also fails, give each present character a generic brief built mechanically (everyone's spoken
+   lines + "see what happens next"). The round still completes.
+6. **Commit** (single transaction):
+   - Character replies → each character's thread as its assistant message, stored **byte-for-byte** as received.
+   - Thought operations → `thoughts` (doc 11 §5).
+   - Variable and state changes: characters' allowed proposals first, then the narrator's (the narrator wins on
+     the same field). All of them go to the change log.
+   - Briefs → stored as pending brief text for each character. They are delivered as the opening part of that
+     character's next round message (§8.1), together with everyone's spoken lines they heard, so the exact
+     words never depend on the narrator's paraphrase.
+   - Narrator notes, situation tags, cast/scene changes, clock → applied.
+   - The narrator's reply → its thread.
+   - The turn row → `complete`, with meta: declarations, round block, call timings, cache usage.
+7. **Post-round jobs (async):** compaction for any thread over its threshold (§8.4), seeding for newly entered
+   characters (doc 11 §2.3).
+
+**Latency:** two sequential stages (characters in parallel → streamed narration). The classic engine worst case is up to three storyteller calls plus consults, and the
+player sees nothing until the end. The heavy background scribes are gone; the only post-round work is occasional
+compaction.
+
+**Requests per round** matter for rate-limited free models (OpenRouter `:free`: 20 per minute; 50 per day
+without purchased credits, 1000 with; doc 12 §6.1).
+
+| Case | Calls |
+|---|---|
+| Typical round | 1 narrator + 1 per called character (≤ `maxCharactersPerRound`). With 3 characters: **4**. |
+| Occasional | + distributor (broken block), + compactor (per thread over its threshold), + seeder (new character) |
+| Dialogue mode | **1** per exchange; 1 narrator call at wrap-up |
+
+The UI shows the day's request count per provider (doc 12 §6.1) so a free quota running out is visible before it
+fails.
+
+### 5.1 Who gets called (the gate)
+
+Reuses `shouldInvokeNpc`. A present character is called when any of these holds:
+
+- it has no reply yet in its thread (just created or just entered);
+- the player's speech or `do` mentions it;
+- its pending brief is non-empty and the narrator listed it in `spotlight` (§9.3);
+- it acted last round;
+- the user forces it (UI: tap the character chip).
+
+Present but not called: no call, but its pending brief stays pending, so the next time it is called it reads
+everything it witnessed, in order. Cap: `maxCharactersPerRound` (default 4; spotlighted characters first).
+
+## 6. The player's input
+
+One input box, three lanes, parsed mechanically:
+
+| Lane | Syntax | Who sees it |
+|---|---|---|
+| **Say** | text inside double quotes `"…"` | Narrator; present characters (heard immediately, §2 proposal) |
+| **Do** | everything else | Narrator only. Characters learn the outcome from their brief. |
+| **OOC** | text inside double parentheses `((…))` | Narrator only, as an out-of-character note ("make it rain", "skip to evening") |
+
+Making it obvious:
+
+- the empty box's placeholder reads `"Say this" · do that · ((note to narrator))`;
+- a live preview under the box splits the text as it will be read: **heard:** … / **doing:** … / **to narrator:**
+  …, so a stray quote can't leak an intention;
+- a small **?** next to the box opens the syntax entry of the help panel (§11.1).
+
+Empty input = "continue / wait".
+
+## 7. Dialogue mode (manual)
+
+**Entering.** The user taps a present character's chip → "Talk". The UI switches to chat bubbles. The round
+loop pauses.
+
+**Each exchange.**
+
+1. The player's line (speech, plus an optional short gesture outside quotes) is appended to the partner's thread.
+2. One call to the partner (its tier), reply `DialogueReply` (§9.2): `say`, `gesture` (small visible action, no
+   outcome), optional `state` and thought operations.
+3. The reply shows immediately as a bubble. Clock +1 minute per exchange.
+
+No narrator, no referee, no other characters are called.
+
+**Leaving** (any of these):
+
+- the user taps "End conversation";
+- the partner's reply sets `act` (it wants to do something consequential) — the app ends the dialogue and starts
+  a normal round with that intent already declared;
+- the player types an action with "Act" instead of "Say" — same thing, normal round with the player's `do`.
+
+**Wrap-up.** One narrator call with the dialogue transcript appended to its thread. It returns short bridging
+prose (optional, may be empty) and a block: briefs for **bystanders** (what they overheard or noticed), state
+and variable changes, tags. The partner's own thread already holds the whole conversation, so it gets no brief
+unless something happened around it.
+
+**TODO (automatic dialogue mode):** detect a conversation (the player addresses one character with speech only,
+twice in a row) and suggest entering dialogue mode; later, switch automatically. Not in v1.
+
+## 8. Threads and context assembly (cache layout)
+
+Every thread has the same shape, and each part is **append-only**:
+
+```
+[ system ]   frozen: rules, output contract, the agent's description, scenario variable definitions
+[ recap  ]   present only after a compaction: "what you remember so far" + your sheet at that point
+[ log    ]   round message, reply, round message, reply, …   (stored exactly as sent and received)
+[ newest round message ]   the only uncached part of a request
+```
+
+Why this works with every provider: Anthropic's automatic caching and its explicit breakpoints, OpenAI's
+automatic prefix cache, and DeepSeek's disk cache all reuse an **unchanged prefix**. DeepSeek creates cache units
+at the end of each user input and each model output, so a thread that only appends hits at every boundary
+(details in doc 12 §6). Nothing volatile (clock, dates, changing summaries) is placed before the log.
+
+**Rules (enforced by tests):**
+
+- Messages are stored as the exact strings sent and received; the builder never re-renders old messages.
+- Rendering is deterministic: sorted keys, stable ordering, no timestamps in the system prompt.
+- Adjacent same-role messages are merged by one fixed rule (newline join), the same every time.
+- Edits that rewrite the system prompt or old log messages (description edits, editing a past brief in advanced
+  mode) are allowed. They cost one cache miss and are marked in `thread_log`.
+
+### 8.1 A character's thread
+
+| Part | Content |
+|---|---|
+| System (frozen) | Character rules (stay in character; declare, never narrate outcomes; brevity; how to use thoughts and tags), the reply contract (§9.1), **its own description**, its appearance, the definitions of the variables it can see (meaning, range, how and when it may change them). |
+| Recap (after compaction) | First-person summary of what it experienced before, its pinned thoughts, its tag vocabulary. |
+| Round message | ① **Here:** location, present characters (handle + appearance), items in view; ② pending brief(s) since its last call, oldest first; ③ lines it heard, verbatim, with speakers; ④ **its sheet now**: state + visible variables (short, every round), plus "not applied" notes for any rejected or clamped change it proposed (doc 11 §4.6); ⑤ **recalled thoughts**: tagged thoughts evoked this round that it hasn't been shown since the last compaction (doc 11 §5.4); ⑥ the ask: "Declare what you say and what you try to do." |
+| Reply | `CharacterReply` JSON as received. |
+
+The character sees its own earlier `remember`/`forget` operations in its own replies, so pinned thoughts created
+since the last compaction never need repeating; the recap restates the full pinned list after each compaction.
+
+### 8.2 The narrator's thread
+
+| Part | Content |
+|---|---|
+| System (frozen) | Narrator rules, prose style (genre, tone, verbosity), the round-block contract (§9.3), the premise, scenario variable definitions with their rules, the narrator's secret setup notes. |
+| Recap (after compaction) | "The story so far" + the roster (handles, one line each). |
+| Round message | ① the player's declaration (say / do / OOC) and the player character's sheet; ② each present character's **full sheet** (description, appearance, state, all variables including hidden ones) + its declaration (say, intent, proposed state); ③ *(later, special cases)* referee outcomes (band guidance + complication; no numbers); ④ the clock; ⑤ the narrator's evoked notes and the tags currently in use; ⑥ the ask. |
+| Reply | Prose + round block, as received. |
+
+Full sheets every round cost a few hundred tokens per character. They are cached from the next round on, and
+they keep the narrator from drifting on numbers. Optimization for later: send full sheets only on entry and after
+compaction, and changes in between.
+
+### 8.3 Stateless helpers
+
+Referee, distributor, compactor, seeder and wrap-up don't keep threads. Each gets a small, fixed system prompt
+(cached across calls) plus its inputs. They are logged in `thread_log` like every call.
+
+### 8.4 Compaction
+
+When a thread's log exceeds its threshold (settings: `characterLogTokens` default 8k, `narratorLogTokens`
+default 32k), a Light-tier compactor folds the **oldest half** of the log into the recap:
+
+- First person for a character ("what I experienced, what I said"). It may propose pinned thoughts for anything
+  important, which the character confirms or revokes on its next call.
+- Third person for the narrator.
+
+The new recap replaces the old one (it is rewritten to include it), and the folded messages are flagged
+`compacted`. Cost: one cache miss for that thread on its next call. A compaction is tied to the turn that
+triggered it, so rewind undoes it (§12).
+
+## 9. Output contracts
+
+All JSON is validated with Zod; server-side clamps are listed for each. On validation failure the existing
+repair-retry applies once; after that, the fallbacks of §5 step 5 (narrator) or "unavailable" (character).
+
+### 9.1 `CharacterReply` (normal round)
+
+```json
+{
+  "say": "exact words spoken aloud, or \"\"",
+  "to": "optional #handle of who they address",
+  "intent": "what they try to do, ≤ 25 words, or \"\"",
+  "state": "optional: their inner state now, one sentence",
+  "vars": [{ "key": "resolve", "set": 6, "why": "short reason" }],
+  "remember": [{ "text": "one statement ≤ 40 words", "tags": ["ledger", "#marta"], "pin": false }],
+  "forget": ["t7"]
+}
+```
+
+Clamps: `say` ≤ 80 words; `intent` ≤ 25 words; `state` ≤ 25 words (one sentence); at most 3 `remember` and 5
+`forget` per reply. `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
+anything else is rejected and logged, never fatal. Whispering (`to` + private) is a TODO.
+
+### 9.2 `DialogueReply`
+
+```json
+{ "say": "…", "gesture": "small visible action, no outcome, ≤ 15 words", "state": "…",
+  "remember": [], "forget": [], "act": "optional: a consequential intent → ends the dialogue" }
+```
+
+### 9.3 The narrator's round block
+
+Written after the prose, fenced as ```` ```round ````, never shown to the player:
+
+```json
+{
+  "briefs": { "#marta": "You see the stranger…", "#tom": "…" },
+  "spotlight": ["#marta"],
+  "state": { "#marta": "Pale and shaking, but defiant.", "#player": "Bruised ribs, adrenaline high." },
+  "vars": [ { "who": "#marta", "key": "health", "delta": -2, "why": "struck by the bottle" },
+            { "who": "world", "key": "alarm", "set": 2, "why": "glass shattered" } ],
+  "tags": ["tavern", "ledger", "violence"],
+  "evoke": { "#marta": ["debt"] },
+  "notes": { "remember": [{ "text": "Tom is the informant", "tags": ["#tom", "informant"] }], "forget": [] },
+  "cast": { "enter": [{ "name": "Guard Captain Held", "appearance": "tall, scarred, city colours" }], "exit": ["#tom"] },
+  "objects": [{ "name": "silver locket", "type": "item", "line": "tarnished, engraved with an M" }],
+  "scene": { "break": false, "title": null, "location": "#tavern", "items": ["#ledger", "#silver-locket"] },
+  "time": 10
+}
+```
+
+- `briefs`: one per present character that perceived anything. Second person, ≤ `briefMaxWords` (default 70).
+  What it saw, felt and suffered, and the outcomes that touch it. Others' spoken lines are added by the app
+  (§5 step 6), so briefs don't need to quote them. A character the narrator omits gets "nothing notable
+  changes" plus the heard lines.
+- `state`: final state sentences; overrides the character's own proposal for the same round.
+- `vars`: checked against each variable's rules; the narrator may change only variables whose `changedBy`
+  includes `narrator`.
+- `tags`: situation tags for this round. `evoke`: extra per-character tags. Both feed recall next round (doc 11 §5.4).
+- `notes`: the narrator's own thoughts (owner = narrator; same store and recall as characters' thoughts).
+- `cast.enter`: creates a roster object + sheet; a seeding job fleshes it out. `cast.exit` removes from the scene.
+- `objects`: new roster items (handles assigned by the app). `scene.items`: what is in view; feeds the "Here:"
+  line and thought recall (doc 11 §6).
+- `time`: in-game minutes this round spans (replaces `advance_time`); missing → default.
+
+### 9.4 Referee (later: special cases)
+
+**Not in v1.** Planned for special cases, e.g. contested or high-stakes attempts that the narrator (via a block
+field) or the user (via a button) flags for a roll. The code it builds on (`resolution.ts`, the adjudicator) stays
+in the repository. Sketch:
+
+Input: a list of `{actor, action, sheet excerpt}`, the location, and the round context in one paragraph. Output:
+
+```json
+{ "rulings": [ { "actor": "#player", "action": "…", "ruling": "trivial" },
+               { "actor": "#marta", "action": "…", "ruling": "roll", "chance": 35,
+                 "complication": "…", "factors": ["…"] } ] }
+```
+
+The existing adjudicator prompt (realism over drama, physics not morals) carries over, extended to many actions,
+and reads numeric variables (skills, health) as factors.
+
+## 10. Advanced mode and the POV filter
+
+A global toggle in the header (persisted per installation). It replaces today's `debug.showThreads`.
+
+**Visibility.**
+
+| | Normal mode | Advanced mode |
+|---|---|---|
+| Story | Narrator prose; dialogue bubbles | + round blocks, referee rulings with numbers, cache stats per call |
+| Player character | Description, appearance, state, its `public`/`self` variables | everything, editable |
+| Other characters | Appearance; `public` variables | description, state, all variables (hidden ones marked), thoughts (active and revoked), briefs |
+| World variables | `public` ones | all |
+| Narrator | — | its notes, tags in use, its thread |
+
+**Editing (advanced only):** descriptions, appearance, states, variable values (validated by type; logged as
+`by: user`), thoughts (add, edit = revoke + add, revoke, pin), the narrator's notes, past briefs (costs one cache
+miss), and variable definitions (the scenario editor).
+
+**POV filter.** A selector above the transcript: `Player · Narrator · <each character>`.
+
+- **Player:** the normal transcript.
+- **Character X:** X's thread rendered as a story: the briefs it received, the lines it heard, its sheet per
+  round, recalled thoughts, and its own replies (say / intent / thought operations). This is exactly what X's
+  mind experienced, nothing more.
+- **Narrator:** declarations, referee rulings, prose and blocks.
+
+Each POV has two buttons:
+
+- **Last prompt:** the exact request that was sent, from `thread_log`.
+- **Next prompt:** a preview built by the **same builder function** the round will use, so preview and reality
+  cannot diverge. A test pins this.
+
+## 11. API and UI sketch
+
+```
+GET   /api/stories/:id/minds                      → sheets of all characters + player (filtered by mode)
+PATCH /api/stories/:id/minds/:oid                 { description?, appearance?, state?, tierId? }   (advanced)
+GET   /api/stories/:id/variables                  → definitions + values (filtered by mode)
+PUT   /api/stories/:id/variables/defs             [definitions]  (scenario editor)
+PATCH /api/stories/:id/variables/values           [{ holder, key, value }]   (advanced; logged by:user)
+GET   /api/stories/:id/thoughts?owner=…           → thoughts incl. revoked (advanced)
+POST  /api/stories/:id/thoughts                   { owner, text, tags, pin }   (advanced)
+PATCH /api/thoughts/:tid                          { revoked?, pin? }   (advanced)
+GET   /api/stories/:id/pov/:oid?turn=…            → rendered POV transcript for one character / narrator
+GET   /api/stories/:id/pov/:oid/prompt?which=last|next → exact prompt (advanced)
+POST  /api/stories/:id/dialogue                   { partner } → enter dialogue mode
+POST  /api/stories/:id/dialogue/say               { text } → one exchange (reply also sent as a `dialogue.reply` WS event)
+POST  /api/stories/:id/dialogue/end               → wrap-up
+```
+
+WebSocket gains `round.stage` (characters / narrator), `dialogue.reply`, `minds.updated`,
+`variables.updated`, `thoughts.updated`.
+
+UI pieces:
+
+- **Scenario** tab in Story options: variable definitions editor with templates (doc 11 §4.8).
+- **Sheet** panel for the player character (always) and others (advanced).
+- **Cast bar** chips: tap → sheet; long-press → Talk (dialogue), Force act.
+- **Input preview** line for say / do / OOC.
+- **Advanced** toggle and the **POV** selector.
+- **Help** (**?**) button in the header (§11.1).
+
+### 11.1 Help panel
+
+A **?** button in the header opens a side panel of short, scannable entries: a few sentences and one example
+each, grouped:
+
+| Group | Entries |
+|---|---|
+| Playing | Input syntax (say / do / OOC, with examples) · what a round is · what the narrator decides vs what you decide · dice and chance (described, never numbers) |
+| Characters | Dialogue mode (enter, exit, what bystanders notice) · the cast bar · forcing a character to act |
+| Sheets | Description vs appearance · state · variables (types, visibility, who may change them) · thoughts and tags |
+| Modes | Advanced mode · the POV filter · prompt viewer |
+| Story setup | Scenario variables and templates · the player character · premise, tone, verbosity |
+| Settings | Providers (DeepSeek, OpenRouter) · tiers and roles · free-model request limits · cache stats |
+
+Rules:
+
+- **Context links:** small **?** icons next to features (input box, Advanced toggle, scenario editor, tier rows)
+  open the panel at the matching entry.
+- **One source:** all entries live in one file, `client/dist/help.json` (`{ id, group, title, body, example }`),
+  so text is edited in one place and the panel needs no code changes for new entries.
+- **Definition of done:** a user-facing feature isn't finished until it has a help entry (CLAUDE.md conventions).
+- **First run:** a dismissible one-line hint on the first story ("New here? Tap ? for how to play") remembered in
+  browser storage.
+
+## 12. Data model summary
+
+Sheets, variables and thoughts are in doc 11 §7. Threads reuse the existing session tables:
+
+- `agent_sessions` — role `narrator` | `character` (plus helper roles). For characters, `npc_object_id` = the
+  character. New column `tier_id` (nullable override).
+- `agent_messages` — **read back for the first time**. New columns: `kind` (`log` | `recap` | `pending_brief`),
+  `compacted` (0/1), `round_turn_id`. The stored `content` is the exact string sent or received.
+- `turns.meta` — declarations, round block, per-call timings, cache usage (later: referee rulings with numbers).
+- `stories.settings` — `engine`; a `minds` block: `maxCharactersPerRound`, `briefMaxWords`, `characterLogTokens`,
+  `narratorLogTokens`, `descriptionMaxWords`, `thoughtRecallTokens`, `pinnedTokens`, `maxActiveThoughts`,
+  `narratorSeesThoughts`, `playerSpeechHeardImmediately`.
+
+**Snapshots/rewind.** The payload gains character sheets, variable values, the variable change log watermark,
+thoughts (status included), and the `compacted`/`kind` flags of messages (the rowid watermark alone can't undo a
+compaction's flag updates). Old snapshots without these fields restore as today.
+
+## 13. Build order
+
+Each milestone is committed on its own and keeps the existing engines working.
+
+| # | Milestone | Done when |
+|---|---|---|
+| M1 ✅ | **Providers and tiers** (doc 12, built): multiple named connections with DeepSeek + OpenRouter presets, tiers (3 default + custom), role → tier mapping, settings migration, DeepSeek/OpenRouter specifics (thinking/reasoning switches, JSON modes, sticky sessions), cache and request-count capture. | Settings migration test proves old role bindings map losslessly. Driver tests cover DeepSeek and OpenRouter usage fields, reasoning off, whitespace-only JSON. |
+| M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
+| M2 | **Sheets data layer** (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
+| M3 | **Thread builders**: system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
+| M4 | **Normal round**: parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
+| M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
+| M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
+| M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
+| M8 | **Docs and cleanup**: update docs/README, ARCHITECTURE, README status; remove the old engines from the active line (the backup keeps them). **Keep the dice/adjudication code.** | — |
+
+## 14. TODO (explicitly later)
+
+- Referee + dice for special cases (§9.4), reusing `resolution.ts` and the adjudicator.
+- Automatic dialogue mode (detect, then suggest, then switch).
+- Whispering: private `say` with `to` for characters; a whisper selector for the player.
+- Relation variables (a value per holder × target, e.g. Marta's trust in the player).
+- Derived variables and triggers (e.g. "health reaches 0 → the narrator is told the character is down").
+- Off-screen life for absent characters ("what were you doing meanwhile?").
+- Saving and loading scenarios (variable sets, cast) as templates.
+- Sending full sheets to the narrator only on change (token optimization, §8.2).
+- Migrating NPC Story Mode stories (personality → description, notes → thoughts).
+
+## 15. Open questions
+
+None right now. Settled after review:
+
+- the input syntax, with a help panel;
+- characters hear the player's words in the same round; the narrator is blind to thoughts by default;
+- the backup: branch `v1-backup`; the old engines leave `main` later;
+- dice: kept in the code, out of the v1 round, back later for special cases;
+- Claude moves to the official SDK at low priority.
