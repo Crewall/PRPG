@@ -125,6 +125,8 @@ export const DEFAULT_ROLE_TIER: Record<RoleName, string> = {
   overseer: 'light',
   narrator: 'heavy',
   character: 'medium',
+  distributor: 'light',
+  seeder: 'medium',
 };
 
 // Roles added after the original config shape: when absent, they inherit an
@@ -152,6 +154,8 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'story-randomizer', label: 'Story randomizer — premise from seeds' },
   { name: 'minds-narrator', label: 'Minds — narrator' },
   { name: 'minds-character', label: 'Minds — character mind' },
+  { name: 'minds-distributor', label: 'Minds — round-block fallback' },
+  { name: 'minds-seed', label: 'Minds — new-character seeder' },
 ];
 
 // ---- Building tiers from per-role bindings (seed + migration share this) ----

@@ -140,7 +140,7 @@ export function createSnapshotStore(db: Db) {
         // would null out scene_id on earlier turns), then drop scenes opened
         // during the rewound turn — only that (now deleted) turn referenced them.
         const keepScenes = new Set(p.scenes.map((s) => s.id as string));
-        for (const s of p.scenes) upsert('scenes', s, ['story_id', 'idx', 'title', 'location_object_id', 'active_npc_ids', 'status', 'created_at', 'updated_at']);
+        for (const s of p.scenes) upsert('scenes', s, ['story_id', 'idx', 'title', 'location_object_id', 'active_npc_ids', 'items_json', 'status', 'created_at', 'updated_at']);
         for (const s of db.prepare(`SELECT id FROM scenes WHERE story_id = ?`).all<Row>(storyId)) {
           if (!keepScenes.has(s.id as string)) db.prepare(`DELETE FROM scenes WHERE id = ?`).run(s.id);
         }

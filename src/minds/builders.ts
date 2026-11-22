@@ -44,6 +44,8 @@ export interface CharacterCallInput {
   here: HereInfo;
   /** The narrator's situation tags + its evoke tags for this character (last round block). */
   situationTags?: string[];
+  /** What happens right now, before the character declares (the player's words this round). */
+  now?: string;
 }
 
 export interface PreparedCall {
@@ -220,7 +222,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   for (const p of here.present) active.add(`#${p.handle}`);
   for (const i of here.items) active.add(`#${i.handle}`);
   if (here.location) active.add(`#${here.location.handle}`);
-  const perceived = pending.map((p) => p.content).join('\n');
+  const perceived = [...pending.map((p) => p.content), input.now ?? ''].join('\n');
   const chosen = chooseThoughts(deps, storyId, objectId, recap, active, perceived, settings?.thoughtRecallTokens ?? 300);
   const recalled = chosen.recalled;
 
@@ -233,6 +235,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
   parts.push(`Here: ${hereBits.join(' · ')}${items.length ? ` · in view: ${items.map((i) => h(i.handle)).join(', ')}` : ''}`);
   if (pending.length) parts.push(`Since you last acted:\n${pending.map((p) => p.content.trim()).join('\n\n')}`);
+  if (input.now?.trim()) parts.push(`Right now:\n${input.now.trim()}`);
   const notes = proposalNotes(deps, storyId, objectId, lastReply);
   if (notes.length) parts.push(notes.join('\n'));
   const own = valueLine(deps, storyId, defs, holder, { kind: 'character', id: objectId }, false);
@@ -405,6 +408,11 @@ export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories']
         return obj ? { handle: deps.memory.ensureHandle(oid) ?? '', name: obj.name, appearance: deps.sheets.get(oid)?.appearance ?? '' } : undefined;
       })
       .filter((x): x is HereInfo['present'][number] => !!x),
-    items: [],
+    items: (scene?.itemHandles ?? [])
+      .map((handle) => {
+        const obj = deps.memory.findByHandle(storyId, handle);
+        return obj ? { handle: obj.handle ?? handle, name: obj.name } : undefined;
+      })
+      .filter((x): x is HereInfo['items'][number] => !!x),
   };
 }

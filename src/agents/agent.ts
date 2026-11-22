@@ -106,6 +106,18 @@ export abstract class Agent {
 
   /** Schema-enforced JSON call with auto repair-retry and cap-escalation (scribes, overseer, NPC replies). */
   protected async invokeJson<S extends z.ZodTypeAny>(ctx: BuiltContext, schema: S, opts: { turnId?: string; signal?: AbortSignal; maxTokens?: number } = {}): Promise<z.infer<S>> {
+    return (await this.invokeJsonRaw(ctx, schema, opts)).value;
+  }
+
+  /**
+   * invokeJson that also returns the model's final raw text, byte for byte —
+   * Minds threads store replies exactly as received (docs/10 §8).
+   */
+  protected async invokeJsonRaw<S extends z.ZodTypeAny>(
+    ctx: BuiltContext,
+    schema: S,
+    opts: { turnId?: string; signal?: AbortSignal; maxTokens?: number; jsonSchema?: object } = {},
+  ): Promise<{ value: z.infer<S>; raw: string }> {
     this.logRequest(ctx, opts.turnId);
     const t0 = Date.now();
     const jsonCtx: JsonCallContext = { system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id };
@@ -115,6 +127,7 @@ export abstract class Agent {
       onRaw: (raw) => (lastRaw = raw),
       onUsage: (u) => (usage = addUsage(usage, u)),
       maxTokens: opts.maxTokens,
+      jsonSchema: opts.jsonSchema,
     });
     // Usage summed over every attempt (repairs/escalations are real calls);
     // estimate output from text only when the provider reported nothing.
@@ -125,6 +138,6 @@ export abstract class Agent {
       turnId: opts.turnId,
       extra: { parsed: result },
     });
-    return result;
+    return { value: result, raw: lastRaw };
   }
 }

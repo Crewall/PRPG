@@ -25,6 +25,7 @@ import { JobWorker } from './orchestrator/postTurn.ts';
 import { createScribeStoryHandler, createNpcSeedHandler } from './orchestrator/handlers.ts';
 import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler, createNpcDossierHandler } from './orchestrator/memoryHandlers.ts';
 import { EventBus } from './util/events.ts';
+import { createMindsSeedHandler } from './minds/seed.ts';
 
 // The wired application: stores + registry + orchestrator + job worker. Built
 // once at boot (src/index.ts) and shared by the API/WS layers. Also built
@@ -84,7 +85,10 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   // Every model call is counted per connection per UTC day (free-model limits, docs/12 §6.1).
   const registry = createRegistry(() => settingsService.effective(), opts.driverFactory, { onRequest: (connectionId) => usage.increment(connectionId) });
   const contexts = createContextBuilder({ stories, summaries, memory, npcProfiles, verbosityOverride: () => settingsService.verbosityOverride() });
-  const pipeline = new TurnPipeline({ stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng });
+  const pipeline = new TurnPipeline({
+    stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng,
+    db, sheets, variables, thoughts, threads, verbosityOverride: () => settingsService.verbosityOverride(),
+  });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
   const worker = new JobWorker(jobs, events, { concurrency: () => settingsService.performance().jobConcurrency });
@@ -95,6 +99,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   worker.register('archive_faded', createArchiveFadedHandler(handlerDeps));
   worker.register('npc_dossier', createNpcDossierHandler(handlerDeps));
   worker.register('npc_seed', createNpcSeedHandler(handlerDeps));
+  worker.register('minds_seed', createMindsSeedHandler({ ...handlerDeps, sheets, variables, thoughts, threads, verbosityOverride: () => settingsService.verbosityOverride() }));
 
   if (opts.startWorker !== false) worker.start();
 
