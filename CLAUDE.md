@@ -30,15 +30,16 @@ is right.
     handles, rewind coverage; `src/minds/`);
   - **M3: the Minds thread builders** (append-only threads, character and narrator prompts, round messages,
     POV preview);
-  - 179 passing tests.
+  - **M4: the Minds round** — Minds stories are playable (Story options → Engine → Minds);
+  - 191 passing tests.
 - **Designed, not built:** the **Minds engine** (docs 10–12):
   - one narrator, one persistent thread per character, per-character briefs;
   - scenario variables, states, self-written tagged thoughts;
   - dialogue mode, advanced mode with POV filter, a help panel;
   - model tiers, DeepSeek + OpenRouter providers.
 
-  Build order: doc 10 §13. M1–M3 are done; **M4 (the normal round) is next**: it connects the builders to the
-  models and makes Minds stories playable.
+  Build order: doc 10 §13. M1–M4 are done. Next: M5 (dialogue mode), M6 (compaction — threads grow without it),
+  M7 (the UI: scenario editor, sheets, advanced mode, help panel).
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on
   current Claude models (see ARCHITECTURE §9) and gets fixed later.
 

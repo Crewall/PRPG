@@ -209,8 +209,9 @@ async function renderPlay(storyId) {
   // Story options popover — the settings you touch during play: verbosity
   // slider, adjudicator on/off, context mode, salience.
   const patchSettings = async (patch) => {
-    await api.patch(`/api/stories/${storyId}`, { settings: patch });
-    story.settings = { ...(story.settings || {}), ...patch };
+    const updated = await api.patch(`/api/stories/${storyId}`, { settings: patch });
+    // The server resolves linked settings (engine ↔ NPC story mode); adopt its result.
+    story.settings = updated?.settings || { ...(story.settings || {}), ...patch };
   };
   const VERBOSITY_LABELS = ['', 'terse', 'brief', 'balanced', 'rich', 'expansive'];
   function showStoryOptions() {
@@ -274,9 +275,30 @@ async function renderPlay(storyId) {
       npcNumIn('personalityMaxTokens', 'personality max length (tokens)', 'The AI-written personality is truncated to this many tokens before it is stored. Your own manual edits are never truncated.', 50, 4000),
       npcNumIn('notesTokens', 'private-notes length (tokens)', 'How much of each major character\'s private notes is kept (they rewrite these each round they act).', 50, 4000));
 
+    // Which engine plays this story (docs/10 §4).
+    const ENGINES = [
+      ['classic', 'Classic — one storyteller, extracted memory'],
+      ['npc_stories', 'NPC story mode — characters with narrative notes'],
+      ['minds', 'Minds (new) — narrator + a mind per character'],
+    ];
+    const engineHint = h('div', { class: 'sub' });
+    const engineHints = {
+      classic: 'One storyteller voices everyone; a scribe extracts memory facts after each turn.',
+      npc_stories: 'Present characters act every round from their own personality and notes; the storyteller weaves them in.',
+      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story.',
+    };
+    const engineSel = h('select', { onchange: async (e) => {
+      engineHint.textContent = engineHints[e.target.value] || '';
+      await patchSettings({ engine: e.target.value });
+      renderDrawer();
+      refreshSceneHeader();
+    } }, ...ENGINES.map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)));
+    engineHint.textContent = engineHints[s.engine || 'classic'];
+
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine'), engineSel, engineHint),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Narrator tone'), h('div', { class: 'row', style: 'gap:8px' }, toneIn, toneStatus)),
         toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
@@ -321,6 +343,22 @@ async function renderPlay(storyId) {
 
   let activeNpcIds = new Set();
   async function refreshSceneHeader() {
+    // Minds engine: the scene's present characters, each its own mind (tooltip: what you can see of them).
+    if (story.settings?.engine === 'minds') {
+      let view = { characters: [] };
+      let st = null;
+      try { [view, st] = await Promise.all([api.get(`/api/stories/${storyId}/minds`), api.get(`/api/stories/${storyId}`)]); } catch {}
+      const present = new Set(st?.scene?.activeNpcIds || []);
+      const pc = view.characters.find((c) => c.isPlayer);
+      const here = view.characters.filter((c) => present.has(c.objectId) && !c.isPlayer);
+      activeNpcIds = new Set(here.map((c) => c.objectId));
+      const tip = (c) => [c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
+      npcChips.replaceChildren(
+        pc ? h('span', { class: 'chip pc', title: tip(pc) }, `🎭 ${pc.name}`) : h('span', { class: 'sub' }, '🎭 no player character'),
+        ...(here.length ? here.map((c) => h('span', { class: 'chip', title: tip(c) }, c.name)) : [h('span', { class: 'sub' }, 'nobody else here yet')]),
+      );
+      return;
+    }
     let agents = [];
     try { agents = await api.get(`/api/stories/${storyId}/agents`); } catch {}
     const active = agents.filter((a) => a.role === 'npc' && a.state === 'active' && a.npc);
@@ -1129,6 +1167,7 @@ async function renderPlay(storyId) {
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
+      case 'minds.updated': if (m.storyId === storyId) refreshSceneHeader(); break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —

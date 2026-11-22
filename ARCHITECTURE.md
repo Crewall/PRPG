@@ -64,13 +64,18 @@ src/
     db.ts, migrations/001–008.sql, stores/*.ts (one store per table group)
     stores/mindsStore.ts   Minds: character sheets, variables (defs, values, change log), thoughts
     stores/threadStore.ts  Minds: append-only threads on agent_messages (log, pending, recap)
-  minds/                Minds engine (docs/10–11; the round itself is not built yet)
+  minds/                Minds engine (docs/10–11)
+    round.ts            the round: gate → characters → narrator → block → one commit
+    contracts.ts        player input lanes, character reply, round block (lenient parsing)
+    gate.ts             who acts this round
+    seed.ts             minds_seed job: a mind for a newly introduced character
     variables.ts        variable definitions, validation, visibility, the change pipeline, rendering
     thoughts.ts         remember/forget preparation, recall selection, tag mentions
     text.ts             handles, tag normalization, word limits
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
     builders.ts         character / narrator prompts and round messages; commit; POV preview
+  agents/mindAgent.ts   Minds agents: declare (raw reply kept), distribute, seed
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
   util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases
   data/story-seeds.txt  premise randomizer seed phrases
@@ -81,7 +86,7 @@ scripts/                smoke.ts (live provider check), migrate.ts, termux-insta
 
 ## 3. How a chat turn works
 
-A story runs one of two engines, chosen per story (`settings.npcStories.enabled`).
+A story runs one of three engines, chosen per story (`settings.engine`: Story options → Engine).
 
 ### Classic engine (default)
 
@@ -116,11 +121,27 @@ A story runs one of two engines, chosen per story (`settings.npcStories.enabled`
 4. One streamed storyteller pass with the characters' contributions (+ adjudicator and continuation if needed).
 5. Save each character's notes, cut to about 300 tokens. Background: scene summary and digest only.
 
-### Common to both
+### Common to classic and NPC Story Mode
 
 - Every call rebuilds its prompt from scratch.
 - `agent_messages` are written but never read back by these engines, so there are no real conversation threads.
 - Prompt prefixes change every turn, so provider caches rarely hit.
+
+### Minds engine ([docs/10](docs/10-minds-engine.md), `src/minds/round.ts`)
+
+1. Turn row and snapshot, as above. Parse the player's input: `"…"` said, `((…))` a note to the narrator, the
+   rest what they try.
+2. The gate picks who acts: forced, the narrator's spotlight, first appearance, mentioned by the player, acted
+   last round (capped).
+3. Called characters declare in parallel, each on its own **persistent thread** (Medium tier): their pending
+   briefs, the player's words "right now", their sheet, recalled thoughts. Replies are stored byte-exact.
+4. The narrator (Heavy tier) streams the prose; the fenced round block that follows is never shown. A missing
+   or broken block goes to the distributor (Light tier), then to plain briefs.
+5. One transaction commits everything: threads, thoughts, cast and scene changes, variable and state changes by
+   the rules, the narrator's notes, each character's brief plus the exact words it heard, the clock, the turn.
+6. New characters get a `minds_seed` job. No scribes run.
+
+Threads only ever append, so each request is a prefix of the next one (cache hits).
 
 The Minds engine (docs 10–12) is designed to fix these three points.
 
@@ -192,6 +213,7 @@ and `compacted` for Minds threads.
 | `archive_faded` | when summaries drop details | store the dropped details as facts |
 | `npc_dossier` | promoting a character (classic) | focused single-character sheet + prose portrait |
 | `npc_seed` | new character in NPC Story Mode | personality + opening notes |
+| `minds_seed` | a character the Minds narrator introduces | description, state, starting values, thoughts |
 
 Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot), and report failures on the bus.
 
@@ -207,14 +229,15 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
   style.
 - **Debug:** thread log per story/turn, agent sessions.
 
-WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`,
+WebSocket in: `turn.submit` (optional `force`: character ids that must act, Minds), `turn.cancel`.
+WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`, `minds.updated`,
 `scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `thread.activity` (live agent status bar).
 
 ## 8. Testing and commands
 
 ```bash
 npm install
-npm test            # Vitest, 179 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 191 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -228,9 +251,11 @@ in that style.
 
 - The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both
   (fix planned as M1b, low priority).
-- Prompts are rebuilt from scratch every turn, so provider caches rarely hit (the Minds engine's append-only
-  threads fix this; cache usage is already recorded per call).
+- Classic and NPC Story Mode rebuild prompts every turn, so provider caches rarely hit (Minds threads fix this).
+- Minds: **threads are never compacted yet** (M6), so very long stories keep growing every thread's context.
+  Dialogue mode (M5) and the sheets / scenario / advanced-mode UI (M7) are not built; scenario variables and
+  sheets are edited through the API for now.
 - NPC Story Mode: the storyteller sees present characters only by name (their one-liner reads memory facts,
   which that mode never writes).
-- Scene location is never set, so location-based prompt blocks never appear.
+- Classic and NPC Story Mode never set a scene's location (the Minds narrator does).
 - The rule overseer and the `rules` table are unused.
