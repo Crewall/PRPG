@@ -299,6 +299,23 @@ async function renderPlay(storyId) {
       npcNumIn('personalityMaxTokens', 'personality max length (tokens)', 'The AI-written personality is truncated to this many tokens before it is stored. Your own manual edits are never truncated.', 50, 4000),
       npcNumIn('notesTokens', 'private-notes length (tokens)', 'How much of each major character\'s private notes is kept (they rewrite these each round they act).', 50, 4000));
 
+    // Minds engine budgets (docs/10 §8.4, §12).
+    const minds = { ...(s.minds || {}) };
+    const mindsNumIn = (key, label, hint, min, max) => {
+      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(minds[key] ?? ''), style: 'width:7em' });
+      inp.addEventListener('change', async () => {
+        const v = Math.max(min, Math.min(max, Math.round(Number(inp.value)) || minds[key]));
+        inp.value = String(v); minds[key] = v;
+        await patchSettings({ minds: { ...minds } });
+      });
+      return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
+    };
+    const mindsBlock = h('details', {},
+      h('summary', { class: 'sub' }, 'Minds engine'),
+      mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
+      mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
+      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
+
     // Which engine plays this story (docs/10 §4).
     const ENGINES = [
       ['classic', 'Classic — one storyteller, extracted memory'],
@@ -335,6 +352,7 @@ async function renderPlay(storyId) {
           s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
         budgetBlock,
         npcBlock,
+        mindsBlock,
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -1279,7 +1297,7 @@ async function renderPlay(storyId) {
 // ---------------- Settings ----------------
 // Provider connections → models → tiers → role mapping (docs/12). The user
 // normally only touches the Tiers card: every role on a tier follows it.
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder', compactor: 'Compactor' };
 const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
 const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
 const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);

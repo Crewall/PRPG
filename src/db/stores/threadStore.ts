@@ -58,6 +58,17 @@ export function createThreadStore(db: Db) {
       for (const mid of ids) db.prepare(`UPDATE agent_messages SET kind = 'delivered', updated_at = ? WHERE id = ?`).run(Date.now(), mid);
     },
 
+    /** Fold log rows into the recap (they stay stored, flagged; rewind can unflag them). */
+    markCompacted(ids: string[]): void {
+      for (const mid of ids) db.prepare(`UPDATE agent_messages SET compacted = 1, updated_at = ? WHERE id = ? AND kind = 'log'`).run(Date.now(), mid);
+    },
+
+    /** Replace the current recap: the old one is kept as `recap_old`, the new one appended. */
+    replaceRecap(sessionId: string, content: string, turnId: string | null): ThreadMessage {
+      db.prepare(`UPDATE agent_messages SET kind = 'recap_old', updated_at = ? WHERE session_id = ? AND kind = 'recap'`).run(Date.now(), sessionId);
+      return store.append(sessionId, { role: 'user', content, kind: 'recap', turnId });
+    },
+
     /** The current recap, if the thread was ever compacted. */
     recap(sessionId: string): ThreadMessage | undefined {
       const r = db.prepare(`${select} WHERE session_id = ? AND kind = 'recap' ORDER BY rowid DESC LIMIT 1`).get<Row>(sessionId);

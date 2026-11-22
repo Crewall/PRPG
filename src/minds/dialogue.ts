@@ -7,6 +7,7 @@ import type { DialogueReply, PlayerDeclaration } from './contracts.ts';
 import { applyChanges, applyThoughtOps } from './service.ts';
 import { STATE_KEY } from './variables.ts';
 import type { RoundDeps, RoundEmitter } from './round.ts';
+import { queueCompactions } from './compaction.ts';
 
 // Dialogue mode (docs/10 §7): a quick back-and-forth with one character. Each
 // exchange is its own turn (so rewind and edit just work): the player's line
@@ -112,6 +113,7 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
     if (ops.notes.length) queueForCharacter(deps, storyId, partner, `About your memory: ${ops.notes.join(' ')}`, turn.id);
     if (reply.state) applyChanges(deps, storyId, [{ change: { holder: partner, key: STATE_KEY, op: 'set', value: reply.state }, by: 'self', proposer: partner }], turn.id);
     const clockMin = deps.stories.advanceClock(storyId, 1);
+    queueCompactions(deps, storyId, [call.sessionId], turn.id);
     deps.stories.updateTurn(turn.id, {
       narration: line,
       status: 'complete',

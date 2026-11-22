@@ -22,6 +22,7 @@ import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { slugify } from './text.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
+import { queueCompactions } from './compaction.ts';
 
 // One normal round of the Minds engine (docs/10 §5): characters declare (in
 // parallel) → the narrator writes prose + a round block (streamed; the block
@@ -358,6 +359,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     commitCall(deps, nCall, narratorText, turn.id);
     const clockMin = deps.stories.advanceClock(storyId, block.time && block.time > 0 ? block.time : DEFAULT_TURN_MINUTES);
     for (const oid of seedQueue) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    // Threads that grew past their threshold get folded after the round (docs/10 §8.4).
+    queueCompactions(deps, storyId, [nCall.sessionId, ...results.filter((r) => r.call && r.reply).map((r) => r.call!.sessionId)], turn.id);
     const count = (r: string) => outcomes.filter((o) => o.result === r).length;
     deps.stories.updateTurn(turn.id, {
       narration: prose,
