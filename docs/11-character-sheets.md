@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: draft spec, not built.** Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestone M2 of doc 10)**, except the parts that need the round (M4) and compaction (M6). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -301,7 +301,11 @@ or no longer matter. Your memory is private — no one else reads it.
   with "Here:" followed by the location, present characters (handle + appearance) and items in view, so
   characters can address people (`to`) and tag thoughts with real handles.
 
-## 7. Data model (migration `006-minds.sql`, sketch)
+## 7. Data model (migration `007-minds-sheets.sql`)
+
+As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
+(`id, story_id, key, sort, def_json`), because the shape differs per type. Handles are stored without the `#`
+(`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 
 ```sql
 ALTER TABLE memory_objects ADD COLUMN handle TEXT;
