@@ -24,7 +24,10 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 
 ## Documentation / development plan
 
-The full design is in `docs/`, ordered as a reading path and as a build guideline:
+**Start at [`docs/README.md`](docs/README.md)**: it lists every doc with its status (current, original plan,
+or draft), where the code drifted from the plan, and how a chat turn works today.
+
+The original design is in `docs/`, ordered as a reading path and as a build guideline:
 
 1. [`docs/01-tech-stack.md`](docs/01-tech-stack.md) — recommended languages, frameworks, storage, and why
 2. [`docs/02-architecture.md`](docs/02-architecture.md) — system architecture, processes, module layout
@@ -34,6 +37,10 @@ The full design is in `docs/`, ordered as a reading path and as a build guidelin
 6. [`docs/06-orchestration.md`](docs/06-orchestration.md) — the turn loop: how a player input flows through all agents
 7. [`docs/07-api-and-ui.md`](docs/07-api-and-ui.md) — HTTP/WebSocket API surface and the web client
 8. [`docs/08-roadmap.md`](docs/08-roadmap.md) — layered build plan: milestones, inputs/outputs, acceptance criteria
+9. [`docs/09-npc-story-mode.md`](docs/09-npc-story-mode.md) — NPC Story Mode (built)
+10. [`docs/10-minds-engine.md`](docs/10-minds-engine.md) — **next:** narrator + character minds, briefs, dialogue mode, advanced mode (draft)
+11. [`docs/11-character-sheets.md`](docs/11-character-sheets.md) — description, state, variables, self-written thoughts (draft)
+12. [`docs/12-models-and-providers.md`](docs/12-models-and-providers.md) — providers incl. DeepSeek, model tiers, prompt caching (draft)
 
 ## Implementation status
 
@@ -72,5 +79,5 @@ Then open `http://127.0.0.1:7777`, create a story with a premise, and play.
 ## Quick architectural summary
 
 - **Backend:** Node.js + TypeScript (Fastify), SQLite storage, provider-agnostic LLM adapter
-- **Frontend:** static single-page web app (Svelte) served by the backend, used from any browser — including the phone's own browser when hosted in Termux
+- **Frontend:** static single-page web app (vanilla JS, no build step; Svelte was planned) served by the backend, used from any browser — including the phone's own browser when hosted in Termux
 - **Orchestration:** an in-process turn pipeline (no external agent framework) that fans out to agent sessions, each with independently constructed context
