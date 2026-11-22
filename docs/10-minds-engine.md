@@ -43,15 +43,15 @@ character perceived. The app (code, not AI) checks that output and delivers each
 | Advanced mode | Shows everything, allows editing everything, and has a POV filter (§10). |
 | Player input syntax | `"…"` = speech, `((…))` = out-of-character note to the narrator, the rest = action (§6). Made obvious in the UI: placeholder hint, live preview, and the help panel. |
 | Help | A **?** button opens a help panel that briefly explains every user-facing feature: syntax, modes, sheets, settings (§11.1). |
-| Dice | The adjudicator + hidden dice **stay**. In this engine they become the referee pass (§5 step 3, §9.4). Never removed. |
+| Dice | The adjudicator + hidden dice **stay in the code** but are **not part of the v1 round**: the narrator decides outcomes itself. They may come back later for special cases (§9.4, §14). Never deleted. |
 | Providers | DeepSeek and OpenRouter first. Claude moves to the official SDK later, at low priority (doc 12 §5.1). |
 
-### Proposed (please confirm or change: §15)
+### Settled after the first review
 
-| Topic | Proposal |
+| Topic | Decision |
 |---|---|
 | What characters hear of the player's turn | They hear the player's **spoken words** at once (the player has initiative). They do **not** see the player's *action*; they learn its outcome from the narrator. |
-| Uncertain actions | A **referee pass** before narration judges every declared action at once (player and characters). Dice decide, and the narrator writes once with the outcomes known. This replaces the mid-narration `resolve_action` pause. |
+| Uncertain actions | v1: the **narrator decides** outcomes (no dice in the round). A referee pass with dice is a later feature for special cases (§9.4). |
 | Narrator and thoughts | The narrator does **not** read characters' thoughts by default (they are private; characters reveal things through speech and intent). Per-story setting to allow it. |
 | Old engines | The pre-Minds code is frozen on branch **`v1-backup`** (= `main` at `d506cd2`). Minds replaces the old engines on `main`, through PRs. The dice system is kept regardless. |
 
@@ -59,7 +59,7 @@ character perceived. The app (code, not AI) checks that output and delivers each
 
 | Term | Meaning |
 |---|---|
-| **Round** | One beat of play in normal mode: everyone declares → referee → narrator → distribution. One `turns` row. |
+| **Round** | One beat of play in normal mode: everyone declares → narrator → distribution. One `turns` row. |
 | **Declaration** | What an actor puts in for a round: `say` (exact words) + `intent`/`do` (a short attempt, never an outcome). |
 | **Brief** | The narrator's short second-person account for one character of what it perceived this round and what happened to it. |
 | **Round block** | The fenced JSON the narrator appends after its prose: briefs, state and variable changes, tags, cast/scene/clock changes. Hidden from the player. |
@@ -67,7 +67,7 @@ character perceived. The app (code, not AI) checks that output and delivers each
 | **Sheet** | A character's description, appearance, state and variables. Doc 11. |
 | **Thought** | One self-written memory record with optional tags; can be revoked. Doc 11. |
 | **Handle** | A short `#name` ID for a roster object (character, place, item). Usable as a tag. |
-| **Referee** | The impartial chance-judge (today's adjudicator), now called once per round with all actions. |
+| **Referee** | *(Later, special cases.)* The impartial chance-judge (today's adjudicator) plus hidden dice. |
 | **Distributor** | A light fallback call that rebuilds a missing or broken round block from the narrator's prose. |
 | **Compactor** | A light call that folds the oldest part of a thread into a recap when the thread grows too long. |
 | **Tier** | A named model setting (Heavy / Medium / Light / user-defined) that roles point at. Doc 12. |
@@ -96,10 +96,8 @@ player input ──▶ parse {say, do, ooc}
    ▼ (parallel, Medium tier)           │
  character minds: declarations        │   stage 1
    └────────────────┬──────────────────┘
-                    ▼ (Light tier; skipped if no actions)
- referee: chances for uncertain actions → engine rolls dice      stage 2
                     ▼ (Heavy tier, streamed to the player)
- narrator: prose ⏎ ```round {briefs, states, vars, tags, …}```   stage 3
+ narrator: prose ⏎ ```round {briefs, states, vars, tags, …}```   stage 2
                     ▼ (code)
  validate → commit in one transaction → distribute briefs
 ```
@@ -110,11 +108,8 @@ player input ──▶ parse {say, do, ooc}
    called when the gate passes (§5.1). Each call appends the round message to the character's thread and
    returns a `CharacterReply` (§9.1). Replies are **held in memory**, not applied yet, so a failed round leaves
    nothing behind. A failed call becomes "unavailable this round", as today.
-3. **Referee** (Light tier). One call with every declared action (the player's `do` plus each character's
-   `intent`), each actor's relevant sheet and the scene. It answers per action: `trivial` (no roll; the
-   narrator decides), or `chance` (2–98) + `complication`. The engine rolls d100 for each chance and maps the
-   result to an outcome band (existing `outcomeFromRoll`). Skipped when nobody declared an action. Chance
-   numbers never reach the narrator; only band guidance does (as today).
+3. **No referee in v1.** The narrator decides what every attempt achieves, judging by the sheets it sees
+   (skills, health, state). The dice code stays; a referee for special cases is planned (§9.4).
 4. **Narrator** (Heavy tier, streamed). Its thread receives the round message (§8.2). It writes prose for the
    player (verbosity setting applies), then a ```` ```round ```` block (§9.3). The existing gate stops
    streaming at the fence.
@@ -132,22 +127,20 @@ player input ──▶ parse {say, do, ooc}
      words never depend on the narrator's paraphrase.
    - Narrator notes, situation tags, cast/scene changes, clock → applied.
    - The narrator's reply → its thread.
-   - The turn row → `complete`, with meta: declarations, referee results (with numbers), block, call timings,
-     cache usage.
+   - The turn row → `complete`, with meta: declarations, round block, call timings, cache usage.
 7. **Post-round jobs (async):** compaction for any thread over its threshold (§8.4), seeding for newly entered
    characters (doc 11 §2.3).
 
-**Latency:** three sequential stages at most (characters in parallel → referee → streamed narration), two when
-nobody declares an action. The classic engine worst case is up to three storyteller calls plus consults, and the
+**Latency:** two sequential stages (characters in parallel → streamed narration). The classic engine worst case is up to three storyteller calls plus consults, and the
 player sees nothing until the end. The heavy background scribes are gone; the only post-round work is occasional
 compaction.
 
-**Requests per round** matter for rate-limited free models (OpenRouter `:free`: 20 per minute and 50 per day
-without purchased credits; doc 12 §6.1).
+**Requests per round** matter for rate-limited free models (OpenRouter `:free`: 20 per minute; 50 per day
+without purchased credits, 1000 with; doc 12 §6.1).
 
 | Case | Calls |
 |---|---|
-| Typical round | 1 narrator + 1 referee + 1 per called character (≤ `maxCharactersPerRound`). With 3 characters: **5**. |
+| Typical round | 1 narrator + 1 per called character (≤ `maxCharactersPerRound`). With 3 characters: **4**. |
 | Occasional | + distributor (broken block), + compactor (per thread over its threshold), + seeder (new character) |
 | Dialogue mode | **1** per exchange; 1 narrator call at wrap-up |
 
@@ -174,7 +167,7 @@ One input box, three lanes, parsed mechanically:
 | Lane | Syntax | Who sees it |
 |---|---|---|
 | **Say** | text inside double quotes `"…"` | Narrator; present characters (heard immediately, §2 proposal) |
-| **Do** | everything else | Narrator and referee only. Characters learn the outcome from their brief. |
+| **Do** | everything else | Narrator only. Characters learn the outcome from their brief. |
 | **OOC** | text inside double parentheses `((…))` | Narrator only, as an out-of-character note ("make it rain", "skip to evening") |
 
 Making it obvious:
@@ -257,7 +250,7 @@ since the last compaction never need repeating; the recap restates the full pinn
 |---|---|
 | System (frozen) | Narrator rules, prose style (genre, tone, verbosity), the round-block contract (§9.3), the premise, scenario variable definitions with their rules, the narrator's secret setup notes. |
 | Recap (after compaction) | "The story so far" + the roster (handles, one line each). |
-| Round message | ① the player's declaration (say / do / OOC) and the player character's sheet; ② each present character's **full sheet** (description, appearance, state, all variables including hidden ones) + its declaration (say, intent, proposed state); ③ referee outcomes (band guidance + complication; no numbers); ④ the clock; ⑤ the narrator's evoked notes and the tags currently in use; ⑥ the ask. |
+| Round message | ① the player's declaration (say / do / OOC) and the player character's sheet; ② each present character's **full sheet** (description, appearance, state, all variables including hidden ones) + its declaration (say, intent, proposed state); ③ *(later, special cases)* referee outcomes (band guidance + complication; no numbers); ④ the clock; ⑤ the narrator's evoked notes and the tags currently in use; ⑥ the ask. |
 | Reply | Prose + round block, as received. |
 
 Full sheets every round cost a few hundred tokens per character. They are cached from the next round on, and
@@ -347,7 +340,11 @@ Written after the prose, fenced as ```` ```round ````, never shown to the player
   line and thought recall (doc 11 §6).
 - `time`: in-game minutes this round spans (replaces `advance_time`); missing → default.
 
-### 9.4 Referee
+### 9.4 Referee (later: special cases)
+
+**Not in v1.** Planned for special cases, e.g. contested or high-stakes attempts that the narrator (via a block
+field) or the user (via a button) flags for a roll. The code it builds on (`resolution.ts`, the adjudicator) stays
+in the repository. Sketch:
 
 Input: a list of `{actor, action, sheet excerpt}`, the location, and the round context in one paragraph. Output:
 
@@ -410,7 +407,7 @@ POST  /api/stories/:id/dialogue/say               { text } → one exchange (rep
 POST  /api/stories/:id/dialogue/end               → wrap-up
 ```
 
-WebSocket gains `round.stage` (characters / referee / narrator), `dialogue.reply`, `minds.updated`,
+WebSocket gains `round.stage` (characters / narrator), `dialogue.reply`, `minds.updated`,
 `variables.updated`, `thoughts.updated`.
 
 UI pieces:
@@ -454,7 +451,7 @@ Sheets, variables and thoughts are in doc 11 §7. Threads reuse the existing ses
   character. New column `tier_id` (nullable override).
 - `agent_messages` — **read back for the first time**. New columns: `kind` (`log` | `recap` | `pending_brief`),
   `compacted` (0/1), `round_turn_id`. The stored `content` is the exact string sent or received.
-- `turns.meta` — declarations, referee rulings with numbers, round block, per-call timings, cache usage.
+- `turns.meta` — declarations, round block, per-call timings, cache usage (later: referee rulings with numbers).
 - `stories.settings` — `engine`; a `minds` block: `maxCharactersPerRound`, `briefMaxWords`, `characterLogTokens`,
   `narratorLogTokens`, `descriptionMaxWords`, `thoughtRecallTokens`, `pinnedTokens`, `maxActiveThoughts`,
   `narratorSeesThoughts`, `playerSpeechHeardImmediately`.
@@ -473,7 +470,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 | M1b | *(low priority, any time later)* **Claude via the official SDK** (doc 12 §5.1). | Request body has no temperature or prefill; cache markers present. |
 | M2 | **Sheets data layer** (doc 11): engine setting, sheets, variable definitions/values/change log, thoughts, snapshot coverage. | Store tests; rewind restores sheets, variables and thoughts; rule validation tests (who may change what). |
 | M3 | **Thread builders**: system/recap/log/round-message assembly, deterministic rendering, recall selection, preview = real. | **Prefix test:** for two consecutive rounds, the earlier request is a byte-exact prefix of the later one. Preview test. |
-| M4 | **Normal round**: parse input, gate, character calls, referee, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
+| M4 | **Normal round**: parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
 | M5 | **Dialogue mode** (manual) + wrap-up. | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 | **Compaction** for character and narrator threads. | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
 | M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
@@ -481,6 +478,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 14. TODO (explicitly later)
 
+- Referee + dice for special cases (§9.4), reusing `resolution.ts` and the adjudicator.
 - Automatic dialogue mode (detect, then suggest, then switch).
 - Whispering: private `say` with `to` for characters; a whisper selector for the player.
 - Relation variables (a value per holder × target, e.g. Marta's trust in the player).
@@ -492,13 +490,10 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 15. Open questions
 
-1. **Player initiative:** should characters hear the player's words in the same round (proposed), or should
-   rounds be strictly simultaneous, with everyone reacting only to the last narration?
-2. **Narrator and thoughts:** should the narrator be blind to characters' thoughts (proposed) or see the
-   recalled ones?
-Settled since the first draft:
+None right now. Settled after review:
 
 - the input syntax, with a help panel;
+- characters hear the player's words in the same round; the narrator is blind to thoughts by default;
 - the backup: branch `v1-backup`; the old engines leave `main` later;
-- keeping the dice;
-- moving Claude to the official SDK at low priority.
+- dice: kept in the code, out of the v1 round, back later for special cases;
+- Claude moves to the official SDK at low priority.

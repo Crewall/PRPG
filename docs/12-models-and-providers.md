@@ -86,7 +86,7 @@ Tier = { id, label, modelId, maxTokens, temperature?: number /* empty = don't se
 |---|---|---|
 | `narrator` | Minds | Heavy |
 | `character` | Minds | Medium |
-| `referee` | Minds | Light |
+| `referee` | Minds (later: special cases) | Light |
 | `distributor` | Minds | Light |
 | `compactor` | Minds | Light |
 | `seeder` | Minds | Medium |
@@ -217,8 +217,8 @@ A compaction costs one full-price call for that thread.
 ### 6.1 Request budget (free models)
 
 OpenRouter `:free` models allow **20 requests per minute**. Per day: **50** if fewer than 10 credits were ever
-purchased, **1000** with at least 10. A Minds round makes about 5 calls (doc 10 §5), so 50 a day is only about
-10 rounds.
+purchased, **1000** with at least 10 (the owner's account has the 1000 tier). A Minds round makes about 4 calls
+(doc 10 §5): 50 a day is only about 12 rounds, 1000 a day about 250.
 
 - **Counting:** requests per connection per day, from `thread_log`. For OpenRouter, `GET /api/v1/key` →
   `free_model_daily_requests` (`used`, `limit`, `remaining`) is the authority when available.

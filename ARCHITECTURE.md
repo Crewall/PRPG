@@ -113,7 +113,7 @@ A story runs one of two engines, chosen per story (`settings.npcStories.enabled`
 
 The Minds engine (docs 10–12) is designed to fix these three points.
 
-### The dice (keep: reused by the next engine)
+### The dice (keep: not in the Minds v1 round, returns later for special cases)
 
 `resolve_action` → the adjudicator AI judges a success chance from the actor's sheet and circumstances ("realism
 over drama, physics not morals") → the engine rolls a hidden d100 → `outcomeFromRoll` maps the margin to a band

@@ -43,7 +43,8 @@ The pre-Minds code is frozen on branch **`v1-backup`** (`main` at `d506cd2`: cla
 ## Keep (don't delete without the owner's say-so)
 
 - **The dice/adjudication system** (`src/orchestrator/resolution.ts`, `src/agents/adjudicator.ts`,
-  `prompts/adjudicator.md`). The Minds engine reuses it as the referee.
+  `prompts/adjudicator.md`). It is not part of the Minds v1 round (the narrator decides outcomes), but it will
+  come back later for special cases (doc 10 §9.4).
 - The classic engine and NPC Story Mode stay on `main` until the Minds engine replaces them (doc 10 §13, M8).
   They remain available on `v1-backup` either way.
 
