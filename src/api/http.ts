@@ -9,7 +9,9 @@ import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc, enterOrCreateNpc, rebuildNpcMind } from '../orchestrator/npc.ts';
 import { mergeMemoryObjects, enqueueMemoryRescan } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
-import { EDITABLE_PROMPTS } from '../config/settingsService.ts';
+import { EDITABLE_PROMPTS, ModelEntry, TierCfg } from '../config/settingsService.ts';
+import { PRESETS, ProviderKind, ProviderPreset, defaultCaps } from '../config/config.ts';
+import { utcDay } from '../db/stores/usageStore.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
 import { callJson } from '../llm/jsonCall.ts';
 import { rollSeeds, parseSeeds, defaultSeedsText } from '../util/seeds.ts';
@@ -31,19 +33,22 @@ const PatchStoryBody = z.object({
 // Register REST routes under /api. Layer 1: stories CRUD + turns page + a couple
 // of system/debug reads. Memory/rules/agents endpoints arrive in later layers.
 export async function registerHttpRoutes(server: FastifyInstance, app: App): Promise<void> {
-  const { stories, threadLog, registry, config } = app;
+  const { stories, threadLog, registry } = app;
 
   server.get('/api/system/health', async () => ({
     ok: true,
     version: '0.1.0',
-    providers: Object.keys(config.providers),
+    providers: Object.keys(app.settingsService.effective().connections),
     profiles: registry.listProfiles(),
   }));
 
-  server.get('/api/system/models', async () => ({
-    profiles: Object.entries(config.modelProfiles).map(([name, p]) => ({ name, provider: p.provider, model: p.model })),
-    roles: config.roles,
-  }));
+  server.get('/api/system/models', async () => {
+    const eff = app.settingsService.effective();
+    return {
+      profiles: Object.entries(eff.modelProfiles).map(([name, p]) => ({ name, connection: p.connectionId, provider: p.provider, model: p.model })),
+      roles: eff.roles,
+    };
+  });
 
   // Premise randomizer: the ENGINE rolls N (1–12) seed elements (true random),
   // a storyteller-caliber model weaves them into a premise + genre + title. A
@@ -67,7 +72,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
         fixedTitle ? `Fixed title (keep exactly): ${fixedTitle}` : '',
         fixedGenre ? `Fixed genre (keep exactly): ${fixedGenre}` : '',
       ].filter(Boolean);
-      const bound = registry.getForRole('storyteller');
+      const bound = registry.getForRole('randomizer');
       const result = await callJson(
         bound,
         {
@@ -580,22 +585,35 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     return { ...updated, name: obj.name };
   });
 
-  server.get('/api/system/settings', async () => app.settings.all());
+  // Raw settings table for debugging — the runtime config is replaced by its
+  // masked public view so API keys never leave the server.
+  server.get('/api/system/settings', async () => {
+    const all = app.settings.all();
+    delete all.runtimeConfigV1Backup;
+    return { ...all, runtimeConfig: app.settingsService.publicView() };
+  });
 
-  // ---- Settings: providers/keys, favourites, per-role models & params, prompts ----
+  // ---- Settings: provider connections, models, tiers, role mapping (docs/12) ----
   const svc = app.settingsService;
 
-  server.get('/api/settings/config', async () => svc.publicView());
+  server.get('/api/settings/config', async () => ({ ...svc.publicView(), usage: { day: utcDay(), requests: app.usage.countsFor() } }));
 
   const SaveConfigBody = z.object({
-    providers: z
-      .object({
-        anthropic: z.object({ apiKey: z.string().optional(), baseUrl: z.string().optional() }).optional(),
-        openai_compat: z.object({ apiKey: z.string().optional(), baseUrl: z.string().optional() }).optional(),
-      })
+    connections: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          label: z.string().optional(),
+          kind: ProviderKind.optional(),
+          preset: ProviderPreset.optional(),
+          baseUrl: z.string().optional(),
+          apiKey: z.string().optional(),
+        }),
+      )
       .optional(),
-    favourites: z.array(z.object({ id: z.string(), label: z.string(), provider: z.enum(['anthropic', 'openai_compat']), model: z.string() })).optional(),
-    roles: z.record(z.string(), z.object({ favouriteId: z.string(), temperature: z.number(), maxTokens: z.number().int() })).optional(),
+    models: z.array(ModelEntry).optional(),
+    tiers: z.array(TierCfg).optional(),
+    roleTiers: z.record(z.string(), z.string()).optional(),
     performance: z
       .object({
         jobConcurrency: z.number().int().min(1).max(16).optional(),
@@ -605,57 +623,107 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   });
 
   server.put('/api/settings/config', async (req, reply) => {
-    const body = SaveConfigBody.parse(req.body);
+    const parsed = SaveConfigBody.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
+    }
     try {
-      svc.update(body as never);
-      return svc.publicView();
+      svc.update(parsed.data);
+      return { ...svc.publicView(), usage: { day: utcDay(), requests: app.usage.countsFor() } };
     } catch (err) {
       reply.code(400);
       return { error: (err as Error).message };
     }
   });
 
-  // Test a provider key with a tiny live completion. Accepts an ad-hoc apiKey/
-  // baseUrl to test a key before saving; otherwise uses the saved provider.
-  const TestBody = z.object({
-    provider: z.enum(['anthropic', 'openai_compat']),
-    model: z.string().optional(),
-    apiKey: z.string().optional(),
+  // A connection as the server would use it: the saved one, with any fields the
+  // client sent on top (so a key/URL can be tried before saving).
+  const ConnTarget = z.object({
+    connectionId: z.string().optional(),
+    preset: ProviderPreset.optional(),
+    kind: ProviderKind.optional(),
     baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
   });
+  function resolveTarget(t: z.infer<typeof ConnTarget>) {
+    const saved = t.connectionId ? svc.connection(t.connectionId) : undefined;
+    const preset = t.preset ?? saved?.preset ?? 'custom';
+    const kind = t.kind ?? saved?.kind ?? PRESETS[preset].kind;
+    const baseUrl = (t.baseUrl?.trim() || saved?.baseUrl || PRESETS[preset].baseUrl).replace(/\/+$/, '');
+    const apiKey = t.apiKey?.trim() || saved?.apiKey || '';
+    return { id: t.connectionId, preset, kind, baseUrl, apiKey };
+  }
+
+  // Test a connection with a tiny live completion.
   server.post('/api/settings/test', async (req) => {
-    const body = TestBody.parse(req.body);
-    const rt = svc.get();
-    const saved = rt.providers[body.provider];
-    const apiKey = body.apiKey?.trim() || saved?.apiKey;
-    const baseUrl = body.baseUrl?.trim() || saved?.baseUrl || undefined;
-    if (!apiKey) return { ok: false, error: 'no API key set for this provider' };
-    const model = body.model || rt.favourites.find((f) => f.provider === body.provider)?.model;
-    if (!model) return { ok: false, error: 'no model to test — add a favourite for this provider first' };
+    const body = ConnTarget.extend({ model: z.string().optional() }).parse(req.body ?? {});
+    const target = resolveTarget(body);
+    if (!target.apiKey && target.preset !== 'local') return { ok: false, error: 'no API key set for this provider' };
+    if (target.kind === 'openai_compat' && !target.baseUrl) return { ok: false, error: 'no base URL set for this provider' };
+    const model = body.model?.trim() || svc.get().models.find((m) => m.providerId === body.connectionId && m.model.trim())?.model;
+    if (!model) return { ok: false, error: 'no model to test — add a model for this provider first' };
 
     const driver =
-      body.provider === 'anthropic'
-        ? anthropicDriver({ apiKey, baseUrl: baseUrl || 'https://api.anthropic.com', timeoutMs: 30_000 })
-        : openaiDriver({ apiKey, baseUrl: baseUrl || 'https://api.openai.com/v1', timeoutMs: 30_000 });
+      target.kind === 'anthropic'
+        ? anthropicDriver({ apiKey: target.apiKey, baseUrl: target.baseUrl || 'https://api.anthropic.com', timeoutMs: 30_000, maxRetries: 0 })
+        : openaiDriver({ apiKey: target.apiKey, baseUrl: target.baseUrl, preset: target.preset, timeoutMs: 30_000, maxRetries: 0 });
     const t0 = Date.now();
     try {
-      const res = await driver.chat({ model, system: 'Connectivity test.', messages: [{ role: 'user', content: 'Reply with the single word: OK' }], maxTokens: 5, temperature: 0 });
+      // Thinking off where the provider supports the switch, so the test stays quick.
+      const res = await driver.chat({
+        model,
+        system: 'Connectivity test.',
+        messages: [{ role: 'user', content: 'Reply with the single word: OK' }],
+        maxTokens: 16,
+        reasoning: target.preset === 'deepseek' || target.preset === 'openrouter' ? 'off' : undefined,
+      });
+      if (target.id) app.usage.increment(target.id);
       return { ok: true, latencyMs: Date.now() - t0, model, sample: res.text.trim().slice(0, 40) };
     } catch (err) {
       return { ok: false, latencyMs: Date.now() - t0, model, error: (err as Error).message };
     }
   });
 
-  // Rate-limit / credits check (OpenRouter-style `GET {baseUrl}/key`).
-  // Anthropic has no equivalent endpoint, so this is openai_compat only.
-  server.get('/api/settings/limits/:provider', async (req) => {
-    const { provider } = req.params as { provider: string };
-    if (provider !== 'openai_compat') {
-      return { supported: false, error: 'Limit check is only available for the OpenAI-compatible provider (OpenRouter).' };
+  // List a connection's models (GET {baseUrl}/models). OpenRouter's metadata
+  // also tells us what each model supports, which pre-fills its caps.
+  server.post('/api/settings/models', async (req) => {
+    const target = resolveTarget(ConnTarget.parse(req.body ?? {}));
+    if (target.kind !== 'openai_compat') return { ok: false, error: 'model listing is available for OpenAI-compatible providers only' };
+    if (!target.baseUrl) return { ok: false, error: 'no base URL set for this provider' };
+    try {
+      const res = await fetch(`${target.baseUrl}/models`, {
+        headers: target.apiKey ? { authorization: `Bearer ${target.apiKey}` } : {},
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status} from ${target.baseUrl}/models` };
+      const json = (await res.json()) as { data?: { id: string; name?: string; supported_parameters?: string[] }[] };
+      const models = (json.data ?? []).map((m) => {
+        const params = m.supported_parameters;
+        const caps = params
+          ? {
+              sampling: params.includes('temperature'),
+              reasoning: params.includes('reasoning') ? 'toggle' : 'none',
+              json: params.includes('structured_outputs') ? 'schema' : params.includes('response_format') ? 'json_object' : 'prompt',
+            }
+          : defaultCaps(target.preset);
+        return { id: m.id, name: m.name ?? m.id, caps };
+      });
+      models.sort((a, b) => a.id.localeCompare(b.id));
+      return { ok: true, models };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
     }
-    const saved = svc.get().providers.openai_compat;
-    if (!saved?.apiKey) return { supported: true, ok: false, error: 'no API key saved for this provider' };
-    const base = (saved.baseUrl?.trim() || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+  });
+
+  // Credits and free-model daily limit (OpenRouter `GET {baseUrl}/key`).
+  server.get('/api/settings/limits/:connectionId', async (req) => {
+    const { connectionId } = req.params as { connectionId: string };
+    const saved = svc.connection(connectionId);
+    if (!saved) return { supported: false, error: 'unknown provider connection' };
+    if (saved.preset !== 'openrouter') return { supported: false, error: 'The limits check is available for OpenRouter connections.' };
+    if (!saved.apiKey) return { supported: true, ok: false, error: 'no API key saved for this provider' };
+    const base = (saved.baseUrl?.trim() || PRESETS.openrouter.baseUrl).replace(/\/+$/, '');
     try {
       const res = await fetch(`${base}/key`, {
         headers: { authorization: `Bearer ${saved.apiKey}` },
@@ -668,6 +736,9 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       return { supported: true, ok: false, error: (err as Error).message };
     }
   });
+
+  // Requests per connection today (UTC) — counted locally for every model call.
+  server.get('/api/settings/usage', async () => ({ day: utcDay(), requests: app.usage.countsFor() }));
 
   // Prompts (editable per role).
   server.get('/api/settings/prompts', async () =>

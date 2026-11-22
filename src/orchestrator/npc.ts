@@ -19,7 +19,7 @@ export interface NpcServiceDeps {
 
 function npcProfile(deps: NpcServiceDeps, storyId: string): string {
   const story = deps.stories.getStory(storyId);
-  return story?.settings.roles.npc ?? deps.registry.getForRole('npc').name;
+  return deps.registry.getForRole('npc', story?.settings.roles.npc).name;
 }
 
 /** Resolve an NPC memory object by name/alias (alias-aware, exact/normalized). */

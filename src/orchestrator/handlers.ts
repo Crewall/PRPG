@@ -32,8 +32,8 @@ export interface HandlerDeps {
 }
 
 function scribeStoryAgent(deps: HandlerDeps, storyId: string): ScribeStory {
-  const profileName = deps.stories.getStory(storyId)?.settings.roles.scribe_story ?? deps.registry.getForRole('scribe_story').name;
-  const bound = deps.registry.getProfile(profileName);
+  const bound = deps.registry.getForRole('scribe_story', deps.stories.getStory(storyId)?.settings.roles.scribe_story);
+  const profileName = bound.name;
   const session = deps.agents.ensureSession(storyId, 'scribe_story', profileName);
   return new ScribeStory({ session, bound, threadLog: deps.threadLog, storyId });
 }
@@ -188,8 +188,8 @@ export function createNpcSeedHandler(deps: HandlerDeps): JobHandler {
     // on — and in NPC Story Mode there are no memory facts to lean on): as
     // many recent completed turns as fit the budget, newest kept, presented
     // chronologically.
-    const profileName = story.settings.roles.npc ?? deps.registry.getForRole('npc').name;
-    const bound = deps.registry.getProfile(profileName);
+    const bound = deps.registry.getForRole('npc', story.settings.roles.npc);
+    const profileName = bound.name;
     const session = deps.agents.ensureSession(storyId, 'npc', profileName, objectId);
     const agent = new NpcAgent({ session, bound, threadLog: deps.threadLog, storyId });
     const system = renderPrompt('npc-story-seed', {

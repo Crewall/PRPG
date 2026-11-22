@@ -1,11 +1,14 @@
 import type { z } from 'zod';
 import type { BoundDriver } from './registry.ts';
-import type { ChatMessage, OnDelta } from './types.ts';
+import type { ChatMessage, OnDelta, Usage } from './types.ts';
+import { zodToJsonSchema } from './jsonSchema.ts';
 
 export interface JsonCallContext {
   system: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
+  /** Stable per agent thread (OpenRouter sticky routing). */
+  sessionKey?: string;
 }
 
 export class JsonCallError extends Error {
@@ -74,7 +77,7 @@ export async function callJson<S extends z.ZodTypeAny>(
   bound: BoundDriver,
   ctx: JsonCallContext,
   schema: S,
-  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta; maxTokens?: number } = {},
+  opts: { onRaw?: (raw: string, attempt: number) => void; onDelta?: OnDelta; maxTokens?: number; onUsage?: (usage: Usage) => void } = {},
 ): Promise<z.infer<S>> {
   const messages: ChatMessage[] = [...ctx.messages];
   let lastRaw = '';
@@ -88,17 +91,21 @@ export async function callJson<S extends z.ZodTypeAny>(
   let repairs = 0;
   let escalations = 0;
   let emptyRetries = 0;
+  // The real schema: drivers use it for structured outputs when the model supports them.
+  const jsonSchema = zodToJsonSchema(schema);
 
   for (let attempt = 0; attempt < MAX_REPAIRS + MAX_ESCALATIONS + MAX_EMPTY_RETRIES + 1; attempt++) {
     const result = await bound.chat(
-      { system: ctx.system, messages, jsonSchema: { type: 'object' }, signal: ctx.signal, maxTokens: currentMax },
+      { system: ctx.system, messages, jsonSchema, signal: ctx.signal, sessionKey: ctx.sessionKey, maxTokens: currentMax },
       opts.onDelta,
     );
+    opts.onUsage?.(result.usage);
     lastRaw = result.text;
     opts.onRaw?.(result.text, attempt);
     const truncated = isTruncated(result.stopReason);
 
-    // An empty reply (or the bare "{" prefill) is a model failure, not JSON to
+    // An empty reply (or the bare "{" prefill, or whitespace only — DeepSeek's
+    // JSON mode blanks out non-JSON output) is a model failure, not JSON to
     // repair — asking it to "fix" nothing is pointless; just ask again.
     const bare = result.text.trim();
     if (bare === '' || bare === '{') {

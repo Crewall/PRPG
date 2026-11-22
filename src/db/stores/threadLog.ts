@@ -13,6 +13,11 @@ export interface ThreadLogEntry {
   tokensIn: number | null;
   tokensOut: number | null;
   durationMs: number | null;
+  connectionId: string | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+  reasoningTokens: number | null;
+  cost: number | null;
   createdAt: number;
 }
 
@@ -26,6 +31,11 @@ export interface NewThreadLogEntry {
   tokensIn?: number;
   tokensOut?: number;
   durationMs?: number;
+  connectionId?: string | null;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoningTokens?: number;
+  cost?: number;
 }
 
 function rowToEntry(r: Row): ThreadLogEntry {
@@ -40,6 +50,11 @@ function rowToEntry(r: Row): ThreadLogEntry {
     tokensIn: (r.tokens_in as number) ?? null,
     tokensOut: (r.tokens_out as number) ?? null,
     durationMs: (r.duration_ms as number) ?? null,
+    connectionId: (r.connection_id as string) ?? null,
+    cacheRead: (r.cache_read as number) ?? null,
+    cacheWrite: (r.cache_write as number) ?? null,
+    reasoningTokens: (r.reasoning_tokens as number) ?? null,
+    cost: (r.cost as number) ?? null,
     createdAt: r.created_at as number,
   };
 }
@@ -50,8 +65,9 @@ export function createThreadLog(db: Db, events?: EventBus) {
       const now = Date.now();
       const entryId = id();
       db.prepare(
-        `INSERT INTO thread_log (id, story_id, turn_id, session_id, agent_role, direction, payload_json, tokens_in, tokens_out, duration_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO thread_log (id, story_id, turn_id, session_id, agent_role, direction, payload_json, tokens_in, tokens_out, duration_ms,
+                                 connection_id, cache_read, cache_write, reasoning_tokens, cost, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entryId,
         entry.storyId ?? null,
@@ -63,6 +79,11 @@ export function createThreadLog(db: Db, events?: EventBus) {
         entry.tokensIn ?? null,
         entry.tokensOut ?? null,
         entry.durationMs ?? null,
+        entry.connectionId ?? null,
+        entry.cacheRead ?? null,
+        entry.cacheWrite ?? null,
+        entry.reasoningTokens ?? null,
+        entry.cost ?? null,
         now,
       );
       const saved = rowToEntry(db.prepare(`SELECT * FROM thread_log WHERE id = ?`).get<Row>(entryId)!);

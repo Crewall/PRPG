@@ -15,8 +15,8 @@ const DOSSIER_MAX_FACTS = 40; // focused single-character pass — a whole sheet
 const MAINTENANCE_EVERY = 10; // M turns (doc 04/05)
 
 function scribeMemoryAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
-  const profileName = deps.stories.getStory(storyId)?.settings.roles.scribe_memory ?? deps.registry.getForRole('scribe_memory').name;
-  const bound = deps.registry.getProfile(profileName);
+  const bound = deps.registry.getForRole('scribe_memory', deps.stories.getStory(storyId)?.settings.roles.scribe_memory);
+  const profileName = bound.name;
   const session = deps.agents.ensureSession(storyId, 'scribe_memory', profileName);
   return new ScribeMemory({ session, bound, threadLog: deps.threadLog, storyId });
 }
@@ -27,8 +27,8 @@ function scribeMemoryAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
  * The session stays under scribe_memory (it's still memory-writing work).
  */
 function dossierAgent(deps: HandlerDeps, storyId: string): ScribeMemory {
-  const profileName = deps.stories.getStory(storyId)?.settings.roles.npc ?? deps.registry.getForRole('npc').name;
-  const bound = deps.registry.getProfile(profileName);
+  const bound = deps.registry.getForRole('npc', deps.stories.getStory(storyId)?.settings.roles.npc);
+  const profileName = bound.name;
   const session = deps.agents.ensureSession(storyId, 'scribe_memory', profileName);
   return new ScribeMemory({ session, bound, threadLog: deps.threadLog, storyId });
 }
