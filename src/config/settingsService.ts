@@ -357,7 +357,8 @@ export function compileSettings(s: RuntimeSettings, llm: { maxRetries: number })
       temperature: m.caps.sampling ? t.temperature : undefined,
       maxTokens: t.maxTokens,
       reasoning,
-      effort: m.caps.reasoning === 'none' ? undefined : t.effort,
+      // An effort level the model doesn't accept is dropped (the provider's default applies).
+      effort: m.caps.reasoning === 'none' || (t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort)) ? undefined : t.effort,
     };
   }
   // role:<role> — what each role runs (its tier's profile).

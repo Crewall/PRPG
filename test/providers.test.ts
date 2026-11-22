@@ -231,3 +231,54 @@ describe('request counting and usage logging', () => {
     db.close();
   });
 });
+
+describe('mandatory reasoning (OpenRouter ERNIE regression)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('model caps from the real OpenRouter listing: mandatory → always, only the offered efforts', async () => {
+    const { capsFromListing } = await import('../src/config/config.ts');
+    const params = ['include_reasoning', 'max_tokens', 'reasoning', 'reasoning_effort', 'response_format', 'structured_outputs', 'temperature'];
+    expect(capsFromListing({ supported_parameters: params, reasoning: { mandatory: true, supported_efforts: ['high'] } }, 'openrouter')).toEqual({
+      sampling: true,
+      reasoning: 'always',
+      json: 'schema',
+      efforts: ['high'],
+    });
+    expect(capsFromListing({ supported_parameters: params, reasoning: { mandatory: false, supported_efforts: ['max', 'high', 'low', 'none'] } }, 'openrouter')).toEqual({
+      sampling: true,
+      reasoning: 'toggle',
+      json: 'schema',
+      efforts: ['max', 'high', 'low'],
+    });
+    expect(capsFromListing({ supported_parameters: ['temperature', 'response_format'] }, 'openrouter')).toEqual({ sampling: true, reasoning: 'none', json: 'json_object' });
+  });
+
+  it('a rejected reasoning switch is retried once without it, and not sent again for that model', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      bodies.push(body);
+      if (body.reasoning && String(body.model).startsWith('baidu/')) return new Response('{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400}}', { status: 400 });
+      return sseResponse([{ choices: [{ delta: { content: 'OK' }, finish_reason: 'stop' }] }, '[DONE]']);
+    });
+    const driver = openaiDriver({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/v1', preset: 'openrouter', maxRetries: 0 });
+    const first = await driver.chat(req({ model: 'baidu/ernie-5.5-flash-preview:free', reasoning: 'off' }));
+    expect(first.text).toBe('OK');
+    expect(bodies.map((b) => 'reasoning' in b)).toEqual([true, false]);
+    await driver.chat(req({ model: 'baidu/ernie-5.5-flash-preview:free', reasoning: 'off', effort: 'low' }));
+    expect(bodies.slice(2).map((b) => 'reasoning' in b)).toEqual([false]); // learned: one request, no switch
+    await driver.chat(req({ model: 'other/model', reasoning: 'off' }));
+    expect(bodies.at(-1)!.reasoning).toEqual({ enabled: false }); // other models unaffected
+  });
+
+  it('other 400s are not retried', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls++;
+      return new Response('{"error":{"message":"No such model"}}', { status: 400 });
+    });
+    const driver = openaiDriver({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/v1', preset: 'openrouter', maxRetries: 0 });
+    await expect(driver.chat(req({ reasoning: 'off' }))).rejects.toThrow(/No such model/);
+    expect(calls).toBe(1);
+  });
+});

@@ -1292,7 +1292,9 @@ async function renderSettings() {
       const info = h('div', { class: 'sub tier-info' },
         used.length ? `Used by: ${used.join(', ')}` : 'Not used by any role yet',
         c ? ` · ${c.label}: ${reqs} request${reqs === 1 ? '' : 's'} today` : '',
-        m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '');
+        m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
+        m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
+        m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
       return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), rm), info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
@@ -1330,7 +1332,9 @@ async function renderSettings() {
       const sampling = h('input', { type: 'checkbox', ...(m.caps.sampling ? { checked: true } : {}), onchange: (e) => (m.caps.sampling = e.target.checked) });
       return h('div', { class: 'model-block' },
         h('div', { class: 'model-row' }, label, provider, model, test, rm),
-        h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning, h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
+        h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning,
+          m.caps.efforts ? h('span', { title: 'Effort levels this model accepts (from the provider)' }, `efforts: ${m.caps.efforts.join(' / ')}`) : null,
+          h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
     });
     const lists = Object.entries(modelLists).map(([cid, list]) => h('datalist', { id: 'ml-' + cid }, ...list.map((x) => h('option', { value: x.id }, x.name))));
     const add = h('button', { class: 'small', disabled: !st.connections.length, onclick: () => { const c = st.connections[0]; st.models.push({ id: newSettingsId('m'), label: '', providerId: c.id, model: '', caps: capsForPreset(c.preset) }); paint(); } }, '+ Add model');

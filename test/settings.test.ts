@@ -243,3 +243,19 @@ describe('config.json with named connections (DeepSeek + OpenRouter at once)', (
     db.close();
   });
 });
+
+describe('effort levels a model does not offer', () => {
+  it('are dropped when compiling, so the provider default applies', () => {
+    const db = openDb(':memory:');
+    migrate(db);
+    const svc = createSettingsService(createSettingsStore(db), base);
+    svc.update({
+      models: svc.get().models.map((m) => (m.id === 'narrator-strong' ? { ...m, caps: { sampling: true, reasoning: 'always', json: 'json_object', efforts: ['high'] } } : m)),
+      tiers: svc.get().tiers.map((t) => (t.id === 'heavy' ? { ...t, effort: 'low', reasoning: 'off' } : t.id === 'medium' ? { ...t, effort: 'high' } : t)),
+    });
+    expect(svc.effective().modelProfiles['tier:heavy'].effort).toBeUndefined();
+    expect(svc.effective().modelProfiles['tier:heavy'].reasoning).toBeUndefined();
+    expect(svc.effective().modelProfiles['tier:medium'].effort).toBe('high');
+    db.close();
+  });
+});

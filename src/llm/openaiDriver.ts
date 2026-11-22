@@ -2,6 +2,22 @@ import type { ChatRequest, ChatResult, LlmDriver, OnDelta, Usage } from './types
 import { LlmError, parseSse } from './types.ts';
 import { requestWithRetry } from './http.ts';
 import type { ProviderPreset } from '../config/config.ts';
+import { logger } from '../util/logger.ts';
+
+const REASONING_PARAMS = ['reasoning', 'reasoning_effort', 'thinking'] as const;
+
+/** Does the request body carry any reasoning switch? */
+const hasReasoningParams = (body: Record<string, unknown>) => REASONING_PARAMS.some((k) => k in body);
+
+/** The body without reasoning switches: the provider's default applies. */
+function withoutReasoning(body: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...body };
+  for (const k of REASONING_PARAMS) delete out[k];
+  return out;
+}
+
+/** A 400 about reasoning: mandatory reasoning switched off, an effort the model lacks, an unknown parameter. */
+const isReasoningRejection = (status: number, detail: string) => status === 400 && /reason|thinking|effort/i.test(detail);
 
 export interface OpenAiOptions {
   apiKey: string;
@@ -89,11 +105,16 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
   const preset = opts.preset ?? 'custom';
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const maxRetries = opts.maxRetries ?? 2;
+  // Models that rejected our reasoning switches (e.g. OpenRouter models whose
+  // reasoning is mandatory, or that accept only some effort levels): learned
+  // from the first rejection, so later calls go out without them.
+  const noReasoningSwitch = new Set<string>();
 
   return {
     kind: 'openai_compat',
     async chat(req: ChatRequest, onDelta?: OnDelta): Promise<ChatResult> {
-      const body = buildOpenAiBody(req, preset);
+      let body = buildOpenAiBody(req, preset);
+      if (noReasoningSwitch.has(req.model)) body = withoutReasoning(body);
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
@@ -104,12 +125,26 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (opts.apiKey) headers.authorization = `Bearer ${opts.apiKey}`;
 
-      let res: Response;
-      try {
-        res = await requestWithRetry(
-          () => fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal }),
+      const send = (b: Record<string, unknown>) =>
+        requestWithRetry(
+          () => fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(b), signal: controller.signal }),
           { signal: controller.signal, maxRetries },
         );
+
+      let res: Response;
+      try {
+        res = await send(body);
+        // Rejected because of our reasoning switch? Retry once without it, and remember.
+        if (res.status === 400 && hasReasoningParams(body)) {
+          const detail = await res.clone().text().catch(() => '');
+          if (isReasoningRejection(res.status, detail)) {
+            noReasoningSwitch.add(req.model);
+            logger.warn('model rejected the reasoning setting — retrying with the provider default', { model: req.model, detail: detail.slice(0, 200) });
+            await res.body?.cancel().catch(() => {});
+            body = withoutReasoning(body);
+            res = await send(body);
+          }
+        }
       } catch (err) {
         clearTimeout(timer);
         throw new LlmError(`request failed: ${(err as Error).message}`, undefined, true);

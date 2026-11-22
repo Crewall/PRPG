@@ -10,7 +10,7 @@ import { promoteNpc, demoteNpc, enterOrCreateNpc, rebuildNpcMind } from '../orch
 import { mergeMemoryObjects, enqueueMemoryRescan } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
 import { EDITABLE_PROMPTS, ModelEntry, TierCfg } from '../config/settingsService.ts';
-import { PRESETS, ProviderKind, ProviderPreset, defaultCaps } from '../config/config.ts';
+import { PRESETS, ProviderKind, ProviderPreset, capsFromListing } from '../config/config.ts';
 import { utcDay } from '../db/stores/usageStore.ts';
 import { registerMindsRoutes } from './mindsRoutes.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
@@ -676,8 +676,11 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
         model,
         system: 'Connectivity test.',
         messages: [{ role: 'user', content: 'Reply with the single word: OK' }],
-        maxTokens: 16,
-        reasoning: target.preset === 'deepseek' || target.preset === 'openrouter' ? 'off' : undefined,
+        // Room for models that always reason (their thinking counts against max_tokens).
+        maxTokens: 64,
+        // DeepSeek's thinking can always be switched off (keeps the test quick). OpenRouter models may
+        // REQUIRE reasoning (e.g. ERNIE), so nothing is sent there: the provider default applies.
+        reasoning: target.preset === 'deepseek' ? 'off' : undefined,
       });
       if (target.id) app.usage.increment(target.id);
       return { ok: true, latencyMs: Date.now() - t0, model, sample: res.text.trim().slice(0, 40) };
@@ -698,17 +701,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) return { ok: false, error: `HTTP ${res.status} from ${target.baseUrl}/models` };
-      const json = (await res.json()) as { data?: { id: string; name?: string; supported_parameters?: string[] }[] };
+      const json = (await res.json()) as { data?: { id: string; name?: string; supported_parameters?: string[]; reasoning?: { mandatory?: boolean; supported_efforts?: string[] } }[] };
       const models = (json.data ?? []).map((m) => {
         const params = m.supported_parameters;
-        const caps = params
-          ? {
-              sampling: params.includes('temperature'),
-              reasoning: params.includes('reasoning') ? 'toggle' : 'none',
-              json: params.includes('structured_outputs') ? 'schema' : params.includes('response_format') ? 'json_object' : 'prompt',
-            }
-          : defaultCaps(target.preset);
-        return { id: m.id, name: m.name ?? m.id, caps };
+        return { id: m.id, name: m.name ?? m.id, caps: capsFromListing(m, target.preset) };
       });
       models.sort((a, b) => a.id.localeCompare(b.id));
       return { ok: true, models };
