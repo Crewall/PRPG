@@ -25,6 +25,7 @@ export const RoleName = z.enum([
   'distributor',
   'seeder',
   'compactor',
+  'director',
 ]);
 export type RoleName = z.infer<typeof RoleName>;
 export const ALL_ROLES: RoleName[] = RoleName.options;
@@ -44,6 +45,7 @@ export const ROLE_LABELS: Record<RoleName, string> = {
   distributor: 'Round-block fallback (Minds)',
   seeder: 'New-character seeder (Minds)',
   compactor: 'Thread compactor (Minds)',
+  director: 'Director: who is spoken to (Minds)',
 };
 
 const ServerSchema = z.object({

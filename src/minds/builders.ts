@@ -74,7 +74,8 @@ export interface Declaration {
 
 export interface NarratorCallInput {
   storyId: string;
-  player: { say?: string; do?: string; ooc?: string };
+  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". */
+  player: { say?: string; do?: string; ooc?: string; to?: string };
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
@@ -397,7 +398,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   if (input.context?.trim()) parts.push(input.context.trim());
 
   const p = input.player;
-  const said = [p.say?.trim() ? `says "${p.say.trim()}"` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
+  const said = [p.say?.trim() ? `says "${p.say.trim()}"${p.to ? ` to ${p.to}` : ''}` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
   const playerLine = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}: ${said || 'waits.'}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
   parts.push(playerLine);
   if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false).join('\n'));

@@ -23,6 +23,8 @@ import type { ChangeOutcome, Proposal } from './variables.ts';
 import { isPlaceholder, isRealName, realValue, slugify } from './text.ts';
 import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
+import { NO_DIRECTION, resolveDirection } from './director.ts';
+import type { DirectionResult } from './director.ts';
 import { queueCompactions } from './compaction.ts';
 
 // One normal round of the Minds engine (docs/10 §5): characters declare (in
@@ -135,6 +137,24 @@ function settlePlayer(
   return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns, knownAs }).objectId, changed: true };
 }
 
+/** The gate when the player's words have a direction: those spoken to, those who'd react, the spotlight, forced. */
+function directedGate(presentIds: string[], d: DirectionResult, forced: Set<string>, spotlight: Set<string>, cap: number) {
+  const reasons: Record<string, string> = {};
+  const order: string[] = [];
+  const add = (oid: string, why: string) => {
+    if (!presentIds.includes(oid) || reasons[oid]) return;
+    reasons[oid] = why;
+    order.push(oid);
+  };
+  for (const oid of forced) add(oid, 'forced');
+  for (const oid of d.all ? presentIds : d.to) add(oid, 'spoken to');
+  for (const oid of d.react) add(oid, 'would react');
+  for (const oid of spotlight) add(oid, 'spotlight');
+  const called = order.slice(0, Math.max(1, cap));
+  for (const oid of order.slice(called.length)) delete reasons[oid];
+  return { called, idle: presentIds.filter((x) => !called.includes(x)), reasons };
+}
+
 /** Resolve a block key ("#marta", "Marta Vell", "world", "#player") to a holder id. */
 function resolveKey(deps: RoundDeps, storyId: string, key: string, playerId: string | null): string | undefined {
   const k = key.trim();
@@ -195,23 +215,34 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     else if (previous && last.turnId === previous.id) actedLast.add(oid);
   }
   const spotlight = new Set(lastBlock.spotlight.map((k) => resolveKey(deps, storyId, k, playerId)).filter((x): x is string => !!x));
+  // Who the player's words are meant for (docs/10 §5.1b): when they are for particular people, those answer —
+  // not everyone who happens to be new or spoke last round.
+  stage('direction');
+  const direction: DirectionResult = dialogue.length
+    ? NO_DIRECTION
+    : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
+  const directed = direction.all || direction.to.length > 0;
   const gate = dialogue.length
     ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
-    : chooseCallers({
-    present: candidates,
-    playerText: `${decl.say}\n${decl.do}`,
-    spotlight,
-    neverActed,
-    actedLastRound: actedLast,
-    forced: new Set(opts.force ?? []),
-    cap: mset.maxCharactersPerRound,
-  });
+    : directed
+      ? directedGate(presentIds, direction, new Set(opts.force ?? []), spotlight, mset.maxCharactersPerRound)
+      : chooseCallers({
+          present: candidates,
+          playerText: `${decl.say}\n${decl.do}`,
+          spotlight,
+          neverActed,
+          actedLastRound: actedLast,
+          forced: new Set(opts.force ?? []),
+          cap: mset.maxCharactersPerRound,
+        });
+  const handleOf = (oid: string) => `#${deps.memory.getObject(oid)?.handle ?? deps.memory.ensureHandle(oid)}`;
+  const playerTo = direction.all ? 'everyone' : direction.to.map(handleOf).join(', ');
 
   // ---- 2. Characters declare, in parallel ----
   const playerLabel = playerId ? label(deps, playerId) : 'The player character';
   // The player's words, as each character hears them right now (their name only if that character knows it).
   const heardNowFor = (viewer: string) =>
-    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"` : undefined;
+    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
   const heardNow = heardNowFor(NARRATOR_OWNER);
   let results: CharacterResult[] = [];
   if (gate.called.length) {
@@ -265,7 +296,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
       : undefined;
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
-  const nCall = buildNarratorCall(deps, { storyId, player: decl, presentIds, declarations, situationTags: lastBlock.tags, context });
+  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
@@ -451,7 +482,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       }
     }
     const speeches: { from: string; to?: string; say: string }[] = [];
-    if (decl.say) speeches.push({ from: 'player', say: decl.say });
+    if (decl.say) speeches.push({ from: 'player', say: decl.say, ...(playerTo ? { to: playerTo } : {}) });
     for (const d of declarations) {
       if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim() });
     }
@@ -503,6 +534,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         presentNpcIds: presentIds,
         player: decl,
         gate: { called: gate.called, idle: gate.idle, reasons: gate.reasons },
+        ...(direction.source !== 'none' ? { direction } : {}),
         declarations: declarations.map((d) => ({ ...d, error: byId.get(d.objectId)?.error, problems: byId.get(d.objectId)?.reply?.problems })),
         block,
         blockSource,

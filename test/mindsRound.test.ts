@@ -136,13 +136,14 @@ describe('a Minds round through the pipeline', () => {
         time: 2,
       }),
     );
-    const c = await play('"A room, please, Marta." I watch her hands.');
+    // Kael speaks to Marta (named): she answers; Tom is made to act too, to see what each one hears.
+    const c = await play('"A room, please, Marta." I watch her hands.', [tom]);
     expect(c.errors).toEqual([]);
 
     // Marta heard the player's words before declaring; she never saw Tom's mind or any hidden value.
     const mReq = requests('character:Marta')[0];
     expect(mReq.messages.at(-1)!.content).toContain('A tall stranger walks in out of the rain.');
-    expect(mReq.messages.at(-1)!.content).toContain('Right now:\n#kael Kael: "A room, please, Marta."');
+    expect(mReq.messages.at(-1)!.content).toContain('Right now:\n#kael Kael: "A room, please, Marta." (to #marta)');
     expect(mReq.messages.at(-1)!.content).not.toContain('I watch her hands'); // the player's action is the narrator's
     for (const req of [...requests('character:Marta'), ...requests('character:Tom')]) expect(textOf(req)).not.toContain('suspicion');
 

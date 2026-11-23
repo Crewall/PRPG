@@ -265,3 +265,21 @@ export const DialogueReplyWire = z.object({
   forget: z.array(z.string()).optional(),
   act: z.string().optional(),
 });
+
+// ---- The director: who the player's words are meant for (docs/10 §5.1b) ----
+
+export interface Direction {
+  /** #handles (resolved to object ids by the round) the player's words are meant for. */
+  to: string[];
+  /** The player addressed everyone present. */
+  all: boolean;
+  /** People not spoken to who would plausibly react anyway. */
+  react: string[];
+  why: string;
+}
+
+export const DirectionReply = z.unknown().transform((raw): Direction => {
+  const r = (stripNulls(raw) && typeof raw === 'object' ? (stripNulls(raw) as Record<string, unknown>) : {}) as Record<string, unknown>;
+  const handles = (x: unknown) => (Array.isArray(x) ? x : typeof x === 'string' && x.trim() ? [x] : []).filter((v): v is string => typeof v === 'string' && !!v.trim()).map((v) => v.trim());
+  return { to: handles(r.to), all: r.all === true, react: handles(r.react), why: typeof r.why === 'string' ? r.why.slice(0, 200) : '' };
+});

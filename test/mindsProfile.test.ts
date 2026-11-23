@@ -146,11 +146,12 @@ describe('the Threads view and Minds scenes', () => {
     await h.opening();
     h.script.characters['Marta'] = [JSON.stringify({ say: 'Yes?' })];
     h.script.characters['Tom'] = [fail('model timeout')];
+    h.script.director.push(JSON.stringify({ to: [], all: true, react: [], why: 'a greeting to the room' }));
     h.script.narrator.push(round('Marta looks up.', { briefs: {} }));
     await h.play('"Hello."');
     const calls = listCalls(h.app, h.storyId);
     const turn2 = calls.filter((c) => c.turnIndex === 1);
-    expect(turn2.map((c) => `${c.mind}:${c.status}`).sort()).toEqual(['Marta:done', 'Narrator:done', 'Tom:failed']);
+    expect(turn2.map((c) => `${c.mind}:${c.status}`).sort()).toEqual(['Director: who is spoken to:done', 'Marta:done', 'Narrator:done', 'Tom:failed']);
     const tom = turn2.find((c) => c.mind === 'Tom')!;
     expect(tom.error).toMatch(/model timeout/);
     expect(tom.response).not.toBeNull();

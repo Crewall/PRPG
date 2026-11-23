@@ -128,6 +128,7 @@ export const DEFAULT_ROLE_TIER: Record<RoleName, string> = {
   distributor: 'light',
   seeder: 'medium',
   compactor: 'light',
+  director: 'light',
 };
 
 // Roles added after the original config shape: when absent, they inherit an
@@ -158,6 +159,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'minds-distributor', label: 'Minds — round-block fallback' },
   { name: 'minds-seed', label: 'Minds — new-character seeder' },
   { name: 'minds-compactor', label: 'Minds — thread compactor' },
+  { name: 'minds-director', label: 'Minds — director (who is spoken to)' },
 ];
 
 // ---- Building tiers from per-role bindings (seed + migration share this) ----
