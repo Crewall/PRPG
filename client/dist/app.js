@@ -45,14 +45,14 @@ function topbar(...right) {
 
 // ---------------- Home ----------------
 async function renderHome() {
-  app.replaceChildren(topbar(h('span', { class: 'badge' }, 'Layers 0–3')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
   let stories = [];
   try { stories = await api.get('/api/stories'); } catch {}
 
   const list = stories.length
     ? stories.map((s) =>
         h('div', { class: 'card story-card', onclick: () => (location.hash = `/play/${s.id}`) },
-          h('div', { class: 'meta' }, h('div', { class: 'title' }, s.title), h('div', { class: 'sub' }, `updated ${new Date(s.updatedAt).toLocaleString()}`)),
+          h('div', { class: 'meta' }, h('div', { class: 'title' }, s.title, s.settings?.engine && s.settings.engine !== 'minds' ? h('span', { class: 'badge legacy', title: 'Runs on a retired engine: it keeps working, new stories use Minds' }, s.settings.engine === 'npc_stories' ? 'legacy · NPC story mode' : 'legacy · classic') : null), h('div', { class: 'sub' }, `updated ${new Date(s.updatedAt).toLocaleString()}`)),
           h('button', { class: 'link', onclick: async (ev) => { ev.stopPropagation(); if (confirm('Delete this story?')) { await api.del(`/api/stories/${s.id}?hard=true`); route(); } } }, 'delete'),
         ),
       )
@@ -104,6 +104,7 @@ async function renderHome() {
       h('h2', {}, 'Your stories'), ...list,
       h('div', { class: 'card' },
         h('h3', { style: 'margin-top:0' }, 'New story'),
+        h('div', { class: 'sub' }, 'A narrator plus a separate mind for every character (the Minds engine). You choose who you play before the story opens. ', helpLink('engine')),
         h('label', {}, 'Title'), titleIn, h('label', {}, 'Genre'), genreIn, h('label', {}, 'Premise seed'), seedIn,
         h('div', { class: 'row', style: 'margin-top:14px; gap:10px; flex-wrap:wrap' }, createBtn, randomBtn, h('span', { class: 'sub' }, 'seeds'), seedCount),
         seedNote,
@@ -336,45 +337,48 @@ async function renderPlay(storyId) {
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
 
-    // Which engine plays this story (docs/10 §4).
-    const ENGINES = [
-      ['classic', 'Classic — one storyteller, extracted memory'],
-      ['npc_stories', 'NPC story mode — characters with narrative notes'],
-      ['minds', 'Minds (new) — narrator + a mind per character'],
-    ];
+    // Which engine plays this story (docs/10 §4, §13 M8). Minds is the engine; the classic
+    // engine and NPC story mode are retired: they keep running the stories that use them.
+    const isMinds = s.engine === 'minds';
+    const LEGACY = { classic: 'Classic (legacy) — one storyteller, extracted memory', npc_stories: 'NPC story mode (legacy) — characters with narrative notes' };
     const engineHint = h('div', { class: 'sub' });
-    const engineHints = {
-      classic: 'One storyteller voices everyone; a scribe extracts memory facts after each turn.',
-      npc_stories: 'Present characters act every round from their own personality and notes; the storyteller weaves them in.',
-      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story. Tap a character in the Present bar to talk with them directly (dialogue mode); end the conversation to let the narrator wrap it up.',
-    };
-    const engineSel = h('select', { onchange: async (e) => {
-      engineHint.textContent = engineHints[e.target.value] || '';
-      await patchSettings({ engine: e.target.value });
-      activeTab = e.target.value === 'minds' ? 'cast' : 'memory';
-      renderDrawer();
-      refreshSceneHeader();
-      updateInputPreview();
-    } }, ...ENGINES.map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)));
-    engineHint.textContent = engineHints[s.engine || 'classic'];
+    let engineBox;
+    if (isMinds) {
+      engineHint.textContent = 'Minds: a narrator plus a separate mind for every character, with sheets, variables, their own memories and dialogue mode.';
+      engineBox = h('div', {}, h('b', {}, 'Minds'));
+    } else {
+      engineHint.textContent = 'This story runs on a retired engine. It keeps working; new stories use Minds. Switching it to Minds keeps the transcript, but the minds start from here: they don\'t know the story so far.';
+      const engineSel = h('select', { onchange: async (e) => {
+        if (e.target.value !== 'minds') { await patchSettings({ engine: e.target.value }); return; }
+        if (!confirm('Switch this story to the Minds engine?\n\nThe transcript stays, but every mind starts fresh from here: they don\'t know the story so far. You can\'t switch back.')) { e.target.value = s.engine; return; }
+        await patchSettings({ engine: 'minds' });
+        modal.remove();
+        activeTab = 'cast';
+        renderDrawer(); refreshSceneHeader(); updateInputPreview();
+        showStoryOptions();
+      } },
+        ...Object.entries(LEGACY).map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)),
+        h('option', { value: 'minds' }, 'Minds — switch this story'));
+      engineBox = engineSel;
+    }
 
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
-        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine ', helpLink('engine')), engineSel, engineHint),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine ', helpLink('engine')), engineBox, engineHint),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Narrator tone'), h('div', { class: 'row', style: 'gap:8px' }, toneIn, toneStatus)),
-        toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
-          s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
-        toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
-          !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
-        toggle('NPC story mode (narrative minds)', 'Replaces the structured memory system for NPCs: each present character acts every round from its own personality + private notes, and the storyteller weaves the replies. Memory extraction is paused while this is on.',
-          !!s.npcStories?.enabled, async (on) => { await patchSettings({ npcStories: { ...(story.settings.npcStories || {}), enabled: on } }); renderDrawer(); }),
-        toggle('Salience system', 'Importance weighting & decay of memory objects.',
-          s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
-        budgetBlock,
-        npcBlock,
-        mindsBlock,
+        // The legacy engines' own options; a Minds story has its own section instead.
+        ...(isMinds ? [mindsBlock] : [
+          toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
+            s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
+          toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
+            !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
+          toggle('Salience system', 'Importance weighting & decay of memory objects.',
+            s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
+          budgetBlock,
+          npcBlock,
+        ]),
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -505,29 +509,46 @@ async function renderPlay(storyId) {
   }
 
   // Player dossier interview: 1–3 rounds of Q&A on its own AI thread.
+  // Nothing is lost when a request fails: an answer joins the history only once
+  // the server took it; the question and your answer stay on screen with
+  // "Try again"; progress is kept in this browser, so Cancel or a reload resumes.
   function openCharacterCreator() {
-    const exchanges = [];
-    let currentQ = '';
-    const qEl = h('div', { class: 'mem-summary', style: 'padding:0' }, 'The interviewer is thinking…');
+    const KEY = `prpg.interview.${storyId}`;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch {}
+    let exchanges = Array.isArray(saved?.exchanges) ? saved.exchanges : []; // answered and accepted
+    let currentQ = typeof saved?.question === 'string' ? saved.question : '';
+    let lastAttempt = null; // what the failed request sent, for "Try again"
+    const qEl = h('div', { class: 'mem-summary', style: 'padding:0' }, currentQ || 'The interviewer is thinking…');
     const aEl = h('textarea', { rows: '3', placeholder: 'Your answer…' });
+    aEl.value = typeof saved?.draft === 'string' ? saved.draft : '';
     const status = h('span', { class: 'sub' });
     const nextBtn = h('button', { class: 'primary', disabled: true }, 'Answer');
+    const retryBtn = h('button', { style: 'display:none' }, '↻ Try again');
+    const restartBtn = h('button', { class: 'link', title: 'Forget these answers and start the interview again' }, 'start over');
+    const keep = () => { try { localStorage.setItem(KEY, JSON.stringify({ exchanges, question: currentQ, draft: aEl.value })); } catch {} };
+    const forget = () => { try { localStorage.removeItem(KEY); } catch {} };
+    aEl.addEventListener('input', keep);
     let pending = null; // AbortController for the in-flight interview request
-    const cancel = () => { if (pending) pending.abort(new DOMException('cancelled', 'AbortError')); modal.remove(); };
+    const cancel = () => { if (pending) pending.abort(new DOMException('cancelled', 'AbortError')); keep(); modal.remove(); };
     const modal = h('div', { class: 'modal-bg' },
       h('div', { class: 'modal' },
         h('h3', {}, 'Who are you?'),
+        exchanges.length ? h('div', { class: 'sub' }, `${exchanges.length} answer${exchanges.length > 1 ? 's' : ''} kept from before.`) : null,
         qEl, aEl,
-        h('div', { class: 'row', style: 'gap:10px' }, nextBtn, h('button', { class: 'ghost', onclick: cancel }, 'Cancel'), status)));
-    async function ask() {
-      nextBtn.disabled = true; status.textContent = 'the interviewer is thinking…';
+        h('div', { class: 'row', style: 'gap:10px; flex-wrap:wrap; align-items:center' }, nextBtn, retryBtn, h('button', { class: 'ghost', onclick: cancel }, 'Cancel'), restartBtn, status)));
+    async function ask(attempt) {
+      lastAttempt = attempt;
+      nextBtn.disabled = true; retryBtn.style.display = 'none';
+      status.textContent = 'the interviewer is thinking…';
       // The dossier reply can be slow; abort rather than hang forever, and let
       // Cancel abort it immediately (the server stops generating when we do).
       pending = new AbortController();
       const timeout = setTimeout(() => pending.abort(new DOMException('timeout', 'AbortError')), 90_000);
       try {
-        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges }, { signal: pending.signal });
+        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges: attempt }, { signal: pending.signal });
         if (r.done) {
+          forget();
           modal.remove();
           story.settings = { ...(story.settings || {}), playerObjectId: r.objectId };
           addStatus(`(character created: ${r.name})`);
@@ -535,26 +556,39 @@ async function renderPlay(storyId) {
           showDossier(r.objectId);
           return;
         }
+        exchanges = attempt; // accepted: now it is history
         currentQ = r.question;
         qEl.textContent = r.question;
         aEl.value = '';
+        keep();
         status.textContent = `question ${r.round} of ${r.maxRounds}`;
-        nextBtn.disabled = false;
         aEl.focus();
       } catch (e) {
-        status.textContent = e.name === 'AbortError' ? '✗ cancelled — press Answer to try again' : '✗ ' + e.message;
-        nextBtn.disabled = false;
+        // Nothing is lost: the question and your answer stay; "Try again" sends the same thing.
+        status.textContent = e.name === 'AbortError' ? '✗ stopped (timeout or cancel)' : `✗ ${e.message}`;
+        retryBtn.style.display = '';
+        keep();
       } finally {
         clearTimeout(timeout); pending = null;
+        nextBtn.disabled = !currentQ;
       }
     }
     nextBtn.addEventListener('click', () => {
-      if (!aEl.value.trim()) return;
-      exchanges.push({ question: currentQ, answer: aEl.value.trim() });
-      ask();
+      if (!currentQ || !aEl.value.trim()) return;
+      ask([...exchanges, { question: currentQ, answer: aEl.value.trim() }]);
+    });
+    retryBtn.addEventListener('click', () => ask(lastAttempt ?? exchanges));
+    restartBtn.addEventListener('click', () => {
+      if (!confirm('Forget your answers and start the interview again?')) return;
+      if (pending) pending.abort(new DOMException('cancelled', 'AbortError'));
+      exchanges = []; currentQ = ''; aEl.value = ''; forget();
+      qEl.textContent = 'The interviewer is thinking…';
+      ask([]);
     });
     document.body.append(modal);
-    ask();
+    // Resume where it stopped: a question already on screen waits for its answer.
+    if (currentQ) { nextBtn.disabled = false; status.textContent = 'continuing where you left off'; aEl.focus(); }
+    else ask(exchanges);
   }
 
   // Character/object dossier: the full fact sheet with sorting and filtering

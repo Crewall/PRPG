@@ -367,3 +367,4 @@ td.vis.hidden { color: #ff8a8a; }
 .bubble.player.failed { opacity: .6; border-style: dashed; }
 .bubble.player.failed::after { content: 'not delivered'; display: block; font-size: 11px; color: #ff8a8a; margin-top: 4px; }
 .retry-tool { font-size: 15px; }
+.badge.legacy { margin-left: 8px; font-size: 11px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); vertical-align: middle; }

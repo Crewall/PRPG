@@ -104,7 +104,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     // New stories inherit the global default tone (Settings → Storyteller style)
     // unless one was passed explicitly.
     const toneDefault = app.settingsService.toneDefault();
-    const merged = { ...(body.settings ?? {}), premise: body.seed || body.settings?.premise || '' };
+    // M8 (docs/10 §13): new stories use the Minds engine. The classic engine and NPC story mode are retired —
+    // they keep running the stories that already use them, but no new story starts on them.
+    const { npcStories: _legacyFlag, ...rest } = body.settings ?? {};
+    const merged = { ...rest, engine: 'minds' as const, premise: body.seed || body.settings?.premise || '' };
     if (!merged.tone && toneDefault) merged.tone = toneDefault;
     const settings = resolveStorySettings({ ...defaultStorySettings(), engine: undefined }, merged);
     const story = stories.createStory({ title: body.title, settings });
@@ -128,6 +131,11 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   server.patch('/api/stories/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = PatchStoryBody.parse(req.body);
+    const current = stories.getStory(id);
+    if (current && body.settings && current.settings.engine === 'minds' && resolveStorySettings(current.settings as never, body.settings as never).engine !== 'minds') {
+      reply.code(400);
+      return { error: 'the classic engine and NPC story mode are retired: a Minds story stays a Minds story' };
+    }
     const updated = stories.updateStory(id, body);
     if (!updated) {
       reply.code(404);

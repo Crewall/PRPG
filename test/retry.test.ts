@@ -190,3 +190,43 @@ describe('Minds: retry keeps the request; removing a past message keeps the mind
     await server.close();
   });
 });
+
+describe('M8: the old engines are retired', () => {
+  let dir: string;
+  let app: App;
+  let server: ReturnType<typeof Fastify>;
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'prpg-m8-'));
+    app = createApp(config, { driverFactory: () => classicDriver([], []), dbPath: join(dir, 'm8.db'), startWorker: false });
+    server = Fastify();
+    await registerHttpRoutes(server, app);
+  });
+  afterEach(async () => {
+    await server.close();
+    app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a new story is a Minds story, whatever the request asks', async () => {
+    const r = await server.inject({ method: 'POST', url: '/api/stories', payload: { title: 'New', seed: 'A tavern.', settings: { engine: 'classic', npcStories: { enabled: true } } } });
+    expect(r.statusCode).toBe(201);
+    expect(r.json().settings).toMatchObject({ engine: 'minds', premise: 'A tavern.', npcStories: { enabled: false } });
+  });
+
+  it('a Minds story stays Minds; a legacy story keeps its engine or switches to Minds', async () => {
+    const minds = (await server.inject({ method: 'POST', url: '/api/stories', payload: { title: 'M' } })).json();
+    for (const settings of [{ engine: 'classic' }, { npcStories: { enabled: true } }]) {
+      const r = await server.inject({ method: 'PATCH', url: `/api/stories/${minds.id}`, payload: { settings } });
+      expect(r.statusCode).toBe(400);
+      expect(r.json().error).toMatch(/retired/);
+    }
+    expect((await server.inject({ method: 'PATCH', url: `/api/stories/${minds.id}`, payload: { settings: { verbosity: 2 } } })).statusCode).toBe(200);
+
+    const legacy = app.stories.createStory({ title: 'Old', settings: {} as never });
+    expect(legacy.settings.engine).toBe('classic');
+    const toNpc = await server.inject({ method: 'PATCH', url: `/api/stories/${legacy.id}`, payload: { settings: { engine: 'npc_stories' } } });
+    expect(toNpc.statusCode).toBe(200);
+    const toMinds = await server.inject({ method: 'PATCH', url: `/api/stories/${legacy.id}`, payload: { settings: { engine: 'minds' } } });
+    expect(toMinds.json().settings.engine).toBe('minds');
+  });
+});

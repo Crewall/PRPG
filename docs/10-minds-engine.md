@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M7 are built: a Minds story is playable (engine selector in Story options), with dialogue mode, thread compaction, the public profile and the full UI (character cards, advanced mode, sheet and scenario editors, POV, help panel). M8 (cleanup) is not.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -548,9 +548,17 @@ Each milestone is committed on its own and keeps the existing engines working.
 | M5 ✅ | **Dialogue mode** (manual) + wrap-up (built). | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 ✅ | **Compaction** for character and narrator threads (built). | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
 | M7 ✅ | **UI** (built): scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
-| M8 | **Docs and cleanup**: update docs/README, ARCHITECTURE, README status; remove the old engines from the active line (the backup keeps them). **Keep the dice/adjudication code.** | — |
+| M8 ✅ | **Retire the old engines** (built; the owner chose "retire, delete later"): new stories use Minds only (the API forces it); a Minds story can't switch back; classic and NPC story mode keep running the stories that use them, marked *legacy*, with their own options only for those stories; a legacy story can switch to Minds (the transcript stays, the minds start fresh). Docs updated. **The dice/adjudication code stays.** | A new story is Minds; a Minds story refuses a legacy engine (400); legacy stories still play. |
+| M9 | **Delete the legacy engines** once the owner has played Minds enough: the classic pipeline, NPC story mode, scribes, memory maintenance, the overseer and context planner. **Keep the dice/adjudication code.** `v1-backup` keeps everything. | Owner's go-ahead; the suite and typecheck stay green. |
 
 ## 14. TODO (explicitly later)
+
+- **Branching:** Retry (↻) replaces the last reply; keeping the earlier attempts as alternatives to switch between
+  (per turn, with their snapshots) is later.
+- Converting a legacy story to Minds properly (characters → sheets, memory facts → descriptions and thoughts, the
+  transcript → a narrator recap); today a switch keeps the transcript and the minds start fresh.
+- The character interviewer for Minds: draft the player's sheet in ≤ 3 questions (doc 11 §2.1); today the player
+  fills a form or the narrator decides.
 
 - A sheet view on the cast chips (M7); today the chips show appearance and visible values as a tooltip.
 - Show a character its tag vocabulary when it changes (doc 11 §5.3); today only the narrator gets the tags in use.

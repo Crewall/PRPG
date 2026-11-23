@@ -29,9 +29,9 @@ src/
   app.ts                wiring: stores + registry + pipeline + job handlers
   domain.ts             Story/Scene/Turn/Session types; StorySettings (Zod) — every per-story switch
   api/http.ts           REST routes (stories, turns, memory, NPCs, settings, debug)
-  api/ws.ts             /ws: turn.submit / turn.cancel in; turn.* + bus events out
+  api/ws.ts             /ws: turn.submit / turn.retry / turn.cancel in; turn.* + bus events out
   orchestrator/
-    turnPipeline.ts     the turn loop (both engines), consults, adjudication, rewind
+    turnPipeline.ts     the turn loop (every engine), consults, adjudication, rewind, retry, dropping failed attempts
     contextBuilder.ts   the ONLY place prompts are assembled (storyteller, NPC, NPC round)
     npcRound.ts         NPC Story Mode: skip gate + parallel character calls
     npc.ts              promote/demote/enter/exit characters; mind rebuild
@@ -90,9 +90,17 @@ scripts/                smoke.ts (live provider check), migrate.ts, termux-insta
 
 ## 3. How a chat turn works
 
-A story runs one of three engines, chosen per story (`settings.engine`: Story options → Engine).
+A story runs one of three engines (`settings.engine`). **New stories use Minds** (the API forces it, and a Minds
+story can't switch back). The classic engine and NPC Story Mode are **retired** (doc 10 §13, M8): they keep running
+the stories that already use them, marked *legacy*, until they are deleted (M9).
 
-### Classic engine (default)
+**Every engine, before a new turn:** a failed, stopped or interrupted attempt at the end of the story is undone
+from its snapshot first, so its message can't linger while the AIs never saw it. **Retry** (`turn.retry`) undoes
+the last turn and runs it again with the same message and options; **Edit** (rewind) undoes it and returns the
+message. Both name the turn they mean (`turnId`); if the story's last turn is another one, the server refuses
+(409) rather than undo an earlier turn.
+
+### Classic engine (legacy)
 
 1. Create the turn row and snapshot everything mutable (for rewind).
 2. *Summary-driven mode only:* the context planner (cheap model) picks memory queries and depth.
@@ -115,7 +123,7 @@ A story runs one of three engines, chosen per story (`settings.engine`: Story op
    - cleanup runs every 10 turns;
    - details that fade out of summaries are archived as facts.
 
-### NPC Story Mode ([docs/09](docs/09-npc-story-mode.md))
+### NPC Story Mode (legacy, [docs/09](docs/09-npc-story-mode.md))
 
 1. Turn row and snapshot, as above.
 2. A rule-based filter picks which present characters act (mentioned, acted last round, just arrived; at most 4).
@@ -245,7 +253,7 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
   paired, whose mind, turn and game time, cache, errors; `src/api/callsView.ts`), agent sessions.
 
 WebSocket in: `turn.submit` (Minds options: `force`, character ids that must act; `dialogue: { partner }`, one
-dialogue exchange), `turn.cancel`.
+dialogue exchange), `turn.retry` (`turnId`: undo the last turn and run it again), `turn.cancel`.
 WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`, `minds.updated`,
 `scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `thread.activity` (live agent status bar).
 
@@ -253,7 +261,7 @@ WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updat
 
 ```bash
 npm install
-npm test            # Vitest, 219 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 230 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -269,7 +277,10 @@ in that style.
   (fix planned as M1b, low priority).
 - Classic and NPC Story Mode rebuild prompts every turn, so provider caches rarely hit (Minds threads fix this).
 - Minds: dialogue is manual only (automatic mode is a TODO); "known as" names per observer and relation variables
-  are not built (doc 10 §14). The old engines are still on the active line until M8.
+  are not built; Retry replaces the last reply (no branching yet); switching a legacy story to Minds keeps the
+  transcript but the minds start fresh (doc 10 §14).
+- The legacy engines' code (classic pipeline, NPC Story Mode, scribes, memory maintenance, overseer, planner) is
+  still in the tree until M9.
 - NPC Story Mode: the storyteller sees present characters only by name (their one-liner reads memory facts,
   which that mode never writes).
 - Classic and NPC Story Mode never set a scene's location (the Minds narrator does).

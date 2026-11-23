@@ -122,6 +122,30 @@ describe('openaiDriver streaming', () => {
     await expect(openaiDriver({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/v1', preset: 'openrouter' }).chat(req())).rejects.toThrow(/ended the stream with an error/);
   });
 
+  it('retries a transient provider error (502, or an error event) when nothing has streamed yet', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls++;
+      if (calls === 1) return new Response('{"error":{"code":502,"message":"Provider returned error"}}', { status: 502 });
+      if (calls === 2) return sseResponse([{ error: { code: 502, message: 'Provider returned error' } }]);
+      return sseResponse([{ choices: [{ delta: { content: 'Fine.' }, finish_reason: 'stop' }] }, '[DONE]']);
+    });
+    const deltas: string[] = [];
+    const driver = openaiDriver({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/v1', preset: 'openrouter', transientDelayMs: 1 });
+    const r = await driver.chat(req(), (d) => deltas.push(d));
+    expect(r.text).toBe('Fine.');
+    expect(deltas).toEqual(['Fine.']);
+    expect(calls).toBe(3);
+
+    calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls++;
+      return new Response('{"error":{"code":502,"message":"Provider returned error"}}', { status: 502 });
+    });
+    await expect(driver.chat(req())).rejects.toThrow(/502/);
+    expect(calls).toBe(3); // 1 + 2 retries, then the error surfaces
+  });
+
   it('explains an OpenRouter rate limit in plain words', async () => {
     vi.stubGlobal('fetch', async () => new Response('{"error":{"code":429,"message":"Rate limit exceeded"}}', { status: 429 }));
     await expect(openaiDriver({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/v1', preset: 'openrouter', maxRetries: 0 }).chat(req())).rejects.toThrow(

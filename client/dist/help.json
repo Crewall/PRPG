@@ -121,7 +121,7 @@
     "id": "engine",
     "group": "Story setup",
     "title": "Engines",
-    "body": "Story options → Engine. Classic: one storyteller voices everyone, a scribe extracts memory facts. NPC story mode: present characters act from their personality and notes. Minds: one narrator plus a separate mind for each character, with sheets, variables, self-written memories and dialogue mode."
+    "body": "New stories use the Minds engine: one narrator plus a separate mind for every character, with sheets, variables, their own memories and dialogue mode. The classic engine and NPC story mode are retired: stories that use them keep working (marked legacy on the home page) and can switch to Minds in Story options; the minds then start fresh from that point."
   },
   {
     "id": "premise-tone",

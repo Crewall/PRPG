@@ -43,9 +43,8 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 - **Layer 3 — Memory (objects/facts, scoped views, scribe_memory, retrieval):** ✅ implemented (3a/3b/3c).
 - **Layer 4 — NPC agents (personas, isolation, consult loop):** ✅ implemented.
 - Layers 5–6 (rule overseer, debug/polish): designed in the original plan (`old/`), not built.
-- **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)) —
-  a per-story switch replacing the structured memory pipeline with per-NPC
-  narrative minds (proactive rounds, skip gate, seeding, NPC-minds panel).
+- **NPC Story Mode (extra):** ✅ implemented ([docs/09](docs/09-npc-story-mode.md)), now **legacy** like the
+  classic engine (Layers 1–4): both keep running the stories that use them; new stories use Minds.
 - **Settings UI (extra):** in-app page for provider connections (DeepSeek, OpenRouter and others at once, with
   test, model listing and limits), models, **model tiers** (Heavy / Medium / Light + your own; every AI role
   follows its tier), role mapping and each role's prompt. All persisted in the DB; `config.json` is just the
@@ -53,7 +52,8 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
 - **Minds engine** (docs 10–12): M1 (providers + tiers), M2 (character sheets, scenario variables, thoughts),
   M3 (thread builders), M4 (the round), M5 (dialogue mode), M6 (thread compaction) and M7 (the UI: character
   cards with Talk and Act next round, your own character, advanced mode with sheet editing and a POV view, the
-  scenario variable editor, the **?** help panel) ✅ built — **playable**: Story options → Engine → Minds.
+  scenario variable editor, the **?** help panel) and M8 (the old engines retired) ✅ built — **every new story is
+  a Minds story**. Retry (↻) writes the last reply again; a failed turn offers Retry or Discard.
 
 ## Running it
 
