@@ -80,6 +80,14 @@ export interface RunOptions {
   dialogue?: { partner: string };
 }
 
+/** The turn the client meant to act on is no longer the story's last one. */
+export class StaleTurnError extends Error {
+  constructor() {
+    super('the story changed since this page showed it — reload to see its latest message');
+    this.name = 'StaleTurnError';
+  }
+}
+
 export interface RewindResult {
   turnId: string;
   playerInput: string;
@@ -124,25 +132,64 @@ export class TurnPipeline {
    * snapshot — summaries, memory, scenes, sessions, transcript — and deletes
    * the turn. Throws when the story has no turns.
    */
-  async rewind(storyId: string): Promise<RewindResult> {
+  async rewind(storyId: string, opts: { expectTurnId?: string } = {}): Promise<RewindResult> {
     this.cancel(storyId); // halt any ongoing response; its turn becomes the one we delete
     return this.locks.withStory(storyId, async () => {
-      const { stories, agents, snapshots, events } = this.deps;
+      const { stories, events } = this.deps;
       if (!stories.getStory(storyId)) throw new Error(`story '${storyId}' not found`);
       const last = stories.lastTurn(storyId);
       if (!last) throw new Error('nothing to rewind — the story has no turns yet');
-
-      const restored = snapshots.restore(storyId, last.id);
-      if (!restored) {
-        // Pre-snapshot turn (older story): degrade to dropping the turn and its
-        // transcript messages; summaries/memory keep whatever the scribes wrote,
-        // and still-queued scribes no-op on the missing turn.
-        stories.deleteTurn(last.id);
-        agents.deleteMessagesForTurn(last.id);
-      }
+      // The client says which turn it means to remove. If the story moved on (or that turn is already gone),
+      // refuse rather than silently undoing an earlier, good turn.
+      if (opts.expectTurnId && last.id !== opts.expectTurnId) throw new StaleTurnError();
+      const restored = this.undoTurn(storyId, last.id);
       events.emit({ t: 'story.rewound', storyId, turnId: last.id, playerInput: last.playerInput });
       return { turnId: last.id, playerInput: last.playerInput, restored };
     });
+  }
+
+  /**
+   * Retry: undo the story's last turn (a failed attempt, or a reply the player wants written again) and run it
+   * once more with the same input and options. The earlier attempt is lost (branching is a TODO, docs/10 §14).
+   */
+  async retry(storyId: string, out: TurnEmitter, opts: { expectTurnId?: string } = {}): Promise<Turn | undefined> {
+    this.cancel(storyId);
+    return this.locks.withStory(storyId, async () => {
+      const last = this.deps.stories.lastTurn(storyId);
+      if (!last) return void out.error('', 'nothing to retry — the story has no turns yet'), undefined;
+      if (opts.expectTurnId && last.id !== opts.expectTurnId) return void out.error('', new StaleTurnError().message), undefined;
+      const req = (last.meta.request ?? {}) as RunOptions;
+      // Older dialogue turns kept no request: their partner is in the meta.
+      const runOpts: RunOptions = { ...req, ...(!req.dialogue && last.meta.mode === 'dialogue' && typeof last.meta.partner === 'string' ? { dialogue: { partner: last.meta.partner } } : {}) };
+      this.undoTurn(storyId, last.id);
+      return this.runLocked(storyId, last.playerInput, out, runOpts);
+    });
+  }
+
+  /** Undo one turn from its snapshot; without one (older stories), drop the turn and its transcript messages. */
+  private undoTurn(storyId: string, turnId: string): boolean {
+    const { stories, agents, snapshots } = this.deps;
+    const restored = snapshots.restore(storyId, turnId);
+    if (!restored) {
+      stories.deleteTurn(turnId);
+      agents.deleteMessagesForTurn(turnId);
+    }
+    return restored;
+  }
+
+  /**
+   * A failed, cancelled or interrupted attempt at the end of the story never happened: undo it before a new
+   * turn, so its input can't linger on screen while the AIs never saw it. (The client put that input back in
+   * the box when the attempt failed; Retry re-sends it.) Called under the story lock.
+   */
+  private discardTrailingFailures(storyId: string): number {
+    let n = 0;
+    for (let last = this.deps.stories.lastTurn(storyId); last && last.status !== 'complete'; last = this.deps.stories.lastTurn(storyId)) {
+      this.undoTurn(storyId, last.id);
+      n++;
+    }
+    if (n) logger.info('discarded failed attempts before a new turn', { storyId, count: n });
+    return n;
   }
 
   async run(storyId: string, playerInput: string, out: TurnEmitter, opts: RunOptions = {}): Promise<Turn | undefined> {
@@ -168,8 +215,11 @@ export class TurnPipeline {
 
     // Step 1 — backup (feature 1a): capture everything mutable BEFORE this turn
     // writes anything, so a rewind can restore the exact pre-message state.
+    this.discardTrailingFailures(storyId);
     const turn = stories.appendTurn({ storyId, playerInput, status: 'streaming' });
     this.deps.snapshots.capture(storyId, turn.id, turn.index);
+    // What was asked, so Retry can ask it again.
+    if (opts.dialogue || opts.force?.length) stories.updateTurn(turn.id, { meta: { request: { ...(opts.dialogue ? { dialogue: opts.dialogue } : {}), ...(opts.force?.length ? { force: opts.force } : {}) } } });
     out.accepted(turn.id);
 
     const aborter = new AbortController();

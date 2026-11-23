@@ -1,7 +1,8 @@
 # 09 — NPC Story Mode (narrative minds)
 
-**Status: ✅ implemented** (settings switch `npcStories.enabled`, off by
-default). This document is the spec it was built from, updated to match the
+**Status: ✅ implemented, now legacy** (doc 10 §13 M8: retired, it runs the stories that already use it; new
+stories use the Minds engine; deletion is M9). Settings switch `npcStories.enabled`, off by
+default. This document is the spec it was built from, updated to match the
 implementation.
 
 An alternative, per-story mode for NPC simulation that bypasses the structured

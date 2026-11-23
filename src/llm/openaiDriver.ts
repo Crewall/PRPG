@@ -26,6 +26,9 @@ export interface OpenAiOptions {
   preset?: ProviderPreset;
   timeoutMs?: number;
   maxRetries?: number;
+  /** Retries of a transient provider error before anything streamed (default 2), and the first pause. */
+  transientRetries?: number;
+  transientDelayMs?: number;
 }
 
 /** The request body for one chat completion (exported for tests). */
@@ -105,14 +108,14 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
   const preset = opts.preset ?? 'custom';
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const maxRetries = opts.maxRetries ?? 2;
+  const transientRetries = opts.transientRetries ?? 2;
+  const transientDelayMs = opts.transientDelayMs ?? 1500;
   // Models that rejected our reasoning switches (e.g. OpenRouter models whose
   // reasoning is mandatory, or that accept only some effort levels): learned
   // from the first rejection, so later calls go out without them.
   const noReasoningSwitch = new Set<string>();
 
-  return {
-    kind: 'openai_compat',
-    async chat(req: ChatRequest, onDelta?: OnDelta): Promise<ChatResult> {
+  const attempt = async (req: ChatRequest, onDelta?: OnDelta): Promise<ChatResult> => {
       let body = buildOpenAiBody(req, preset);
       if (noReasoningSwitch.has(req.model)) body = withoutReasoning(body);
 
@@ -189,6 +192,37 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
       if (stopReason === 'error') throw new LlmError('the provider ended the stream with an error', undefined, true);
 
       return { text, usage, model: req.model, stopReason };
+  };
+
+  return {
+    kind: 'openai_compat',
+    /**
+     * One call, retried on a transient provider error (5xx, "Provider returned error", an error event in the
+     * stream) as long as nothing has streamed yet — then a retry can't duplicate text the player already saw.
+     * Throttling (429/503) is retried earlier, per request, with the server's Retry-After.
+     */
+    async chat(req: ChatRequest, onDelta?: OnDelta): Promise<ChatResult> {
+      let streamed = false;
+      const tracked: OnDelta | undefined = onDelta ? (d) => { streamed = true; onDelta(d); } : undefined;
+      for (let i = 0; ; i++) {
+        try {
+          return await attempt(req, tracked);
+        } catch (err) {
+          const e = err as LlmError;
+          const transient = e instanceof LlmError && e.retryable && !/timeout/i.test(e.message);
+          if (!transient || streamed || req.signal?.aborted || i >= transientRetries) throw err;
+          logger.warn('provider error — retrying', { model: req.model, attempt: i + 1, err: e.message.slice(0, 200) });
+          await pause(transientDelayMs * 2 ** i, req.signal);
+        }
+      }
     },
   };
+}
+
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason); }, { once: true });
+  });
 }

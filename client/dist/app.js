@@ -45,14 +45,14 @@ function topbar(...right) {
 
 // ---------------- Home ----------------
 async function renderHome() {
-  app.replaceChildren(topbar(h('span', { class: 'badge' }, 'Layers 0–3')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
+  app.replaceChildren(topbar(), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
   let stories = [];
   try { stories = await api.get('/api/stories'); } catch {}
 
   const list = stories.length
     ? stories.map((s) =>
         h('div', { class: 'card story-card', onclick: () => (location.hash = `/play/${s.id}`) },
-          h('div', { class: 'meta' }, h('div', { class: 'title' }, s.title), h('div', { class: 'sub' }, `updated ${new Date(s.updatedAt).toLocaleString()}`)),
+          h('div', { class: 'meta' }, h('div', { class: 'title' }, s.title, s.settings?.engine && s.settings.engine !== 'minds' ? h('span', { class: 'badge legacy', title: 'Runs on a retired engine: it keeps working, new stories use Minds' }, s.settings.engine === 'npc_stories' ? 'legacy · NPC story mode' : 'legacy · classic') : null), h('div', { class: 'sub' }, `updated ${new Date(s.updatedAt).toLocaleString()}`)),
           h('button', { class: 'link', onclick: async (ev) => { ev.stopPropagation(); if (confirm('Delete this story?')) { await api.del(`/api/stories/${s.id}?hard=true`); route(); } } }, 'delete'),
         ),
       )
@@ -104,6 +104,7 @@ async function renderHome() {
       h('h2', {}, 'Your stories'), ...list,
       h('div', { class: 'card' },
         h('h3', { style: 'margin-top:0' }, 'New story'),
+        h('div', { class: 'sub' }, 'A narrator plus a separate mind for every character (the Minds engine). You choose who you play before the story opens. ', helpLink('engine')),
         h('label', {}, 'Title'), titleIn, h('label', {}, 'Genre'), genreIn, h('label', {}, 'Premise seed'), seedIn,
         h('div', { class: 'row', style: 'margin-top:14px; gap:10px; flex-wrap:wrap' }, createBtn, randomBtn, h('span', { class: 'sub' }, 'seeds'), seedCount),
         seedNote,
@@ -336,45 +337,48 @@ async function renderPlay(storyId) {
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
 
-    // Which engine plays this story (docs/10 §4).
-    const ENGINES = [
-      ['classic', 'Classic — one storyteller, extracted memory'],
-      ['npc_stories', 'NPC story mode — characters with narrative notes'],
-      ['minds', 'Minds (new) — narrator + a mind per character'],
-    ];
+    // Which engine plays this story (docs/10 §4, §13 M8). Minds is the engine; the classic
+    // engine and NPC story mode are retired: they keep running the stories that use them.
+    const isMinds = s.engine === 'minds';
+    const LEGACY = { classic: 'Classic (legacy) — one storyteller, extracted memory', npc_stories: 'NPC story mode (legacy) — characters with narrative notes' };
     const engineHint = h('div', { class: 'sub' });
-    const engineHints = {
-      classic: 'One storyteller voices everyone; a scribe extracts memory facts after each turn.',
-      npc_stories: 'Present characters act every round from their own personality and notes; the storyteller weaves them in.',
-      minds: 'Each character is its own AI mind with a sheet, variables and self-written memories; the narrator resolves each round and briefs every character on what they perceived. Say things in "quotes", put notes to the narrator in ((double parentheses)). Start with an empty message to open the story. Tap a character in the Present bar to talk with them directly (dialogue mode); end the conversation to let the narrator wrap it up.',
-    };
-    const engineSel = h('select', { onchange: async (e) => {
-      engineHint.textContent = engineHints[e.target.value] || '';
-      await patchSettings({ engine: e.target.value });
-      activeTab = e.target.value === 'minds' ? 'cast' : 'memory';
-      renderDrawer();
-      refreshSceneHeader();
-      updateInputPreview();
-    } }, ...ENGINES.map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)));
-    engineHint.textContent = engineHints[s.engine || 'classic'];
+    let engineBox;
+    if (isMinds) {
+      engineHint.textContent = 'Minds: a narrator plus a separate mind for every character, with sheets, variables, their own memories and dialogue mode.';
+      engineBox = h('div', {}, h('b', {}, 'Minds'));
+    } else {
+      engineHint.textContent = 'This story runs on a retired engine. It keeps working; new stories use Minds. Switching it to Minds keeps the transcript, but the minds start from here: they don\'t know the story so far.';
+      const engineSel = h('select', { onchange: async (e) => {
+        if (e.target.value !== 'minds') { await patchSettings({ engine: e.target.value }); return; }
+        if (!confirm('Switch this story to the Minds engine?\n\nThe transcript stays, but every mind starts fresh from here: they don\'t know the story so far. You can\'t switch back.')) { e.target.value = s.engine; return; }
+        await patchSettings({ engine: 'minds' });
+        modal.remove();
+        activeTab = 'cast';
+        renderDrawer(); refreshSceneHeader(); updateInputPreview();
+        showStoryOptions();
+      } },
+        ...Object.entries(LEGACY).map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)),
+        h('option', { value: 'minds' }, 'Minds — switch this story'));
+      engineBox = engineSel;
+    }
 
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
-        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine ', helpLink('engine')), engineSel, engineHint),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine ', helpLink('engine')), engineBox, engineHint),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Narrator tone'), h('div', { class: 'row', style: 'gap:8px' }, toneIn, toneStatus)),
-        toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
-          s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
-        toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
-          !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
-        toggle('NPC story mode (narrative minds)', 'Replaces the structured memory system for NPCs: each present character acts every round from its own personality + private notes, and the storyteller weaves the replies. Memory extraction is paused while this is on.',
-          !!s.npcStories?.enabled, async (on) => { await patchSettings({ npcStories: { ...(story.settings.npcStories || {}), enabled: on } }); renderDrawer(); }),
-        toggle('Salience system', 'Importance weighting & decay of memory objects.',
-          s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
-        budgetBlock,
-        npcBlock,
-        mindsBlock,
+        // The legacy engines' own options; a Minds story has its own section instead.
+        ...(isMinds ? [mindsBlock] : [
+          toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
+            s.adjudicator?.enabled !== false, (on) => patchSettings({ adjudicator: { enabled: on } })),
+          toggle('Summary-driven context', 'What the storyteller reads: off = recent chat history; on = summaries + planner-picked memory.',
+            !!s.context?.summaryDriven, (on) => patchSettings({ context: { summaryDriven: on } })),
+          toggle('Salience system', 'Importance weighting & decay of memory objects.',
+            s.salience?.enabled !== false, (on) => patchSettings({ salience: { enabled: on } })),
+          budgetBlock,
+          npcBlock,
+        ]),
         h('button', { class: 'ghost', onclick: () => modal.remove() }, 'Close')));
     document.body.append(modal);
   }
@@ -505,29 +509,46 @@ async function renderPlay(storyId) {
   }
 
   // Player dossier interview: 1–3 rounds of Q&A on its own AI thread.
+  // Nothing is lost when a request fails: an answer joins the history only once
+  // the server took it; the question and your answer stay on screen with
+  // "Try again"; progress is kept in this browser, so Cancel or a reload resumes.
   function openCharacterCreator() {
-    const exchanges = [];
-    let currentQ = '';
-    const qEl = h('div', { class: 'mem-summary', style: 'padding:0' }, 'The interviewer is thinking…');
+    const KEY = `prpg.interview.${storyId}`;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch {}
+    let exchanges = Array.isArray(saved?.exchanges) ? saved.exchanges : []; // answered and accepted
+    let currentQ = typeof saved?.question === 'string' ? saved.question : '';
+    let lastAttempt = null; // what the failed request sent, for "Try again"
+    const qEl = h('div', { class: 'mem-summary', style: 'padding:0' }, currentQ || 'The interviewer is thinking…');
     const aEl = h('textarea', { rows: '3', placeholder: 'Your answer…' });
+    aEl.value = typeof saved?.draft === 'string' ? saved.draft : '';
     const status = h('span', { class: 'sub' });
     const nextBtn = h('button', { class: 'primary', disabled: true }, 'Answer');
+    const retryBtn = h('button', { style: 'display:none' }, '↻ Try again');
+    const restartBtn = h('button', { class: 'link', title: 'Forget these answers and start the interview again' }, 'start over');
+    const keep = () => { try { localStorage.setItem(KEY, JSON.stringify({ exchanges, question: currentQ, draft: aEl.value })); } catch {} };
+    const forget = () => { try { localStorage.removeItem(KEY); } catch {} };
+    aEl.addEventListener('input', keep);
     let pending = null; // AbortController for the in-flight interview request
-    const cancel = () => { if (pending) pending.abort(new DOMException('cancelled', 'AbortError')); modal.remove(); };
+    const cancel = () => { if (pending) pending.abort(new DOMException('cancelled', 'AbortError')); keep(); modal.remove(); };
     const modal = h('div', { class: 'modal-bg' },
       h('div', { class: 'modal' },
         h('h3', {}, 'Who are you?'),
+        exchanges.length ? h('div', { class: 'sub' }, `${exchanges.length} answer${exchanges.length > 1 ? 's' : ''} kept from before.`) : null,
         qEl, aEl,
-        h('div', { class: 'row', style: 'gap:10px' }, nextBtn, h('button', { class: 'ghost', onclick: cancel }, 'Cancel'), status)));
-    async function ask() {
-      nextBtn.disabled = true; status.textContent = 'the interviewer is thinking…';
+        h('div', { class: 'row', style: 'gap:10px; flex-wrap:wrap; align-items:center' }, nextBtn, retryBtn, h('button', { class: 'ghost', onclick: cancel }, 'Cancel'), restartBtn, status)));
+    async function ask(attempt) {
+      lastAttempt = attempt;
+      nextBtn.disabled = true; retryBtn.style.display = 'none';
+      status.textContent = 'the interviewer is thinking…';
       // The dossier reply can be slow; abort rather than hang forever, and let
       // Cancel abort it immediately (the server stops generating when we do).
       pending = new AbortController();
       const timeout = setTimeout(() => pending.abort(new DOMException('timeout', 'AbortError')), 90_000);
       try {
-        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges }, { signal: pending.signal });
+        const r = await api.post(`/api/stories/${storyId}/player/interview`, { exchanges: attempt }, { signal: pending.signal });
         if (r.done) {
+          forget();
           modal.remove();
           story.settings = { ...(story.settings || {}), playerObjectId: r.objectId };
           addStatus(`(character created: ${r.name})`);
@@ -535,26 +556,39 @@ async function renderPlay(storyId) {
           showDossier(r.objectId);
           return;
         }
+        exchanges = attempt; // accepted: now it is history
         currentQ = r.question;
         qEl.textContent = r.question;
         aEl.value = '';
+        keep();
         status.textContent = `question ${r.round} of ${r.maxRounds}`;
-        nextBtn.disabled = false;
         aEl.focus();
       } catch (e) {
-        status.textContent = e.name === 'AbortError' ? '✗ cancelled — press Answer to try again' : '✗ ' + e.message;
-        nextBtn.disabled = false;
+        // Nothing is lost: the question and your answer stay; "Try again" sends the same thing.
+        status.textContent = e.name === 'AbortError' ? '✗ stopped (timeout or cancel)' : `✗ ${e.message}`;
+        retryBtn.style.display = '';
+        keep();
       } finally {
         clearTimeout(timeout); pending = null;
+        nextBtn.disabled = !currentQ;
       }
     }
     nextBtn.addEventListener('click', () => {
-      if (!aEl.value.trim()) return;
-      exchanges.push({ question: currentQ, answer: aEl.value.trim() });
-      ask();
+      if (!currentQ || !aEl.value.trim()) return;
+      ask([...exchanges, { question: currentQ, answer: aEl.value.trim() }]);
+    });
+    retryBtn.addEventListener('click', () => ask(lastAttempt ?? exchanges));
+    restartBtn.addEventListener('click', () => {
+      if (!confirm('Forget your answers and start the interview again?')) return;
+      if (pending) pending.abort(new DOMException('cancelled', 'AbortError'));
+      exchanges = []; currentQ = ''; aEl.value = ''; forget();
+      qEl.textContent = 'The interviewer is thinking…';
+      ask([]);
     });
     document.body.append(modal);
-    ask();
+    // Resume where it stopped: a question already on screen waits for its answer.
+    if (currentQ) { nextBtn.disabled = false; status.textContent = 'continuing where you left off'; aEl.focus(); }
+    else ask(exchanges);
   }
 
   // Character/object dossier: the full fact sheet with sorting and filtering
@@ -771,7 +805,7 @@ async function renderPlay(storyId) {
   // narration). Memory is left untouched server-side; later story flow may shift
   // (accepted). A bubble whose sibling is also emptied drops the whole turn.
   function messageBubble(cls, text, turnId, field) {
-    const b = h('div', { class: `bubble ${cls}` });
+    const b = h('div', { class: `bubble ${cls}`, 'data-turn': turnId });
     const textEl = h('span', { class: 'msg-text' }, text);
     const copyBtn = h('button', { class: 'link', title: 'copy this message' }, '⧉');
     copyBtn.addEventListener('click', async () => {
@@ -809,9 +843,67 @@ async function renderPlay(storyId) {
     });
   }
   async function deleteMessage(bubble, turnId, field) {
-    if (!confirm('Delete this message? Memory is unaffected; later story flow may shift.')) return;
+    const msg = story.settings?.engine === 'minds'
+      ? 'Remove this message from the transcript?\n\nThe characters still remember it. To undo the last turn completely, use Edit or ↻ Retry.'
+      : 'Delete this message? Memory is unaffected; later story flow may shift.';
+    if (!confirm(msg)) return;
     try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); }
     catch (e) { alert('delete failed: ' + e.message); }
+  }
+
+  // The story's last turn as this page knows it: Edit and Retry name it, so the
+  // server can refuse when the story has moved on (never undo an earlier turn by mistake).
+  let lastTurn = null; // { id, status, playerInput }
+
+  /** A failed or stopped attempt: say so, and offer to try again or drop it. */
+  function failedNotice(turnId, text) {
+    const retryB = h('button', { class: 'small primary', onclick: () => retryLast(turnId) }, '↻ Retry');
+    const discardB = h('button', { class: 'small ghost', title: 'Drop this attempt; your message goes back in the box', onclick: () => discardAttempt(turnId) }, 'Discard');
+    const b = h('div', { class: 'bubble error', 'data-turn': turnId }, h('div', {}, text), h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, retryB, discardB));
+    transcript.append(b);
+    scrollDown();
+    return b;
+  }
+
+  /** ↻ on the latest reply: write it again (the current one is replaced; branching is a later feature). */
+  function markLastReply() {
+    transcript.querySelectorAll('.retry-tool').forEach((el) => el.remove());
+    if (!lastTurn || lastTurn.status !== 'complete') return;
+    const bubble = [...transcript.querySelectorAll(`.bubble.narration[data-turn="${lastTurn.id}"]`)].at(-1);
+    const tools = bubble?.querySelector('.msg-tools');
+    if (!tools) return;
+    tools.append(h('button', { class: 'link retry-tool', title: 'Write this reply again (the current one is replaced)', onclick: () => {
+      if (confirm('Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) retryLast(lastTurn.id);
+    } }, '↻'));
+  }
+
+  /** Retry the last turn: the server undoes it and runs it again with the same message. */
+  function retryLast(turnId) {
+    if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
+    if (!wsOpen()) { addStatus('(not connected — tap the status dot for details)'); return; }
+    const text = lastTurn?.id === turnId ? lastTurn.playerInput : '';
+    transcript.querySelectorAll(`[data-turn="${turnId}"]`).forEach((el) => el.remove());
+    clearStage();
+    if (text && input.value.trim() === text.trim()) { input.value = ''; input.style.height = 'auto'; updateInputPreview(); }
+    currentTurnId = null;
+    pendingPlayerBubble = text ? addBubble('player', text) : null;
+    pendingPlayerText = text;
+    lastInput = text;
+    setBusy(true);
+    resetAgentStatus();
+    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId }));
+  }
+
+  /** Drop a failed attempt (its message goes back in the box). */
+  async function discardAttempt(turnId) {
+    try {
+      const r = await api.post(`/api/stories/${storyId}/rewind`, { turnId });
+      await redrawTranscript();
+      if (r.playerInput && !input.value.trim()) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
+    } catch (e) {
+      addStatus(`(${e.message})`);
+      await redrawTranscript();
+    }
   }
 
   // Load (or reload, after a rewind) the transcript from the server.
@@ -823,9 +915,18 @@ async function renderPlay(storyId) {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
       turnCount = turns.length;
       for (const t of turns) {
-        if (t.playerInput) { transcript.append(messageBubble('player', t.playerInput, t.id, 'playerInput')); }
-        if (t.narration) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+        const failed = t.status !== 'complete';
+        if (t.playerInput) {
+          const b = messageBubble('player', t.playerInput, t.id, 'playerInput');
+          if (failed) b.classList.add('failed');
+          transcript.append(b);
+        }
+        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
       }
+      const tail = turns.at(-1);
+      lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
+      if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
+      markLastReply();
       const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
         let name = 'them';
@@ -860,10 +961,13 @@ async function renderPlay(storyId) {
   let rewinding = false;
   rewindBtn.addEventListener('click', async () => {
     if (rewinding) return;
-    if (!confirm('Delete the last story message? This removes the storyteller’s latest response and restores memory & summaries to before it.')) return;
+    const failedLast = lastTurn && lastTurn.status !== 'complete';
+    if (!confirm(failedLast
+      ? 'Discard the failed attempt? Your message goes back in the box.'
+      : 'Delete the last exchange? This removes the latest response (and your message before it, which goes back in the box) and restores everything to before it.')) return;
     rewinding = true; rewindBtn.disabled = true;
     try {
-      const r = await api.post(`/api/stories/${storyId}/rewind`);
+      const r = await api.post(`/api/stories/${storyId}/rewind`, lastTurn ? { turnId: lastTurn.id } : {});
       current = null; setBusy(false);
       await redrawTranscript();
       if (r.playerInput) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
@@ -1300,9 +1404,15 @@ async function renderPlay(storyId) {
   function onWsMessage(ev) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
-      case 'turn.accepted': currentTurnId = m.turnId; current = addBubble('narration cursor', ''); showReplyStart(current); break;
+      case 'turn.accepted':
+        currentTurnId = m.turnId;
+        // The server dropped any failed attempt before this turn; drop it here too.
+        if (lastTurn && lastTurn.status !== 'complete' && lastTurn.id !== m.turnId) transcript.querySelectorAll(`[data-turn="${lastTurn.id}"]`).forEach((el) => el.remove());
+        if (pendingPlayerBubble) pendingPlayerBubble.dataset.turn = m.turnId;
+        lastTurn = { id: m.turnId, status: 'streaming', playerInput: pendingPlayerText || '' };
+        current = addBubble('narration cursor', ''); current.dataset.turn = m.turnId; showReplyStart(current); break;
       case 'turn.status': showStage(m.text); break;
-      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
+      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); if (currentTurnId) current.dataset.turn = currentTurnId; showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
       case 'turn.final':
         clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
@@ -1313,20 +1423,34 @@ async function renderPlay(storyId) {
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown();
+        lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
+        markLastReply();
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
           setDialogue(null);
           setTimeout(() => submitText('', false), 300);
         } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
         break;
-      case 'turn.rejected': clearStage(); if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
-      case 'turn.error':
+      case 'turn.rejected':
+      case 'turn.error': {
         clearStage();
         if (current) current.remove();
-        addBubble('error', `The turn failed — ${m.message}`);
+        const tid = m.turnId || currentTurnId;
+        // The attempt didn't happen: its message is marked as not delivered, with Retry / Discard.
+        if (pendingPlayerBubble) { pendingPlayerBubble.classList.add('failed'); if (tid) pendingPlayerBubble.dataset.turn = tid; }
+        if (tid) {
+          lastTurn = { id: tid, status: m.t === 'turn.rejected' ? 'rejected' : 'error', playerInput: pendingPlayerText || lastInput || '' };
+          failedNotice(tid, m.t === 'turn.rejected' ? 'Stopped.' : `The turn failed — ${m.message}`);
+        } else {
+          // Nothing ran (e.g. the story changed under a Retry): show the server's truth again.
+          redrawTranscript().then(() => addStatus(`(${m.message})`));
+        }
         // Don't lose the message: put it back in the box for another try.
-        if (!input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
-        current = null; pendingPlayerBubble = null; setBusy(false); break;
+        if (m.t === 'turn.error' && !input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
+        current = null; pendingPlayerBubble = null; setBusy(false);
+        markLastReply();
+        break;
+      }
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
@@ -1369,8 +1493,9 @@ async function renderPlay(storyId) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return false; }
     if (!wsOpen()) { addStatus('(not connected — your message is kept; tap the status dot for details)'); return false; }
     currentTurnId = null;
-    if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); pendingPlayerText = text; scrollDown(true); }
+    if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); scrollDown(true); }
     else pendingPlayerBubble = null;
+    pendingPlayerText = text;
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity

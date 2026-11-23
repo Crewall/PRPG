@@ -33,8 +33,8 @@
   {
     "id": "edit-rewind",
     "group": "Playing",
-    "title": "Edit, retry and rewind",
-    "body": "Edit removes the last turn and puts your message back in the box. Everything that turn changed is undone too: sheets, values, memories, threads, the clock. ⧉ copies a message, ✎ edits it, × deletes it. /retry sends your last message again."
+    "title": "Retry, edit and undo",
+    "body": "↻ on the latest reply writes it again (the current one is replaced, not kept). When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt and puts your message back in the box; sending something else drops it too. Edit undoes the last exchange completely (sheets, values, memories, threads, the clock) and puts your message back in the box. ⧉ copies a message, ✎ edits its text, × removes it from the transcript (in a Minds story the characters still remember it). /retry sends your last message again."
   },
   {
     "id": "cast-bar",
@@ -121,7 +121,7 @@
     "id": "engine",
     "group": "Story setup",
     "title": "Engines",
-    "body": "Story options → Engine. Classic: one storyteller voices everyone, a scribe extracts memory facts. NPC story mode: present characters act from their personality and notes. Minds: one narrator plus a separate mind for each character, with sheets, variables, self-written memories and dialogue mode."
+    "body": "New stories use the Minds engine: one narrator plus a separate mind for every character, with sheets, variables, their own memories and dialogue mode. The classic engine and NPC story mode are retired: stories that use them keep working (marked legacy on the home page) and can switch to Minds in Story options; the minds then start fresh from that point."
   },
   {
     "id": "premise-tone",
