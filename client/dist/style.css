@@ -425,3 +425,31 @@ td.vis.hidden { color: #ff8a8a; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 table.vars.rel th { text-align: left; font-weight: 500; padding: 2px 6px; }
 table.vars.rel td { padding: 2px 6px; white-space: nowrap; }
+
+/* ---- Scenario editor v2 (docs/11 §4.8) ---- */
+.def-groups { display: flex; flex-direction: column; gap: 14px; }
+.def-group { display: flex; flex-direction: column; gap: 6px; }
+.def-group-head { display: flex; flex-direction: column; gap: 2px; }
+.def-group-head h4 { margin: 0; font-size: 15px; }
+.def-empty { padding: 4px 0; }
+.def-card.v2 .def-head { display: flex; align-items: flex-start; gap: 8px; }
+.def-card.v2 .def-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.def-sentence { line-height: 1.4; }
+.def-problem:empty { display: none; }
+.def-add { gap: 6px; flex-wrap: wrap; }
+.chip-btn { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--text, inherit); cursor: pointer; }
+.chip-btn:hover { border-style: solid; border-color: var(--accent); }
+.chip-btn.custom { border-style: solid; }
+.def-form.v2 { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg-btn { font-size: 13px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: inherit; cursor: pointer; }
+.seg-btn.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.vis-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.vis-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: inherit; cursor: pointer; }
+.vis-card.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.pick-people { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.pick-people label { margin: 0; display: inline-flex; gap: 4px; align-items: center; }
+.def-more > summary { cursor: pointer; }
+.def-card.v2 .def-head .sub { flex: none; }
+.form-row input[type=checkbox], .form-row input[type=radio], .form-row input[type=range] { width: auto; flex: none; }
+.form-row label.sub { display: inline-flex; gap: 6px; align-items: center; margin: 0; }

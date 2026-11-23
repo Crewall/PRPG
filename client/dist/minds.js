@@ -382,98 +382,194 @@ export function thoughtsEditor(ctx, owner) {
   return box;
 }
 
-// ---- Scenario editor (docs/11 §4.8) ----
+// ---- Scenario editor (docs/11 §4.8): three groups, plain words, presets ----
 
-const TYPES = [['number', 'number'], ['text', 'short text'], ['choice', 'choice'], ['flag', 'yes / no'], ['list', 'list']];
-const blankDef = () => ({ key: '', label: '', type: 'number', min: 0, max: 10, default: 10, scope: 'character', appliesTo: 'all', visibility: 'self', changedBy: ['narrator'], description: '', changeGuide: '' });
+const KIND_BUTTONS = [['number', 'Number'], ['text', 'Words'], ['choice', 'One of a list'], ['flag', 'Yes / no'], ['list', 'A list of things']];
+const SCOPES = [
+  ['world', 'The world', 'One value for the whole story: weather, the day, an alarm level.'],
+  ['character', 'Each character', 'Every character (or some) has their own: health, mood, money.'],
+  ['relation', 'Between characters', 'One value per pair who have met: trust, affection, a debt.'],
+];
+const P = (label, d) => ({ label, d });
+const PRESETS = {
+  world: [
+    P('Weather', { key: 'weather', label: 'Weather', type: 'choice', options: ['clear', 'rain', 'storm', 'snow', 'fog'], default: 'clear', visibility: 'public', changedBy: ['narrator'], description: 'The weather where the story is.', changeGuide: 'Change it as time passes and the story needs.' }),
+    P('Day', { key: 'day', label: 'Day', type: 'number', min: 1, default: 1, visibility: 'public', changedBy: ['narrator'], description: 'Days since the story began.', changeGuide: 'Raise by 1 at each new day.' }),
+    P('Alarm', { key: 'alarm', label: 'Alarm', type: 'number', min: 0, max: 5, default: 0, visibility: 'hidden', changedBy: ['narrator'], bands: [{ upTo: 1, label: 'calm' }, { upTo: 3, label: 'watchful' }, { upTo: 5, label: 'hunting' }], description: 'How alert the authorities are.', changeGuide: 'Raise when the characters are noticed breaking the law; lower slowly while they lie low.' }),
+    P('Supplies', { key: 'supplies', label: 'Supplies', type: 'number', min: 0, default: 10, visibility: 'public', changedBy: ['narrator'], description: 'Days of food and water left for the group.', changeGuide: 'Lower by 1 per day; raise when they find or buy food.' }),
+  ],
+  character: [
+    P('Health', { key: 'health', label: 'Health', type: 'number', min: 0, max: 10, default: 10, maxStep: 4, bands: [{ upTo: 2, label: 'critical' }, { upTo: 5, label: 'hurt' }, { upTo: 10, label: 'fine' }], visibility: 'self', changedBy: ['narrator'], description: 'Physical condition. 0 = incapacitated, 10 = unhurt.', changeGuide: 'Lower by 1–4 when hurt; raise when treated or rested.' }),
+    P('Stamina', { key: 'stamina', label: 'Stamina', type: 'number', min: 0, max: 10, default: 8, maxStep: 3, visibility: 'self', changedBy: ['narrator'], description: 'Energy left for effort. 0 = exhausted.', changeGuide: 'Lower after exertion; restore with rest or food.' }),
+    P('Mood', { key: 'mood', label: 'Mood', type: 'text', maxWords: 6, default: 'calm', visibility: 'self', changedBy: ['narrator', 'self'], description: 'How they feel right now, in a few words.', changeGuide: 'Change it whenever the feeling shifts.' }),
+    P('Carrying', { key: 'carrying', label: 'Carrying', type: 'list', maxItems: 10, itemMaxWords: 5, visibility: 'self', changedBy: ['narrator', 'self'], description: 'What they have on them.', changeGuide: 'Add what they pick up or are given; remove what they drop, use up or lose.' }),
+    P('Money', { key: 'money', label: 'Money', type: 'number', min: 0, default: 10, unit: 'coins', visibility: 'self', changedBy: ['narrator'], description: 'Coins they have on them.', changeGuide: 'Subtract what they pay; add what they earn or find.' }),
+    P('Suspicion of you', { key: 'suspicion', label: 'Suspicion of you', type: 'number', min: 0, max: 100, default: 20, maxStep: 20, appliesTo: 'npcs', visibility: 'hidden', changedBy: ['narrator'], description: 'How much they suspect the player character. 0 = none, 100 = certain.', changeGuide: 'Raise on lies, slips or odd behaviour; lower when the player character proves trustworthy.' }),
+  ],
+  relation: [
+    P('Trust', { key: 'trust', label: 'Trust', type: 'number', min: 0, max: 10, default: 5, maxStep: 2, visibility: 'self', changedBy: ['narrator', 'self'], description: 'How much they trust that person. 0 = expects betrayal, 10 = complete trust.', changeGuide: 'Raise when they keep their word; lower on lies, betrayal or threats.' }),
+    P('Affection', { key: 'affection', label: 'Affection', type: 'number', min: 0, max: 10, default: 3, maxStep: 2, visibility: 'self', changedBy: ['narrator', 'self'], description: 'How much they like that person. 0 = loathing, 10 = love.', changeGuide: 'Change it slowly, as kindness or cruelty add up.' }),
+    P('Respect', { key: 'respect', label: 'Respect', type: 'number', min: 0, max: 10, default: 5, maxStep: 2, visibility: 'self', changedBy: ['narrator', 'self'], description: 'How highly they rate that person\'s skill and judgement.', changeGuide: 'Raise when they see competence or courage; lower on blunders or cowardice.' }),
+    P('Fear', { key: 'fear', label: 'Fear', type: 'number', min: 0, max: 10, default: 0, maxStep: 3, visibility: 'self', changedBy: ['narrator'], description: 'How afraid they are of that person.', changeGuide: 'Raise on threats or shown violence; lower when the threat passes.' }),
+    P('Debt', { key: 'debt', label: 'Debt', type: 'number', min: 0, default: 0, unit: 'coins', visibility: 'self', changedBy: ['narrator'], description: 'What they owe that person.', changeGuide: 'Add what they borrow; subtract what they repay.' }),
+    P('Rivalry (shared)', { key: 'rivalry', label: 'Rivalry', type: 'number', min: 0, max: 10, default: 0, mutual: true, visibility: 'public', changedBy: ['narrator'], description: 'Open competition between the two. 0 = none, 10 = bitter rivals.', changeGuide: 'Raise when they clash in front of others; lower when they make peace.' }),
+  ],
+};
 
-function defSummary(d) {
-  const range = d.type === 'number' ? `${d.min ?? '−∞'}…${d.max ?? '∞'}${d.unit ? ` ${d.unit}` : ''}` : d.type === 'choice' ? (d.options ?? []).join(' / ') : d.type === 'list' ? `list ≤ ${d.maxItems ?? 10}` : d.type === 'flag' ? 'yes / no' : `text ≤ ${d.maxWords ?? 8} words`;
-  const who = d.scope === 'world' ? 'world' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : { all: 'everyone', player: 'player', npcs: 'others' }[d.appliesTo] ?? 'everyone';
-  return `${range} · ${who} · ${d.visibility} · changed by ${(d.changedBy ?? []).join(' + ') || 'nobody'}`;
+const slugKey = (label) => (label || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/^(\d)/, 'v_$1').slice(0, 32) || 'value';
+const uniqueKey = (key, defs, self) => { let k = key; let n = 2; while (defs.some((d) => d !== self && d.key === k)) k = `${key.slice(0, 29)}_${n++}`; return k; };
+
+/** A definition in plain words: "a number 0–10, starts at 10. Every character has one. They see it; the narrator changes it." */
+function describeDef(d, people) {
+  const kind = d.type === 'number'
+    ? `a number${d.min != null && d.max != null ? ` ${d.min}–${d.max}` : d.min != null ? ` from ${d.min}` : d.max != null ? ` up to ${d.max}` : ''}${d.unit ? ` ${d.unit}` : ''}${d.default != null ? `, starts at ${d.default}` : ''}`
+    : d.type === 'text' ? `a few words${d.default ? `, starts as "${d.default}"` : ''}`
+    : d.type === 'choice' ? `one of: ${(d.options ?? []).join(' / ')}`
+    : d.type === 'flag' ? `yes or no${d.default ? ', starts as yes' : ''}`
+    : `a list of up to ${d.maxItems ?? 10} things`;
+  const nameList = (a) => a.map((x) => people.find((p) => p.handle === x)?.name ?? `#${x}`).join(', ');
+  const holders = d.appliesTo === 'player' ? 'Your character' : d.appliesTo === 'npcs' ? 'Every other character' : Array.isArray(d.appliesTo) ? nameList(d.appliesTo) : 'Every character';
+  const verb = Array.isArray(d.appliesTo) && d.appliesTo.length > 1 ? 'have' : 'has';
+  const who = d.scope === 'world' ? 'One for the whole story.'
+    : d.scope === 'relation' ? (d.mutual ? 'One shared value for each pair of characters who have met.' : `${holders} ${verb} one toward each person they have met.`)
+    : `${holders} ${verb} one.`;
+  const see = d.visibility === 'public' ? 'Everyone present sees it' : d.visibility === 'hidden' ? 'Only the narrator knows it' : d.scope === 'relation' ? (d.mutual ? 'Both see it' : 'They see their own') : 'They see it';
+  const ch = d.changedBy ?? [];
+  const changes = ch.includes('narrator') && ch.includes('self') ? 'they and the narrator change it' : ch.includes('self') ? 'they change it' : ch.includes('narrator') ? 'the narrator changes it' : 'nothing changes it';
+  return `${kind.charAt(0).toUpperCase()}${kind.slice(1)}. ${who} ${see}; ${changes}.`;
 }
 
-/** The form for one definition; `onChange` fires with the edited definition. */
-function defForm(d, onChange) {
-  const box = h('div', { class: 'def-form' });
-  const set = (patch) => { Object.assign(d, patch); onChange(); };
+/** A row of toggle buttons; `onPick(value)` on click. */
+function segmented(options, current, onPick) {
+  return h('div', { class: 'seg' }, ...options.map(([v, label]) => h('button', { type: 'button', class: `seg-btn${v === current ? ' on' : ''}`, onclick: () => onPick(v) }, label)));
+}
+
+/** The guided form for one definition (docs/11 §4.8). `onChange()` after every edit; `rerender()` after structural ones. */
+function defForm2(d, defs, people, onChange) {
+  const box = h('div', { class: 'def-form v2' });
+  let keyTouched = !!d.key && d.key !== slugKey(d.label);
+  const set = (patch, redraw = false) => { Object.assign(d, patch); onChange(); if (redraw) render(); };
   const num = (v) => (v === '' || v == null ? undefined : Number(v));
   const field = (label, el, hint) => row(label, el, hint);
-  const bind = (el, key, conv = (x) => x) => { el.addEventListener('change', () => set({ [key]: conv(el.type === 'checkbox' ? el.checked : el.value) })); return el; };
+  const bindIn = (el, key, conv = (x) => x) => { el.addEventListener('change', () => set({ [key]: conv(el.type === 'checkbox' ? el.checked : el.value) })); return el; };
   const render = () => {
-    const typeSel = select(TYPES, d.type);
-    typeSel.addEventListener('change', () => {
-      const t = typeSel.value;
-      const keep = { key: d.key, label: d.label, scope: d.scope, appliesTo: d.appliesTo, visibility: d.visibility, changedBy: d.changedBy, description: d.description, changeGuide: d.changeGuide, type: t };
-      for (const k of Object.keys(d)) delete d[k];
-      Object.assign(d, keep, t === 'number' ? { min: 0, max: 10, default: 10 } : t === 'choice' ? { options: ['one', 'two'] } : {});
-      onChange(); render();
+    const nameIn = input(d.label, { placeholder: 'e.g. Health, Trust, Weather' });
+    nameIn.addEventListener('input', () => {
+      d.label = nameIn.value;
+      if (!keyTouched) d.key = uniqueKey(slugKey(nameIn.value), defs, d);
+      keyIn.value = d.key;
+      onChange();
     });
-    const scopeSel = select([['character', 'each character'], ['world', 'the world (one value)']], d.scope);
-    scopeSel.addEventListener('change', () => { set({ scope: scopeSel.value }); render(); });
-    const appliesIn = input(Array.isArray(d.appliesTo) ? d.appliesTo.join(', ') : d.appliesTo, { placeholder: 'all, player, npcs, or #handles' });
-    appliesIn.addEventListener('change', () => {
-      const v = appliesIn.value.trim();
-      set({ appliesTo: ['all', 'player', 'npcs'].includes(v) ? v : v.split(',').map((x) => x.trim().replace(/^#/, '')).filter(Boolean) });
-    });
-    const changers = h('span', { class: 'row' }, ...['narrator', 'self'].map((who) => {
-      const cb = h('input', { type: 'checkbox' }); cb.checked = (d.changedBy ?? []).includes(who);
-      cb.addEventListener('change', () => set({ changedBy: ['narrator', 'self'].filter((w) => (w === who ? cb.checked : (d.changedBy ?? []).includes(w))) }));
-      return h('label', { class: 'sub' }, cb, who === 'self' ? ' the holder' : ' the narrator');
-    }));
-    const typeFields = [];
+    const keyIn = input(d.key, { placeholder: 'made from the name' });
+    keyIn.addEventListener('change', () => { keyTouched = true; set({ key: keyIn.value.trim() }); });
+
+    const kindFields = [];
     if (d.type === 'number') {
-      typeFields.push(h('div', { class: 'row form-grid' },
-        field('Min', bind(input(d.min ?? '', { type: 'number' }), 'min', num)),
-        field('Max', bind(input(d.max ?? '', { type: 'number' }), 'max', num)),
-        field('Default', bind(input(d.default ?? '', { type: 'number' }), 'default', num)),
-        field('Unit', bind(input(d.unit ?? ''), 'unit', (x) => x.trim() || undefined)),
-        field('Max step', bind(input(d.maxStep ?? '', { type: 'number', min: '0' }), 'maxStep', num), 'Largest change per round.')));
-      const bandsIn = input((d.bands ?? []).map((b) => `${b.upTo} ${b.label}`).join(', '), { placeholder: '2 critical, 5 hurt, 10 fine' });
-      bandsIn.addEventListener('change', () => set({ bands: bandsIn.value.split(',').map((x) => x.trim().match(/^(-?\d+(?:\.\d+)?)\s+(.+)$/)).filter(Boolean).map((m) => ({ upTo: Number(m[1]), label: m[2].trim() })) }));
-      typeFields.push(field('Bands', bandsIn, 'Labels shown next to the value: "up to 2 = critical", …'));
+      kindFields.push(h('div', { class: 'row form-grid' },
+        field('From', bindIn(input(d.min ?? '', { type: 'number', placeholder: 'no limit' }), 'min', num)),
+        field('To', bindIn(input(d.max ?? '', { type: 'number', placeholder: 'no limit' }), 'max', num)),
+        field('Starts at', bindIn(input(d.default ?? '', { type: 'number' }), 'default', num)),
+        field('Unit', bindIn(input(d.unit ?? '', { placeholder: 'coins, days…' }), 'unit', (x) => x.trim() || undefined))));
     } else if (d.type === 'text') {
-      typeFields.push(h('div', { class: 'row form-grid' }, field('Default', bind(input(d.default ?? ''), 'default', (x) => x || undefined)), field('Max words', bind(input(d.maxWords ?? 8, { type: 'number', min: '1' }), 'maxWords', num))));
+      kindFields.push(h('div', { class: 'row form-grid' }, field('Starts as', bindIn(input(d.default ?? '', { placeholder: 'calm' }), 'default', (x) => x || undefined)), field('At most (words)', bindIn(input(d.maxWords ?? 8, { type: 'number', min: '1' }), 'maxWords', num))));
     } else if (d.type === 'choice') {
-      typeFields.push(h('div', { class: 'row form-grid' },
-        field('Options', bind(input((d.options ?? []).join(', ')), 'options', (x) => x.split(',').map((o) => o.trim()).filter(Boolean)), 'comma-separated'),
-        field('Default', bind(input(d.default ?? ''), 'default', (x) => x.trim() || undefined))));
+      const opts = textarea((d.options ?? []).join('\n'), 3, { placeholder: 'one option per line' });
+      opts.addEventListener('change', () => set({ options: opts.value.split(/[\n,]/).map((o) => o.trim()).filter(Boolean) }, true));
+      kindFields.push(h('div', { class: 'row form-grid' }, field('Options', opts, 'One per line.'),
+        field('Starts as', bindIn(select([['', '(the first)'], ...(d.options ?? []).map((o) => [o, o])], d.default ?? ''), 'default', (x) => x || undefined))));
     } else if (d.type === 'flag') {
       const cb = h('input', { type: 'checkbox' }); cb.checked = !!d.default;
-      typeFields.push(h('label', { class: 'sub' }, bind(cb, 'default'), ' starts as yes'));
+      kindFields.push(h('label', { class: 'sub' }, bindIn(cb, 'default'), ' starts as yes'));
     } else if (d.type === 'list') {
-      typeFields.push(h('div', { class: 'row form-grid' },
-        field('Starts with', bind(input((d.default ?? []).join(', ')), 'default', (x) => x.split(',').map((o) => o.trim()).filter(Boolean)), 'comma-separated'),
-        field('Max items', bind(input(d.maxItems ?? 10, { type: 'number', min: '1' }), 'maxItems', num)),
-        field('Words per item', bind(input(d.itemMaxWords ?? 6, { type: 'number', min: '1' }), 'itemMaxWords', num))));
+      kindFields.push(h('div', { class: 'row form-grid' },
+        field('Starts with', bindIn(input((d.default ?? []).join(', '), { placeholder: 'a knife, a rope' }), 'default', (x) => x.split(',').map((o) => o.trim()).filter(Boolean)), 'Comma-separated.'),
+        field('At most (things)', bindIn(input(d.maxItems ?? 10, { type: 'number', min: '1' }), 'maxItems', num))));
     }
-    fill(box, 
+
+    // Who has it.
+    const scopeRow = segmented(SCOPES.map(([v, l]) => [v, l]), d.scope ?? 'character', (v) => {
+      const patch = { scope: v };
+      if (v === 'world') { patch.appliesTo = 'all'; patch.mutual = false; patch.changedBy = (d.changedBy ?? []).filter((x) => x !== 'self'); if (d.visibility === 'self') patch.visibility = 'public'; }
+      if (v !== 'relation') patch.mutual = false;
+      set(patch, true);
+    });
+    const holderMode = Array.isArray(d.appliesTo) ? 'chosen' : d.appliesTo ?? 'all';
+    const chosen = new Set(Array.isArray(d.appliesTo) ? d.appliesTo : []);
+    const pick = h('div', { class: `pick-people${holderMode === 'chosen' ? '' : ' gone'}` },
+      ...(people.length ? people.map((p) => {
+        const cb = h('input', { type: 'checkbox' }); cb.checked = chosen.has(p.handle);
+        cb.addEventListener('change', () => { if (cb.checked) chosen.add(p.handle); else chosen.delete(p.handle); set({ appliesTo: [...chosen] }); });
+        return h('label', { class: 'sub' }, cb, ` ${p.isPlayer ? '🎭 ' : ''}${p.name}`);
+      }) : [h('span', { class: 'sub' }, 'No characters yet.')]));
+    const holderRow = d.scope === 'world' ? null : h('div', {},
+      segmented([['all', 'Everyone'], ['player', 'Only your character'], ['npcs', 'The others'], ['chosen', 'Chosen…']], holderMode, (v) => set({ appliesTo: v === 'chosen' ? [...chosen] : v }, true)),
+      pick);
+    const mutualBox = d.scope === 'relation' ? (() => {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = !!d.mutual;
+      cb.addEventListener('change', () => set({ mutual: cb.checked }));
+      return h('label', { class: 'sub' }, cb, ' Shared: one value per pair (a rivalry), instead of one each way (her trust in him, his in her)');
+    })() : null;
+
+    // Who can see it.
+    const visOptions = d.scope === 'world'
+      ? [['public', 'Everyone present', 'Characters and you see it.'], ['hidden', 'Only the narrator', 'A secret the story tracks.']]
+      : [['public', 'Everyone present', 'Anyone around sees it ("visibly hurt").'], ['self', d.scope === 'relation' ? 'Only the one who feels it' : 'Only them', 'And the narrator.'], ['hidden', 'Only the narrator', 'Not even they know it.']];
+    const visRow = h('div', { class: 'vis-cards' }, ...visOptions.map(([v, label, hint]) =>
+      h('button', { type: 'button', class: `vis-card${d.visibility === v ? ' on' : ''}`, onclick: () => set({ visibility: v, ...(v === 'hidden' ? { changedBy: (d.changedBy ?? []).filter((x) => x !== 'self') } : {}) }, true) },
+        h('b', {}, label), h('span', { class: 'sub' }, hint))));
+
+    // Who changes it.
+    const changers = h('div', { class: 'row', style: 'gap:12px; flex-wrap:wrap' }, ...[['narrator', 'The narrator'], ['self', d.scope === 'relation' ? 'They themselves (their own side)' : 'They themselves']].map(([who, label]) => {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = (d.changedBy ?? []).includes(who);
+      const blocked = who === 'self' && (d.scope === 'world' || d.visibility === 'hidden');
+      if (blocked) { cb.checked = false; cb.disabled = true; }
+      cb.addEventListener('change', () => set({ changedBy: ['narrator', 'self'].filter((w) => (w === who ? cb.checked : (d.changedBy ?? []).includes(w))) }));
+      return h('label', { class: 'sub', title: blocked ? (d.scope === 'world' ? 'The world has no "they"' : 'They can\'t change what they can\'t see') : '' }, cb, ` ${label}`);
+    }));
+
+    // More: key, step limit, labelled ranges.
+    const bandsIn = input((d.bands ?? []).map((b) => `${b.upTo} ${b.label}`).join(', '), { placeholder: '2 critical, 5 hurt, 10 fine' });
+    bandsIn.addEventListener('change', () => set({ bands: bandsIn.value.split(',').map((x) => x.trim().match(/^(-?\d+(?:\.\d+)?)\s+(.+)$/)).filter(Boolean).map((m) => ({ upTo: Number(m[1]), label: m[2].trim() })) }));
+    const more = h('details', { class: 'def-more' }, h('summary', { class: 'sub' }, 'More'),
       h('div', { class: 'row form-grid' },
-        field('Key', bind(input(d.key, { placeholder: 'health' }), 'key', (x) => x.trim()), 'lowercase, digits, _'),
-        field('Label', bind(input(d.label, { placeholder: 'Health' }), 'label', (x) => x.trim())),
-        field('Type', typeSel)),
-      ...typeFields,
-      h('div', { class: 'row form-grid' },
-        field('Held by', scopeSel),
-        d.scope === 'character' ? field('Which characters', appliesIn) : null,
-        field('Visibility', bind(select([['public', 'public: everyone present sees it'], ['self', 'self: holder + narrator'], ['hidden', 'hidden: narrator only']], d.visibility), 'visibility'))),
-      field('Who may change it', changers, 'You can always change values in advanced mode.'),
-      field('What it means (for the AIs)', bind(textarea(d.description, 2), 'description')),
-      field('When and how to change it (for the AIs)', bind(textarea(d.changeGuide, 2), 'changeGuide')),
-    );
+        field('Key (for the AIs)', keyIn, 'Lowercase letters, digits and _.'),
+        d.type === 'number' ? field('Largest change per round', bindIn(input(d.maxStep ?? '', { type: 'number', min: '0', placeholder: 'any' }), 'maxStep', num)) : null,
+        d.type === 'list' ? field('Words per thing', bindIn(input(d.itemMaxWords ?? 6, { type: 'number', min: '1' }), 'itemMaxWords', num)) : null),
+      d.type === 'number' ? field('Labelled ranges', bandsIn, 'Shown next to the value so the AIs read numbers the same way: "up to 2 = critical, up to 5 = hurt…"') : null);
+
+    fill(box,
+      field('Name', nameIn),
+      h('div', { class: 'form-row' }, h('span', { class: 'sub' }, 'What kind of value'), segmented(KIND_BUTTONS, d.type, (t) => {
+        if (t === d.type) return;
+        const keep = { key: d.key, label: d.label, scope: d.scope, appliesTo: d.appliesTo, mutual: d.mutual, visibility: d.visibility, changedBy: d.changedBy, description: d.description, changeGuide: d.changeGuide, type: t };
+        for (const k of Object.keys(d)) delete d[k];
+        Object.assign(d, keep, t === 'number' ? { min: 0, max: 10, default: 5 } : t === 'choice' ? { options: ['one', 'two'] } : {});
+        onChange(); render();
+      })),
+      ...kindFields,
+      h('div', { class: 'form-row' }, h('span', { class: 'sub' }, 'Who has it'), scopeRow, holderRow, mutualBox),
+      h('div', { class: 'form-row' }, h('span', { class: 'sub' }, 'Who can see it'), visRow),
+      h('div', { class: 'form-row' }, h('span', { class: 'sub' }, 'Who changes it'), changers, h('span', { class: 'hint' }, 'You can always change values yourself in advanced mode.')),
+      field('What it means (for the AIs)', bindIn(textarea(d.description, 2, { placeholder: 'e.g. Physical condition. 0 = unconscious, 10 = unhurt.' }), 'description')),
+      field('When it changes (for the AIs)', bindIn(textarea(d.changeGuide, 2, { placeholder: 'e.g. Lower by 1–4 when hurt; raise when treated or rested.' }), 'changeGuide')),
+      more);
   };
   render();
   return box;
 }
 
 export async function openScenarioEditor(ctx) {
-  let defs, templates;
-  try { [defs, templates] = await Promise.all([api.get(`/api/stories/${ctx.storyId}/variables/defs`), api.get('/api/minds/templates')]); } catch (e) { alert(e.message); return; }
+  let defs, templates, people = [];
+  try {
+    [defs, templates] = await Promise.all([api.get(`/api/stories/${ctx.storyId}/variables/defs`), api.get('/api/minds/templates')]);
+    people = (await mindsView(ctx)).characters.map((c) => ({ handle: c.handle, name: c.name, isPlayer: c.isPlayer }));
+  } catch (e) { if (!defs) { alert(e.message); return; } }
   defs = defs.map((d) => ({ ...d }));
-  const list = h('div', { class: 'def-list' });
+  const groups = h('div', { class: 'def-groups' });
   const preview = h('div', { class: 'def-preview' });
   const err = errLine();
-  let open = -1;
+  let open = null; // the definition being edited
+  let problems = '';
   let timer = null;
   const clean = () => defs.map(({ id: _id, storyId: _s, order: _o, ...d }) => d);
   const refreshPreview = () => {
@@ -481,49 +577,99 @@ export async function openScenarioEditor(ctx) {
     timer = setTimeout(async () => {
       try {
         const p = await api.post(`/api/stories/${ctx.storyId}/variables/preview`, { defs: clean() });
-        err.textContent = '';
-        fill(preview, 
+        problems = ''; err.textContent = '';
+        fill(preview,
           h('div', { class: 'sub' }, 'A character reads (in its own prompt):'), h('pre', { class: 'thread-payload' }, p.character.join('\n')),
           h('div', { class: 'sub' }, 'The narrator reads:'), h('pre', { class: 'thread-payload' }, p.narrator.join('\n') || '(none)'));
-      } catch (e) { err.textContent = e.message; }
+      } catch (e) { problems = e.message; err.textContent = e.message; }
+      markProblems();
     }, 300);
   };
-  const renderList = () => {
-    fill(list, ...defs.map((d, i) => h('div', { class: `def-card${open === i ? ' open' : ''}` },
-      h('div', { class: 'def-head', onclick: () => { open = open === i ? -1 : i; renderList(); } },
-        h('b', {}, d.label || d.key || '(new variable)'), h('span', { class: 'sub' }, ` ${d.key ? `${d.key} · ` : ''}${d.type} · ${defSummary(d)}`),
+  /** Put each problem on the card it belongs to ('health': …). */
+  const markProblems = () => {
+    for (const el of groups.querySelectorAll('.def-card')) {
+      const d = defs[Number(el.dataset.i)];
+      const mine = problems.split(/;\s*/).filter((p) => d?.key && (p.includes(`'${d.key}'`) || p.includes(`${d.key}:`)));
+      const slot = el.querySelector('.def-problem');
+      if (slot) slot.textContent = mine.join(' · ');
+    }
+  };
+  const move = (d, dir) => {
+    const same = defs.filter((x) => (x.scope ?? 'character') === (d.scope ?? 'character'));
+    const k = same.indexOf(d);
+    const other = same[k + dir];
+    if (!other) return;
+    const a = defs.indexOf(d), b = defs.indexOf(other);
+    [defs[a], defs[b]] = [defs[b], defs[a]];
+    renderGroups(); refreshPreview();
+  };
+  const card = (d) => {
+    const i = defs.indexOf(d);
+    const summary = h('div', { class: 'sub def-sentence' }, describeDef(d, people));
+    return h('div', { class: `def-card v2${open === d ? ' open' : ''}`, 'data-i': String(i) },
+      h('div', { class: 'def-head', onclick: () => { open = open === d ? null : d; renderGroups(); } },
+        h('div', { class: 'def-title' }, h('b', {}, d.label || '(new variable)'), summary, h('div', { class: 'sub err def-problem' })),
         h('span', { class: 'def-tools' },
-          h('button', { class: 'ghost small', title: 'Move up', disabled: i === 0 ? true : null, onclick: (e) => { e.stopPropagation(); [defs[i - 1], defs[i]] = [defs[i], defs[i - 1]]; open = -1; renderList(); refreshPreview(); } }, '↑'),
-          h('button', { class: 'ghost small', title: 'Move down', disabled: i === defs.length - 1 ? true : null, onclick: (e) => { e.stopPropagation(); [defs[i + 1], defs[i]] = [defs[i], defs[i + 1]]; open = -1; renderList(); refreshPreview(); } }, '↓'),
+          h('button', { class: 'ghost small', title: 'Move up', onclick: (e) => { e.stopPropagation(); move(d, -1); } }, '↑'),
+          h('button', { class: 'ghost small', title: 'Move down', onclick: (e) => { e.stopPropagation(); move(d, 1); } }, '↓'),
           h('button', { class: 'ghost small', title: 'Delete', onclick: (e) => {
             e.stopPropagation();
             if (!confirm(`Delete "${d.label || d.key}"? Values already stored for it are lost when you save.`)) return;
-            defs.splice(i, 1); open = -1; renderList(); refreshPreview();
+            defs.splice(defs.indexOf(d), 1); if (open === d) open = null; renderGroups(); refreshPreview();
           } }, '×'))),
-      open === i ? defForm(d, () => { refreshPreview(); const head = list.children[i]?.querySelector('.def-head .sub'); if (head) head.textContent = ` ${d.key ? `${d.key} · ` : ''}${d.type} · ${defSummary(d)}`; }) : null)));
-    if (!defs.length) list.append(h('div', { class: 'sub' }, 'No variables yet: start from a template, or add one.'));
+      open === d ? defForm2(d, defs, people, () => { summary.textContent = describeDef(d, people); const t = summary.previousSibling; if (t) t.textContent = d.label || '(new variable)'; refreshPreview(); }) : null);
+  };
+  const addDef = (scope, preset) => {
+    const base = preset ? JSON.parse(JSON.stringify(preset)) : { label: '', key: '', type: 'number', min: 0, max: 10, default: 5, visibility: scope === 'world' ? 'public' : 'self', changedBy: ['narrator'], description: '', changeGuide: '' };
+    const d = { appliesTo: 'all', mutual: false, ...base, scope };
+    d.key = uniqueKey(d.key || slugKey(d.label || 'value'), defs, d);
+    defs.push(d);
+    open = d;
+    renderGroups(); refreshPreview();
+  };
+  const renderGroups = () => {
+    fill(groups, ...SCOPES.map(([scope, title, hint]) => {
+      const mine = defs.filter((d) => (d.scope ?? 'character') === scope);
+      const taken = new Set(defs.map((d) => d.key));
+      return h('section', { class: 'def-group' },
+        h('div', { class: 'def-group-head' }, h('h4', {}, title), h('span', { class: 'sub' }, hint)),
+        ...(mine.length ? mine.map(card) : [h('div', { class: 'sub def-empty' }, 'None yet.')]),
+        h('div', { class: 'row def-add' },
+          ...PRESETS[scope].filter((p) => !taken.has(p.d.key)).map((p) => h('button', { class: 'chip-btn', title: describeDef({ scope, appliesTo: 'all', ...p.d }, people), onclick: () => addDef(scope, p.d) }, `+ ${p.label}`)),
+          h('button', { class: 'chip-btn custom', onclick: () => addDef(scope) }, '+ Your own')));
+    }));
+    markProblems();
   };
   const tplSel = select([['', 'Start from a template…'], ...templates.map((t) => [t.id, `${t.label} — ${t.description}`])], '');
+  const tplChoice = h('span', { class: 'row', style: 'gap:6px' });
+  const useTemplate = (t, replace) => {
+    const incoming = t.variables.map((d) => ({ ...d }));
+    if (replace) defs = incoming;
+    else for (const d of incoming) if (!defs.some((x) => x.key === d.key)) defs.push(d);
+    tplSel.value = ''; fill(tplChoice); open = null; renderGroups(); refreshPreview();
+  };
   tplSel.addEventListener('change', () => {
     const t = templates.find((x) => x.id === tplSel.value);
-    tplSel.value = '';
-    if (!t) return;
-    if (defs.length && !confirm(`Replace the ${defs.length} variable(s) in the list with "${t.label}"?`)) return;
-    defs = t.variables.map((d) => ({ ...d }));
-    open = -1; renderList(); refreshPreview();
+    if (!t) return fill(tplChoice);
+    if (!defs.length) return useTemplate(t, true);
+    fill(tplChoice,
+      h('button', { class: 'small primary', onclick: () => useTemplate(t, false) }, 'Add to mine'),
+      h('button', { class: 'small', onclick: () => useTemplate(t, true) }, 'Replace mine'),
+      h('button', { class: 'small ghost', onclick: () => { tplSel.value = ''; fill(tplChoice); } }, 'Cancel'));
   });
   const saved = h('span', { class: 'sub' });
   const m = modal('Scenario variables',
-    h('div', { class: 'row', style: 'gap:8px; flex-wrap:wrap; align-items:center' }, tplSel, h('button', { onclick: () => { defs.push(blankDef()); open = defs.length - 1; renderList(); } }, '+ Add variable'), helpLink('scenario')),
-    list,
-    h('details', { open: true }, h('summary', { class: 'sub' }, 'Preview: how the AIs will read it'), preview),
+    h('div', { class: 'sub' }, 'What the story keeps track of, in numbers and words. The narrator and the characters read and change these by the rules you set here. ', helpLink('scenario')),
+    h('div', { class: 'row', style: 'gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0' }, tplSel, tplChoice),
+    groups,
+    h('details', {}, h('summary', { class: 'sub' }, 'Preview: how the AIs will read it'), preview),
     err,
     h('div', { class: 'row', style: 'gap:8px; justify-content:flex-end' }, saved,
       h('button', { class: 'primary', onclick: async () => {
         err.textContent = ''; saved.textContent = '';
-        try { await api.put(`/api/stories/${ctx.storyId}/variables/defs`, { defs: clean() }); saved.textContent = 'Saved.'; ctx.refresh(); setTimeout(() => m.close(), 400); } catch (e) { err.textContent = e.message; }
-      } }, 'Save scenario')));
-  renderList();
+        try { await api.put(`/api/stories/${ctx.storyId}/variables/defs`, { defs: clean() }); saved.textContent = 'Saved.'; ctx.refresh(); setTimeout(() => m.close(), 400); } catch (e) { err.textContent = e.message; problems = e.message; markProblems(); }
+      } }, 'Save')));
+  renderGroups();
   refreshPreview();
 }
 

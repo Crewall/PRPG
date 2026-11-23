@@ -149,8 +149,8 @@
   {
     "id": "scenario",
     "group": "Story setup",
-    "title": "Scenario variables and templates",
-    "body": "Story options → Scenario: the variables this story tracks. Start from a template or from scratch, then add, edit, reorder or delete. For each: type and range, who holds it (every character, the player, the others, or the world), visibility, who may change it, and guidance for the AIs on when and how. The preview shows exactly how a character and the narrator will read it."
+    "title": "Scenario variables",
+    "body": "Story options → Scenario (or ⚙ on the Cast tab): what the story keeps track of, in three groups. The world: one value for the story (weather, the day). Each character: everyone, your character, the others, or chosen characters have their own (health, mood, money). Between characters: one value per pair who have met (trust, affection, a debt); shared ones (a rivalry) are one value per pair. Tap a quick preset or + Your own, then answer in plain words: the name, what kind of value, who has it, who can see it, who changes it, and what it means and when it changes (the AIs read these). Each card sums a variable up in a sentence; problems show on the card. A template fills the list (add to yours, or replace). The preview shows exactly how a character and the narrator will read it."
   },
   {
     "id": "engine",
