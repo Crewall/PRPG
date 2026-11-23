@@ -30,12 +30,15 @@ is right.
     - M7 the UI (character cards, advanced mode, sheet and scenario editors, POV, help panel;
       `client/dist/minds.js`, `help.js`, `help.json`);
     - M8 the old engines retired (new stories are Minds; legacy stories keep running);
-  - shared: rewind/edit and Retry (failed attempts are dropped before the next turn), the premise randomizer, the
+    - names that are learned (known-as labels, neutral handles; `src/minds/names.ts`) and the director that works
+      out who the player is talking to (`src/minds/director.ts`);
+    - overload handling: real waits on 429/503, a fallback model per tier, job backoff, re-seeding;
+  - shared: rewind/edit and ↻ regenerate on every reply (failed attempts are dropped before the next turn), the premise randomizer, the
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
-  - 230 passing tests.
+  - 245 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
-  dialogue mode, referee + dice for special cases, "known as" names, relation variables (doc 10 §14).
+  dialogue mode, referee + dice for special cases, relation variables, a reload-on-update check (doc 10 §14).
 
   Build order: doc 10 §13. M1–M8 are done. Next: M9 (delete the legacy engines) only on the owner's go-ahead.
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on

@@ -9,8 +9,8 @@ design docs (the original 01–08 plan) are in [`/old`](../old/README.md); don't
 | Doc | What it specifies | Status |
 |---|---|---|
 | [09-npc-story-mode](09-npc-story-mode.md) | NPC Story Mode: narrative character minds in the current code | **Built, legacy** (retired in M8: runs existing stories only). Two gaps: §5 storyteller one-liners, §4 scene location. |
-| [10-minds-engine](10-minds-engine.md) | Next engine: one narrator, a thread per character, briefs, dialogue mode, advanced mode, help panel | **M1–M8 built: the engine for new stories.** M9 (deleting the legacy engines) waits for the owner. Build order in §13. |
-| [11-character-sheets](11-character-sheets.md) | Description, appearance, state, scenario variables, self-written thoughts | **Built** (M2, M4, M6, the public profile). |
+| [10-minds-engine](10-minds-engine.md) | Next engine: one narrator, a thread per character, briefs, dialogue mode, advanced mode, help panel | **M1–M8 built: the engine for new stories**, with learned names and the director (§5.1b). M9 (deleting the legacy engines) waits for the owner. Build order in §13. |
+| [11-character-sheets](11-character-sheets.md) | Description, appearance, state, scenario variables, self-written thoughts | **Built** (M2, M4, M6, the public profile, names: §2.5). |
 | [12-models-and-providers](12-models-and-providers.md) | Provider connections (DeepSeek, OpenRouter first), model tiers, caching | **M1 built.** M1b (Claude via the official SDK) not built. |
 
 ## Conventions

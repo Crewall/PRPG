@@ -1,6 +1,6 @@
 # 12 — Models, providers, tiers and caching
 
-**Status: M1 built** (connections, tiers, DeepSeek + OpenRouter, usage capture, Settings page). **M1b (Claude via
+**Status: M1 built** (connections, tiers, DeepSeek + OpenRouter, usage capture, Settings page), plus overload handling (§6.1: waits, a fallback model per tier, job backoff). **M1b (Claude via
 the official SDK) not built**, low priority. Milestone of [doc 10](10-minds-engine.md); it applies to all engines,
 not only Minds.
 
@@ -231,7 +231,17 @@ purchased, **1000** with at least 10 (the owner's account has the 1000 tier). A 
 - **Display (built):** each tier row shows its provider's requests today; each provider block shows its own count.
   *TODO:* a status-bar warning when a tier on a `:free` model passes 80% of its daily limit.
 - **Behaviour at the limit (built):** an OpenRouter 429 fails the call with a plain-language message (limits,
-  what to do), after the bounded backoff, never a silent retry loop. *TODO:* automatic fallback to another tier.
+  what to do), after the bounded backoff, never a silent retry loop.
+- **Overloaded providers (built).** Free models are often "temporarily rate-limited upstream": the provider is
+  overloaded, not the user's quota. So:
+  - a 429/503 waits the server's `Retry-After`, or the rate-limit reset OpenRouter puts in its error body
+    (`X-RateLimit-Reset`), else 3 s, 9 s, 27 s; each wait is announced (`provider.waiting`) and the page's live
+    line says "the provider is busy — trying again in N s…";
+  - a tier may name a **fallback model** on the same connection ("if busy, use"): OpenRouter gets it as its own
+    `models` list and routes by itself; other providers switch to it once the retries are spent, before anything
+    streamed;
+  - background jobs back off between attempts (15 s, 1 min, 4 min); a mind that couldn't be written is queued
+    again each round its character is present; a job that gives up shows one quiet line with Retry now.
 
 ## 7. Settings migration (lossless)
 

@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -581,8 +581,10 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 14. TODO (explicitly later)
 
-- **Branching:** Retry (↻) replaces the last reply; keeping the earlier attempts as alternatives to switch between
-  (per turn, with their snapshots) is later.
+- **Branching:** ↻ regenerates a reply (an earlier one takes the later turns with it); keeping the replaced attempts
+  as alternatives to switch between (per turn, with their snapshots) is later.
+- A version check: the page notices the server was updated and offers to reload (an open tab keeps running the
+  old scripts after an update).
 - Converting a legacy story to Minds properly (characters → sheets, memory facts → descriptions and thoughts, the
   transcript → a narrator recap); today a switch keeps the transcript and the minds start fresh.
 - The character interviewer for Minds: draft the player's sheet in ≤ 3 questions (doc 11 §2.1); today the player
