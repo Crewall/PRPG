@@ -34,7 +34,7 @@ interface SnapshotPayload {
   messageFlags?: { id: string; kind: string; compacted: number }[];
 }
 
-const KEEP_PER_STORY = 8; // how many rewind steps back a story supports
+const KEEP_PER_STORY = 16; // how many turns back a story can be rewound or regenerated
 
 export function createSnapshotStore(db: Db) {
   /** UPDATE by id with the given columns; INSERT if the row does not exist. */
@@ -102,6 +102,11 @@ export function createSnapshotStore(db: Db) {
     /** Forget a turn's snapshot (its turn was deleted another way). */
     drop(turnId: string): void {
       db.prepare(`DELETE FROM turn_snapshots WHERE turn_id = ?`).run(turnId);
+    },
+
+    /** The turns of a story that still have a snapshot (can be regenerated). */
+    turnIds(storyId: string): Set<string> {
+      return new Set(db.prepare(`SELECT turn_id FROM turn_snapshots WHERE story_id = ?`).all<{ turn_id: string }>(storyId).map((r) => r.turn_id));
     },
 
     has(turnId: string): boolean {

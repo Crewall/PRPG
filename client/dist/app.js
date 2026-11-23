@@ -167,10 +167,19 @@ async function renderPlay(storyId) {
     toggleForce: (c) => { if (forced.has(c.objectId)) forced.delete(c.objectId); else forced.add(c.objectId); refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); },
     refresh: () => { refreshSceneHeader(); if (activeTab === 'cast' || activeTab === 'pov') renderDrawer(); },
   };
-  // How the box will be read (Minds): said / tried / note — and the syntax when it is empty.
+  // How the box will be read (Minds): said / tried / note — and the syntax when it is empty. Hidden until the
+  // small ? in the corner of the box is pressed, so it never takes room from the chat.
   const inputPreview = h('div', { class: 'input-preview', style: 'display:none' });
+  let syntaxOpen = false;
+  const syntaxBtn = h('button', { class: 'syntax-toggle', type: 'button', title: 'How to write: "said aloud", what you try, ((note to the narrator))' }, '?');
+  syntaxBtn.addEventListener('click', () => {
+    if (story.settings?.engine !== 'minds') { openHelp('input-syntax'); return; }
+    syntaxOpen = !syntaxOpen;
+    syntaxBtn.classList.toggle('on', syntaxOpen);
+    updateInputPreview();
+  });
   const updateInputPreview = () => {
-    if (story.settings?.engine !== 'minds') { inputPreview.style.display = 'none'; return; }
+    if (story.settings?.engine !== 'minds' || !syntaxOpen) { inputPreview.style.display = 'none'; return; }
     const lanes = h('span', { class: 'lanes' });
     minds.renderInputPreview(lanes, input.value, { dialogue: !!dialogue });
     inputPreview.replaceChildren(
@@ -406,7 +415,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   updateInputPreview();
@@ -804,7 +813,7 @@ async function renderPlay(storyId) {
   // ⧉/✎/× controls; edit/delete are bound to its turn + field (player input or
   // narration). Memory is left untouched server-side; later story flow may shift
   // (accepted). A bubble whose sibling is also emptied drops the whole turn.
-  function messageBubble(cls, text, turnId, field) {
+  function messageBubble(cls, text, turnId, field, opts = {}) {
     const b = h('div', { class: `bubble ${cls}`, 'data-turn': turnId });
     const textEl = h('span', { class: 'msg-text' }, text);
     const copyBtn = h('button', { class: 'link', title: 'copy this message' }, '⧉');
@@ -817,6 +826,16 @@ async function renderPlay(storyId) {
       copyBtn,
       h('button', { class: 'link', title: 'edit this message', onclick: () => editMessage(b, textEl, turnId, field, cls) }, '✎'),
       h('button', { class: 'link danger', title: 'delete this message', onclick: () => deleteMessage(b, turnId, field) }, '×'));
+    // ↻ on every AI answer: write it again (an earlier one takes the later turns with it; no branching yet).
+    if (field === 'narration') {
+      const redoable = opts.redoable !== false;
+      tools.append(h('button', {
+        class: 'link regen-tool',
+        title: redoable ? 'Write this reply again' : 'Too far back to write again (only recent replies can be redone)',
+        disabled: redoable ? null : true,
+        onclick: () => regenerate(turnId),
+      }, '↻'));
+    }
     b.append(textEl, tools);
     return b;
   }
@@ -857,7 +876,7 @@ async function renderPlay(storyId) {
 
   /** A failed or stopped attempt: say so, and offer to try again or drop it. */
   function failedNotice(turnId, text) {
-    const retryB = h('button', { class: 'small primary', onclick: () => retryLast(turnId) }, '↻ Retry');
+    const retryB = h('button', { class: 'small primary', onclick: () => regenerate(turnId, { ask: false }) }, '↻ Retry');
     const discardB = h('button', { class: 'small ghost', title: 'Drop this attempt; your message goes back in the box', onclick: () => discardAttempt(turnId) }, 'Discard');
     const b = h('div', { class: 'bubble error', 'data-turn': turnId }, h('div', {}, text), h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, retryB, discardB));
     transcript.append(b);
@@ -865,24 +884,23 @@ async function renderPlay(storyId) {
     return b;
   }
 
-  /** ↻ on the latest reply: write it again (the current one is replaced; branching is a later feature). */
-  function markLastReply() {
-    transcript.querySelectorAll('.retry-tool').forEach((el) => el.remove());
-    if (!lastTurn || lastTurn.status !== 'complete') return;
-    const bubble = [...transcript.querySelectorAll(`.bubble.narration[data-turn="${lastTurn.id}"]`)].at(-1);
-    const tools = bubble?.querySelector('.msg-tools');
-    if (!tools) return;
-    tools.append(h('button', { class: 'link retry-tool', title: 'Write this reply again (the current one is replaced)', onclick: () => {
-      if (confirm('Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) retryLast(lastTurn.id);
-    } }, '↻'));
-  }
-
-  /** Retry the last turn: the server undoes it and runs it again with the same message. */
-  function retryLast(turnId) {
+  /**
+   * ↻ Regenerate a reply: the server undoes that turn (and every later one) and runs it again with the same
+   * message. The replaced replies are not kept (branching is a later feature).
+   */
+  function regenerate(turnId, { ask = true } = {}) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
     if (!wsOpen()) { addStatus('(not connected — tap the status dot for details)'); return; }
-    const text = lastTurn?.id === turnId ? lastTurn.playerInput : '';
-    transcript.querySelectorAll(`[data-turn="${turnId}"]`).forEach((el) => el.remove());
+    const all = [...transcript.children];
+    const first = all.findIndex((el) => el.dataset?.turn === turnId);
+    if (first < 0) return;
+    const later = new Set(all.slice(first).map((el) => el.dataset?.turn).filter((id) => id && id !== turnId));
+    if (ask && !confirm(later.size
+      ? `Write this reply again?\n\nThe ${later.size} later turn${later.size > 1 ? 's' : ''} after it ${later.size > 1 ? 'are' : 'is'} removed too, and the story continues from the new reply. Nothing replaced is kept.`
+      : 'Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) return;
+    const text = transcript.querySelector(`.bubble.player[data-turn="${turnId}"] .msg-text`)?.textContent
+      ?? transcript.querySelector(`.bubble.player[data-turn="${turnId}"]`)?.firstChild?.textContent ?? '';
+    for (const el of all.slice(first)) el.remove();
     clearStage();
     if (text && input.value.trim() === text.trim()) { input.value = ''; input.style.height = 'auto'; updateInputPreview(); }
     currentTurnId = null;
@@ -891,7 +909,7 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus();
-    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId }));
+    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId, ...(lastTurn ? { lastTurnId: lastTurn.id } : {}) }));
   }
 
   /** Drop a failed attempt (its message goes back in the box). */
@@ -921,12 +939,11 @@ async function renderPlay(storyId) {
           if (failed) b.classList.add('failed');
           transcript.append(b);
         }
-        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration', { redoable: t.redoable || t.id === turns.at(-1)?.id })); }
       }
       const tail = turns.at(-1);
       lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
       if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
-      markLastReply();
       const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
         let name = 'them';
@@ -1417,14 +1434,13 @@ async function renderPlay(storyId) {
         clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
         // has a persisted id — no reload needed to fix a just-written message.
-        if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration'); current.replaceWith(nb); current = nb; }
+        if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration', { redoable: true }); current.replaceWith(nb); current = nb; }
         if (pendingPlayerBubble) { const pb = messageBubble('player', pendingPlayerText, m.turnId, 'playerInput'); pendingPlayerBubble.replaceWith(pb); pendingPlayerBubble = null; }
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown();
         lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
-        markLastReply();
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
           setDialogue(null);
@@ -1448,7 +1464,6 @@ async function renderPlay(storyId) {
         // Don't lose the message: put it back in the box for another try.
         if (m.t === 'turn.error' && !input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
         current = null; pendingPlayerBubble = null; setBusy(false);
-        markLastReply();
         break;
       }
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;

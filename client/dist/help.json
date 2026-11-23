@@ -3,7 +3,7 @@
     "id": "input-syntax",
     "group": "Playing",
     "title": "What you type",
-    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story a line under the box shows how your message was read.",
+    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story, the small ? in the corner of the message box shows how your message will be read.",
     "example": "\"A room, please.\" I set a coin on the counter and watch her hands. ((make the inn feel dangerous))"
   },
   {
@@ -34,7 +34,7 @@
     "id": "edit-rewind",
     "group": "Playing",
     "title": "Retry, edit and undo",
-    "body": "↻ on the latest reply writes it again (the current one is replaced, not kept). When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt and puts your message back in the box; sending something else drops it too. Edit undoes the last exchange completely (sheets, values, memories, threads, the clock) and puts your message back in the box. ⧉ copies a message, ✎ edits its text, × removes it from the transcript (in a Minds story the characters still remember it). /retry sends your last message again."
+    "body": "↻ on any reply writes it again. For an earlier reply, every turn after it is removed too and the story continues from the new reply; nothing replaced is kept (only recent replies can be redone). When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt and puts your message back in the box; sending something else drops it too. Edit undoes the last exchange completely and puts your message back in the box. ⧉ copies a message, ✎ edits its text, × removes it from the transcript (in a Minds story the characters still remember it)."
   },
   {
     "id": "cast-bar",

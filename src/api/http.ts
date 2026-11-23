@@ -154,10 +154,11 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   server.get('/api/stories/:id/turns', async (req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { from?: string; limit?: string };
-    return stories.listTurns(id, {
-      fromIndex: q.from ? Number(q.from) : 0,
-      limit: q.limit ? Number(q.limit) : 200,
-    });
+    // `redoable`: the turn still has its snapshot, so its reply can be written again (↻).
+    const redoable = app.snapshots.turnIds(id);
+    return stories
+      .listTurns(id, { fromIndex: q.from ? Number(q.from) : 0, limit: q.limit ? Number(q.limit) : 200 })
+      .map((t) => ({ ...t, redoable: redoable.has(t.id) }));
   });
 
   // Debug: thread log for a story (the "hidden threads visible" requirement).

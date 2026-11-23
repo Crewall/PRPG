@@ -113,6 +113,32 @@ describe('classic engine: blank input, failed attempts, retry', () => {
     expect(seen.at(-1)!.messages.map((m) => m.content)).toEqual([BEGIN_MARKER, 'N1', '"U1"']); // no trace of the first try
   });
 
+  it('regenerating an earlier reply takes the later turns with it; too old a reply is refused', async () => {
+    replies.push('N1', 'N2', 'N3', 'N2 again');
+    await play('');
+    await play('"U1"');
+    await play('"U2"');
+    const [t0, t1, t2] = app.stories.listTurns(storyId);
+    const c = collector();
+    const t = await app.pipeline.retry(storyId, c.emitter, { turnId: t1.id, expectTurnId: t2.id });
+    expect(t?.narration).toBe('N2 again');
+    expect(turns()).toEqual(['∅:complete', '"U1":complete']); // U2 and N3 went with it
+    expect(seen.at(-1)!.messages.map((m) => m.content)).toEqual([BEGIN_MARKER, 'N1', '"U1"']);
+
+    // A turn whose snapshot is gone can't be redone (unless it is the last one).
+    app.snapshots.drop(t0.id);
+    const c2 = collector();
+    await app.pipeline.retry(storyId, c2.emitter, { turnId: t0.id });
+    expect(c2.errors[0]).toMatch(/too far back/);
+    expect(turns()).toEqual(['∅:complete', '"U1":complete']);
+
+    const server = Fastify();
+    await registerHttpRoutes(server, app);
+    const list = (await server.inject({ method: 'GET', url: `/api/stories/${storyId}/turns` })).json() as { redoable: boolean }[];
+    expect(list.map((x) => x.redoable)).toEqual([false, true]);
+    await server.close();
+  });
+
   it('a rewind or retry for a turn that is no longer the last is refused, never undoing an earlier turn', async () => {
     replies.push('N1', 'N2');
     await play('');
