@@ -4,8 +4,22 @@ import type { MemoryStore } from '../db/stores/memoryStore.ts';
 import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore, TieStore } from '../db/stores/mindsStore.ts';
 import { STATE_KEY, appliesTo, canSee, defaultValue, renderValue, runPipeline, splitFinalId } from './variables.ts';
 import type { ChangeOutcome, HolderInfo, Proposal, VariableDef, VariableValue, Viewer } from './variables.ts';
-import { MAX_FORGET_PER_REPLY, MAX_REMEMBER_PER_REPLY, parseThoughtHandle, prepareRemember, thoughtHandle } from './thoughts.ts';
-import type { RememberOp, Thought } from './thoughts.ts';
+import {
+  MAX_AGENDA,
+  MAX_FORGET_PER_REPLY,
+  MAX_REMEMBER_PER_REPLY,
+  MAX_REVISE_PER_REPLY,
+  clampImportance,
+  currentImportance,
+  fades,
+  normalizeKind,
+  parseThoughtHandle,
+  prepareRemember,
+  renderThought,
+  thoughtHandle,
+} from './thoughts.ts';
+import type { RememberOp, ReviseOp, Thought } from './thoughts.ts';
+import { normalizeTag } from './text.ts';
 
 // The Minds data layer's operations (docs/11): sheets, variables and thoughts
 // with their rules applied. Agents and the round (M4) call these; so does the API.
@@ -65,29 +79,58 @@ export function applyChanges(deps: MindsDeps, storyId: string, proposals: Propos
 export interface ThoughtOpsResult {
   added: Thought[];
   revoked: Thought[];
+  revised: Thought[];
   /** Plain-language notes for the owner's next round message ("Not kept: …"). */
   notes: string[];
 }
 
+/** How thoughts read right now: current importance (fading applied) and the rendered line (docs/11 §5.7, §5.9). */
+export function thoughtLens(deps: MindsDeps, storyId: string) {
+  const story = deps.stories.getStory(storyId);
+  const fadeHours = story?.settings.minds.fadeHours ?? 8;
+  const clock = story?.clockMin ?? null;
+  const current = (t: Thought) => currentImportance(t, clock, fadeHours);
+  const aboutHandle = (t: Thought) => (t.about ? (deps.memory.getObject(t.about)?.handle ?? null) : null);
+  const render = (t: Thought) => renderThought(t, { aboutHandle: aboutHandle(t), current: current(t) });
+  return { current, aboutHandle, render, clock, fadeHours };
+}
+
+/** Thoughts whose current importance reached 0 fade (docs/11 §5.7). Run once per round, after the clock moved. */
+export function fadeThoughts(deps: MindsDeps, storyId: string, turnId: string | null): Thought[] {
+  const { current } = thoughtLens(deps, storyId);
+  const faded: Thought[] = [];
+  for (const t of deps.thoughts.listActiveForStory(storyId)) {
+    if (!fades(t) || current(t) > 0) continue;
+    deps.thoughts.setStatus(t.id, 'faded', turnId);
+    faded.push({ ...t, status: 'faded' });
+  }
+  return faded;
+}
+
 /**
- * Apply an owner's remember/forget operations (docs/11 §5.3). For the owner's
- * own replies (`source: 'self'`) the per-reply caps apply; the active-thought
- * cap always does.
+ * Apply an owner's remember / revise / forget operations (docs/11 §5.3, §5.6–5.8). For the owner's own replies
+ * (`source: 'self'`) the per-reply caps apply; the active-thought and agenda caps always do. Restating a thought
+ * word for word renews it instead of adding a copy.
  */
 export function applyThoughtOps(
   deps: MindsDeps,
   storyId: string,
   owner: string,
-  ops: { remember?: RememberOp[]; forget?: unknown[] },
+  ops: { remember?: RememberOp[]; forget?: unknown[]; revise?: ReviseOp[] },
   source: Thought['source'],
   turnId: string | null = null,
 ): ThoughtOpsResult {
   const story = deps.stories.getStory(storyId);
+  const clock = story?.clockMin ?? null;
   const maxActive = story?.settings.minds.maxActiveThoughts ?? 80;
-  const result: ThoughtOpsResult = { added: [], revoked: [], notes: [] };
+  const result: ThoughtOpsResult = { added: [], revoked: [], revised: [], notes: [] };
   const remember = ops.remember ?? [];
   const forget = ops.forget ?? [];
+  const revise = ops.revise ?? [];
   const selfCaps = source === 'self';
+  const handles = deps.memory.listHandles(storyId);
+  const objectOf = (handle: string | undefined) => (handle ? (deps.memory.findByHandle(storyId, handle)?.id ?? null) : null);
+  const agendaCount = () => deps.thoughts.list(storyId, owner).filter((t) => t.kind === 'agenda').length;
 
   const forgetList = selfCaps && forget.length > MAX_FORGET_PER_REPLY ? forget.slice(0, MAX_FORGET_PER_REPLY) : forget;
   if (forgetList.length < forget.length) result.notes.push(`Only ${MAX_FORGET_PER_REPLY} thoughts can be forgotten at once; the rest were kept.`);
@@ -98,29 +141,92 @@ export function applyThoughtOps(
       result.notes.push(`Not forgotten: you have no thought ${String(h)}.`);
       continue;
     }
-    if (t.status === 'revoked') continue;
+    if (t.status !== 'active') continue;
     deps.thoughts.revoke(t.id, turnId);
     result.revoked.push({ ...t, status: 'revoked' });
   }
 
+  // Revise: the old thought is kept as history; a new one takes its place (docs/11 §5.8).
+  const reviseList = selfCaps && revise.length > MAX_REVISE_PER_REPLY ? revise.slice(0, MAX_REVISE_PER_REPLY) : revise;
+  if (reviseList.length < revise.length) result.notes.push(`Only ${MAX_REVISE_PER_REPLY} thoughts can be revised at once; the rest were kept as they were.`);
+  for (const op of reviseList) {
+    const seq = parseThoughtHandle(op.id);
+    const old = seq === undefined ? undefined : deps.thoughts.bySeq(storyId, owner, seq);
+    if (!old || old.status !== 'active') {
+      result.notes.push(`Not revised: you have no thought ${String(op.id)} in mind.`);
+      continue;
+    }
+    const prepared = prepareRemember(
+      {
+        text: op.text?.trim() || old.text,
+        tags: op.tags ?? old.tags.filter((g) => !old.about || g !== `#${deps.memory.getObject(old.about)?.handle}`),
+        pin: old.pinned,
+        kind: op.kind ?? old.kind,
+        about: old.about ? (deps.memory.getObject(old.about)?.handle ?? undefined) : undefined,
+        importance: op.importance ?? old.importance,
+      },
+      handles,
+    );
+    if (!prepared) continue;
+    deps.thoughts.setStatus(old.id, 'revised', turnId);
+    const t = deps.thoughts.insert(
+      storyId,
+      owner,
+      { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance: prepared.importance, about: objectOf(prepared.aboutHandle) ?? old.about, revises: old.id },
+      turnId,
+    );
+    result.revised.push(t);
+  }
+
   const rememberList = selfCaps && remember.length > MAX_REMEMBER_PER_REPLY ? remember.slice(0, MAX_REMEMBER_PER_REPLY) : remember;
   if (rememberList.length < remember.length) result.notes.push(`Only ${MAX_REMEMBER_PER_REPLY} new thoughts are kept per reply; the rest were dropped.`);
-  const handles = deps.memory.listHandles(storyId);
-  const existing = new Set(deps.thoughts.list(storyId, owner).map((t) => t.text.toLowerCase()));
+  const existing = new Map(deps.thoughts.list(storyId, owner).map((t) => [t.text.toLowerCase(), t]));
   for (const op of rememberList) {
     const prepared = prepareRemember(op, handles);
     if (!prepared) continue;
-    if (existing.has(prepared.text.toLowerCase())) continue; // already remembered, verbatim
+    const same = existing.get(prepared.text.toLowerCase());
+    if (same) {
+      deps.thoughts.renew([same.id], clock); // restated: it came up again
+      continue;
+    }
+    if (prepared.kind === 'agenda' && agendaCount() >= MAX_AGENDA) {
+      result.notes.push(`Not kept as agenda: you already have ${MAX_AGENDA} goals. Drop or revise one first. ("${prepared.text}")`);
+      continue;
+    }
     if (deps.thoughts.countActive(storyId, owner) >= maxActive) {
       result.notes.push(`Not kept: you already hold ${maxActive} thoughts. Forget or merge some first.`);
       break;
     }
-    const t = deps.thoughts.insert(storyId, owner, { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: story?.clockMin ?? null }, turnId);
-    existing.add(prepared.text.toLowerCase());
+    const t = deps.thoughts.insert(
+      storyId,
+      owner,
+      { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance: prepared.importance, about: objectOf(prepared.aboutHandle) },
+      turnId,
+    );
+    existing.set(prepared.text.toLowerCase(), t);
     result.added.push(t);
     for (const n of prepared.notes) result.notes.push(`${thoughtHandle(t)}: ${n}.`);
   }
   return result;
+}
+
+/** A user's edit of one thought (advanced mode): text, kind, importance, about, tags. */
+export function editThought(
+  deps: MindsDeps,
+  storyId: string,
+  t: Thought,
+  patch: { text?: string; kind?: string; importance?: unknown; about?: string | null; tags?: string[] },
+): void {
+  const about =
+    patch.about === undefined ? undefined : patch.about === null || !patch.about.trim() ? null : (deps.sheets.get(patch.about) ? patch.about : deps.memory.findByHandle(storyId, patch.about)?.id ?? null);
+  const tags = patch.tags?.map((x) => normalizeTag(x)).filter(Boolean);
+  deps.thoughts.update(t.id, {
+    ...(patch.text?.trim() ? { text: patch.text.trim() } : {}),
+    ...(patch.kind !== undefined ? { kind: normalizeKind(patch.kind) } : {}),
+    ...(patch.importance !== undefined ? { importance: clampImportance(patch.importance, t.importance) } : {}),
+    ...(about !== undefined ? { about } : {}),
+    ...(tags ? { tags } : {}),
+  });
 }
 
 /** Create a character: roster object (with handle) + sheet. `isPlayer` also marks it on the story. */

@@ -345,6 +345,7 @@ async function renderPlay(storyId) {
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
+      mindsNumIn('fadeHours', 'thoughts fade: one point per (in-story hours)', 'A thought loses one point of importance for every this many in-story hours it doesn\'t come up; at 0 it fades from the character\'s mind (you can restore it on their sheet). Agenda items and thoughts of importance 8–10 never fade.', 1, 720),
       (() => {
         const cb = h('input', { type: 'checkbox' });
         cb.checked = !!minds.nameKnowledge;

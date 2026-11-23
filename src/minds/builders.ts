@@ -9,13 +9,13 @@ import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { STATE_KEY, appliesTo, canSee, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
-import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
+import { NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
 import { placesAndThings } from './places.ts';
 import type { Thought } from './thoughts.ts';
-import { holdersFor, valueOf } from './service.ts';
+import { holdersFor, thoughtLens, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
 
 // Thread builders for the Minds engine (docs/10 §8). Every thread is
@@ -151,15 +151,20 @@ function visibleInThread(deps: ThreadDeps, t: Thought, w: ThreadWindow): boolean
  * visible in the thread, plus the tagged thoughts the active tags evoke. The
  * active set gets the owner's own tags found in `perceived` text added first.
  */
-function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number) {
+function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number, present?: Set<string>) {
+  const lens = thoughtLens(deps, storyId);
   const all = deps.thoughts.list(storyId, owner);
   const vocabulary = deps.thoughts.vocabulary(storyId, owner).map((v) => v.tag);
   for (const t of tagsMentioned(perceived, vocabulary)) active.add(t);
   const shown = new Set(all.filter((t) => visibleInThread(deps, t, window)).map((t) => t.id));
-  const pinnedNew = all.filter((t) => t.pinned && !shown.has(t.id));
-  const recalled = selectRecall(all, active, shown, budget);
-  const pinnedTokens = all.filter((t) => t.pinned).reduce((n, t) => n + estimateTokens(renderThought(t)), 0);
-  return { pinnedNew, recalled, pinnedTokens, vocabulary };
+  // Always on their mind (docs/11 §5.9): the agenda first, then pinned and 9–10 thoughts; each once per window.
+  const always = all.filter(alwaysOn).sort((a, b) => Number(b.kind === 'agenda') - Number(a.kind === 'agenda') || a.seq - b.seq);
+  const pinnedNew = always.filter((t) => !shown.has(t.id));
+  const recalled = selectRecall(all, active, shown, budget, { current: lens.current, present });
+  // Already in the thread and relevant again this round: it came up again, so it is renewed (docs/11 §5.7).
+  const cameUp = all.filter((t) => shown.has(t.id) && !alwaysOn(t) && (t.tags.some((g) => active.has(g)) || (!!t.about && !!present?.has(t.about))));
+  const pinnedTokens = always.filter((t) => t.kind !== 'agenda').reduce((n, t) => n + estimateTokens(lens.render(t)), 0);
+  return { pinnedNew, recalled, cameUp, pinnedTokens, vocabulary, render: lens.render };
 }
 
 /** "health 7/10 (fine) · mood "wary"" for one holder, filtered for a viewer. */
@@ -296,7 +301,8 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   for (const i of here.items) active.add(`#${i.handle}`);
   if (here.location) active.add(`#${here.location.handle}`);
   const perceived = [...pending.map((p) => p.content), input.now ?? ''].join('\n');
-  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300);
+  const presentIds = new Set(here.present.map((p) => deps.memory.findByHandle(storyId, p.handle)?.id).filter((x): x is string => !!x));
+  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300, presentIds);
   const recalled = chosen.recalled;
 
   const parts: string[] = [];
@@ -308,8 +314,11 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   const own = valueLine(deps, storyId, defs, holder, { kind: 'character', id: objectId }, false);
   const world = valueLine(deps, storyId, defs, holders.get('world')!, { kind: 'character', id: objectId }, false);
   parts.push(`You now: ${sheet?.state ? `"${sheet.state}"` : '(no state noted yet)'}${own ? ` · ${own}` : ''}${world ? `\nThe world: ${world}` : ''}`);
-  if (chosen.pinnedNew.length) parts.push(`Always on your mind:\n${chosen.pinnedNew.map(renderThought).join('\n')}`);
-  if (recalled.length) parts.push(`You recall:\n${recalled.map(renderThought).join('\n')}`);
+  const agenda = chosen.pinnedNew.filter((t) => t.kind === 'agenda');
+  const always = chosen.pinnedNew.filter((t) => t.kind !== 'agenda');
+  if (agenda.length) parts.push(`Your agenda:\n${agenda.map(chosen.render).join('\n')}`);
+  if (always.length) parts.push(`Always on your mind:\n${always.map(chosen.render).join('\n')}`);
+  if (recalled.length) parts.push(`You recall:\n${recalled.map(chosen.render).join('\n')}`);
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
   parts.push(
     input.conversationWith
@@ -323,7 +332,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
     ctx: assemble(characterSystemPrompt(deps, storyId, objectId), recap, log, roundMessage),
     roundMessage,
     pendingIds: pending.map((p) => p.id),
-    recalledIds: [...chosen.pinnedNew, ...recalled].map((t) => t.id),
+    recalledIds: [...chosen.pinnedNew, ...recalled, ...chosen.cameUp].map((t) => t.id),
   };
 }
 
@@ -393,6 +402,22 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
   if (full && who) lines.push(`  Who: ${who.replace(/\s+/g, ' ')}`);
   const ties = tieSummary(deps, holder.id);
   if (ties.length) lines.push(`  Ties: ${ties.join(', ')}`);
+  if (full && !holder.isPlayer) {
+    // Their agenda and strongest opinions and feelings (docs/11 §5.9, settled with the owner).
+    const lens = thoughtLens(deps, storyId);
+    const mine = deps.thoughts.list(storyId, holder.id);
+    const agenda = mine.filter((t) => t.kind === 'agenda');
+    if (agenda.length) lines.push(`  Agenda: ${agenda.map((t) => t.text).join(' · ')}`);
+    const strong = mine
+      .filter((t) => (t.kind === 'opinion' || t.kind === 'feeling') && lens.current(t) >= NARRATOR_SEES)
+      .sort((a, b) => lens.current(b) - lens.current(a) || b.seq - a.seq)
+      .slice(0, 5)
+      .map((t) => {
+        const about = lens.aboutHandle(t);
+        return `(${t.kind}${about ? ` ${t.kind === 'opinion' ? 'of' : 'about'} #${about}` : ''}, ${lens.current(t)}/10) ${t.text}`;
+      });
+    if (strong.length) lines.push(`  Strongly: ${strong.join(' · ')}`);
+  }
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);
@@ -456,7 +481,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   const declared = [p.say ?? '', p.do ?? '', ...input.declarations.flatMap((d) => [d.say ?? '', d.intent ?? ''])].join('\n');
   const chosen = chooseThoughts(deps, storyId, NARRATOR_OWNER, threadWindow(deps, recap, log), active, declared, story.settings.minds.thoughtRecallTokens);
   const notes = [...chosen.pinnedNew, ...chosen.recalled];
-  if (notes.length) parts.push(`Your notes in mind:\n${notes.map(renderThought).join('\n')}`);
+  if (notes.length) parts.push(`Your notes in mind:\n${notes.map(chosen.render).join('\n')}`);
 
   const tagsInUse = new Set<string>();
   for (const oid of present) for (const v of deps.thoughts.vocabulary(storyId, oid)) tagsInUse.add(v.tag);

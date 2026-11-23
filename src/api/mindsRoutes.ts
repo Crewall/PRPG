@@ -4,7 +4,8 @@ import type { App } from '../app.ts';
 import { VariableDef, STATE_KEY, VarOpKind, normalizeAppliesTo, validateDefs } from '../minds/variables.ts';
 import type { Viewer } from '../minds/variables.ts';
 import { SCENARIO_TEMPLATES } from '../minds/templates.ts';
-import { applyChanges, applyThoughtOps, createCharacter, mindsView, updateSheet } from '../minds/service.ts';
+import { applyChanges, applyThoughtOps, createCharacter, editThought, mindsView, thoughtLens, updateSheet } from '../minds/service.ts';
+import { THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
 import { setTie } from '../minds/ties.ts';
@@ -256,20 +257,45 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: "owner must be 'narrator' or a character of this story" };
     }
+    // Each thought with its current importance (fading applied) and who it is about (docs/11 §5.7, §5.10).
+    const lens = thoughtLens(deps, id);
     return {
-      thoughts: app.thoughts.list(id, q.owner, { includeRevoked: q.includeRevoked === '1' || q.includeRevoked === 'true' }),
+      thoughts: app.thoughts.list(id, q.owner, { includeRevoked: q.includeRevoked === '1' || q.includeRevoked === 'true' }).map((t) => {
+        const about = t.about ? app.memory.getObject(t.about) : undefined;
+        return {
+          ...t,
+          current: t.status === 'active' ? lens.current(t) : 0,
+          fades: fades(t),
+          aboutHandle: about?.handle ?? null,
+          aboutName: about?.name ?? null,
+          revisesSeq: t.revises ? (app.thoughts.get(t.revises)?.seq ?? null) : null,
+        };
+      }),
       vocabulary: app.thoughts.vocabulary(id, q.owner),
+      fadeHours: lens.fadeHours,
     };
   });
 
   server.post('/api/stories/:id/thoughts', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!storyOr404(id, reply)) return { error: 'story not found' };
-    const body = z.object({ owner: z.string(), text: z.string().min(1), tags: z.array(z.string()).default([]), pin: z.boolean().default(false) }).safeParse(req.body);
+    const body = z
+      .object({
+        owner: z.string(),
+        text: z.string().min(1),
+        tags: z.array(z.string()).default([]),
+        pin: z.boolean().default(false),
+        kind: z.enum(THOUGHT_KINDS).optional(),
+        importance: z.number().int().min(1).max(10).optional(),
+        /** The object id or #handle it is about. */
+        about: z.string().optional(),
+      })
+      .safeParse(req.body);
     if (!body.success || !isOwner(id, body.data.owner)) {
       reply.code(400);
-      return { error: "expected { owner, text, tags?, pin? } with owner 'narrator' or a character of this story" };
+      return { error: "expected { owner, text, tags?, pin?, kind?, importance?, about? } with owner 'narrator' or a character of this story" };
     }
+    if (body.data.about && app.sheets.get(body.data.about)) body.data.about = app.memory.getObject(body.data.about)?.handle ?? body.data.about;
     const { owner, ...op } = body.data;
     const result = applyThoughtOps(deps, id, owner, { remember: [op] }, 'user');
     reply.code(result.added.length ? 201 : 200);
@@ -330,9 +356,32 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(404);
       return { error: 'thought not found' };
     }
-    const body = z.object({ revoked: z.literal(true).optional(), pinned: z.boolean().optional() }).parse(req.body ?? {});
+    const body = z
+      .object({
+        revoked: z.literal(true).optional(),
+        /** Bring a faded, forgotten or revised thought back to mind (renewed now). */
+        restore: z.literal(true).optional(),
+        pinned: z.boolean().optional(),
+        text: z.string().min(1).optional(),
+        kind: z.enum(THOUGHT_KINDS).optional(),
+        importance: z.number().int().min(1).max(10).optional(),
+        /** An object id or #handle; null clears it. */
+        about: z.string().nullable().optional(),
+        tags: z.array(z.string()).optional(),
+      })
+      .parse(req.body ?? {});
     if (body.revoked && t.status === 'active') app.thoughts.revoke(tid, null);
+    if (body.restore && t.status !== 'active') {
+      app.thoughts.setStatus(tid, 'active', null);
+      app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+    }
     if (body.pinned !== undefined) app.thoughts.setPinned(tid, body.pinned);
+    const { text, kind, importance, about, tags } = body;
+    if ([text, kind, importance, about, tags].some((x) => x !== undefined)) {
+      editThought(deps, t.storyId, t, { text, kind, importance, about, tags });
+      // An edit is the user deciding it matters now: it starts fading from here.
+      app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+    }
     return app.thoughts.get(tid);
   });
 }

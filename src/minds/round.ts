@@ -16,7 +16,7 @@ import { emptyBlock, entryToOp, parsePlayerInput, parseRoundBlock, readRoundBloc
 import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.ts';
 import { chooseCallers } from './gate.ts';
 import type { GateCandidate } from './gate.ts';
-import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
+import { applyChanges, applyThoughtOps, createCharacter, fadeThoughts, updateSheet } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { clampWords, isPlaceholder, isRealName, realValue, slugify } from './text.ts';
@@ -340,7 +340,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const r of results) {
       if (!r.call || !r.reply || r.raw === undefined) continue;
       commitCall(deps, r.call, r.raw, turn.id);
-      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, forget: r.reply.forget }, 'self', turn.id);
+      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, revise: r.reply.revise, forget: r.reply.forget }, 'self', turn.id);
       if (ops.notes.length) memoryNotes.set(r.objectId, ops.notes);
       changedIds.add(r.objectId);
     }
@@ -544,6 +544,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     // 5f. The narrator's thread, the clock, the turn.
     commitCall(deps, nCall, narratorText, turn.id);
     const clockMin = deps.stories.advanceClock(storyId, block.time && block.time > 0 ? block.time : DEFAULT_TURN_MINUTES);
+    // Thoughts that went unrenewed for long enough fade (docs/11 §5.7).
+    fadeThoughts(deps, storyId, turn.id);
     // A mind not written yet (its seeding failed: an overloaded provider, an empty reply) is tried again each
     // round it is present, unless a seed for it is still waiting.
     for (const oid of presentIds) {

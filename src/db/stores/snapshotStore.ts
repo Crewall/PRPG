@@ -216,9 +216,11 @@ export function createSnapshotStore(db: Db) {
           db.prepare(`DELETE FROM thoughts WHERE story_id = ?`).run(storyId); // cascades thought_tags
           for (const t of p.thoughts) {
             db.prepare(
-              `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.created_clock_min ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at);
+              `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at,
+                                    kind, importance, about, renewed_clock_min, revises, status_turn_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.created_clock_min ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at,
+              t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.renewed_clock_min ?? t.created_clock_min ?? null, t.revises ?? null, t.status_turn_id ?? null);
           }
           for (const tt of p.thoughtTags ?? []) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
         }

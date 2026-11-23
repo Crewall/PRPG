@@ -180,6 +180,7 @@ describe('the change pipeline', () => {
 describe('thoughts: recall selection and mentions', () => {
   const t = (seq: number, tags: string[], extra: Partial<Thought> = {}): Thought => ({
     id: `id${seq}`, storyId: 's', owner: 'marta', seq, text: `thought ${seq}`, tags, pinned: false, status: 'active', source: 'self',
+    kind: 'note', importance: 5, about: null, renewedClockMin: null, revises: null,
     createdTurnId: null, createdClockMin: null, revokedTurnId: null, lastRecalledTurnId: null, recallCount: 0, createdAt: seq, ...extra,
   });
   it('picks by tag overlap, then recency, within budget; skips pinned, revoked and already shown', () => {
@@ -194,7 +195,7 @@ describe('thoughts: recall selection and mentions', () => {
     ];
     const picked = selectRecall(thoughts, new Set(['ledger', '#tom']), new Set(['id6']), 1000);
     expect(picked.map((x) => x.seq)).toEqual([2, 7, 1]);
-    expect(selectRecall(thoughts, new Set(['ledger', '#tom']), new Set(), 8).length).toBe(1); // budget-bound
+    expect(selectRecall(thoughts, new Set(['ledger', '#tom']), new Set(), 12).length).toBe(1); // budget-bound
   });
   it('finds the owner’s tags mentioned in text', () => {
     expect(tagsMentioned('The ledger is gone, and Tom saw the Old Mill burn.', ['ledger', 'old-mill', '#tom', 'debt'])).toEqual(['ledger', 'old-mill', '#tom']);

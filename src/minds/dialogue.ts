@@ -4,7 +4,7 @@ import { logger } from '../util/logger.ts';
 import { buildCharacterCall, commitCall, hereFromScene, queueForCharacter } from './builders.ts';
 import { parsePlayerInput, parseRoundBlock, emptyBlock } from './contracts.ts';
 import type { DialogueReply, PlayerDeclaration } from './contracts.ts';
-import { applyChanges, applyThoughtOps } from './service.ts';
+import { applyChanges, applyThoughtOps, fadeThoughts } from './service.ts';
 import { STATE_KEY } from './variables.ts';
 import type { RoundDeps, RoundEmitter } from './round.ts';
 import { queueCompactions } from './compaction.ts';
@@ -112,7 +112,7 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   opts.setStage?.('saving the exchange');
   deps.db.transaction(() => {
     commitCall(deps, call, raw, turn.id);
-    const ops = applyThoughtOps(deps, storyId, partner, { remember: reply.remember, forget: reply.forget }, 'self', turn.id);
+    const ops = applyThoughtOps(deps, storyId, partner, { remember: reply.remember, revise: reply.revise, forget: reply.forget }, 'self', turn.id);
     if (ops.notes.length) queueForCharacter(deps, storyId, partner, `About your memory: ${ops.notes.join(' ')}`, turn.id);
     if (reply.state) applyChanges(deps, storyId, [{ change: { holder: partner, key: STATE_KEY, op: 'set', value: reply.state }, by: 'self', proposer: partner }], turn.id);
     // Names said in the exchange are learned by the one who heard them.
@@ -121,6 +121,7 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
       learnFromSpeech(deps, storyId, [player.objectId], reply.say, turn.id);
     }
     const clockMin = deps.stories.advanceClock(storyId, 1);
+    fadeThoughts(deps, storyId, turn.id);
     queueCompactions(deps, storyId, [call.sessionId], turn.id);
     deps.stories.updateTurn(turn.id, {
       narration: line,

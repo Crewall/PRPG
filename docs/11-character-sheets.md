@@ -498,8 +498,9 @@ same person may stand side by side: that is ambivalence, and the sheet shows the
 
 ### 5.7 Fading (settled with the owner: fade by importance)
 
-- Each thought has `renewed_clock_min`: when it was written, last revised, or last came up (recalled into a round
-  message, or restated).
+- Each thought has `renewed_clock_min`: when it was written, last revised, or last came up: recalled into a round
+  message, restated, or already in the owner's thread and relevant again (its tags are active or its subject is
+  present) in a round the owner acts.
 - Its **current importance** = importance − one point per `minds.fadeHours` in-story hours since it was renewed
   (default 8 hours, Story options → Minds engine). Agenda items, pinned thoughts and importance 8–10 don't fade.
 - At 0 the thought **fades**: status `faded`. It is no longer recalled or shown to its owner; it stays in the sheet

@@ -32,7 +32,7 @@ the story with new information.
 {
   "briefs": { "#handle": "Second person, at most {{briefMaxWords}} words: what this character saw, felt and suffered, and the outcomes that touch them. Only what they could perceive." },
   "spotlight": ["#handle of anyone who should react next round"],
-  "state": { "#handle": "one sentence: their condition now (only for those whose state changed)" },
+  "state": { "#handle": "one sentence: their physical and emotional condition now (only for those whose state changed)" },
   "vars": [{ "who": "#handle or world", "key": "variable", "set": "value", "why": "short reason" }],
   "tags": ["topics", "places", "#handles that matter in this moment"],
   "evoke": { "#handle": ["topics this character should recall"] },
@@ -51,6 +51,9 @@ Text in <angle brackets> stands for what you write there: never copy it.
   delivers spoken words verbatim.
 - **Briefs carry perception only**: what they saw, heard, felt and suffered. Never what they think, decide, plan
   or feel about it ("you're calculating", "you decide to stay"): their own minds work that out.
+- Each present character's sheet shows their agenda and their strongest opinions and feelings ("Strongly"). Use
+  them to pace the scene and to show what visibly follows from them; never put them in a brief.
+- "state" is only a character's body and mood (hurt, exhausted, shaking, elated). Never plans, opinions or facts.
 - **Bring newcomers in whole.** Everything you know about a newcomer goes in their "cast.enter": "who" (the
   person, not this scene) and "ties" to anyone already in the story, keyed by that person's #handle, with what
   they are to the newcomer ("older brother", "employer"). Their mind is built from that, not from your prose. A

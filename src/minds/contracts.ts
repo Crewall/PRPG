@@ -87,7 +87,21 @@ const listOf = <S extends z.ZodTypeAny>(item: S) =>
     .array(z.unknown())
     .default([])
     .transform((xs) => xs.map((x) => item.safeParse(x)).filter((r) => r.success).map((r) => (r as z.SafeParseSuccess<z.infer<S>>).data));
-const Remember = z.object({ text: z.string().min(1), tags: z.array(z.string()).default([]), pin: z.boolean().default(false) });
+const Remember = z.object({
+  text: z.string().min(1),
+  tags: z.array(z.string()).default([]),
+  pin: z.boolean().default(false),
+  kind: z.string().optional(),
+  about: z.string().optional(),
+  importance: z.union([z.number(), z.string()]).optional(),
+});
+const Revise = z.object({
+  id: z.union([z.string(), z.number()]).transform(String),
+  text: z.string().optional(),
+  importance: z.union([z.number(), z.string()]).optional(),
+  kind: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
 const Forget = z.union([z.string(), z.number()]).transform(String);
 
 // ---- The character's reply (docs/10 §9.1) ----
@@ -99,6 +113,7 @@ const CharacterReplyShape = {
   state: Str.optional(),
   vars: listOf(VarEntry),
   remember: listOf(Remember),
+  revise: listOf(Revise),
   forget: listOf(Forget),
 };
 export type CharacterReply = z.infer<z.ZodObject<typeof CharacterReplyShape>>;
@@ -121,7 +136,18 @@ export const CharacterReplyWire = z.object({
       }),
     )
     .optional(),
-  remember: z.array(z.object({ text: z.string(), tags: z.array(z.string()), pin: z.boolean().optional() })).optional(),
+  remember: z
+    .array(
+      z.object({
+        kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(),
+        about: z.string().optional(),
+        importance: z.number().optional(),
+        text: z.string(),
+        tags: z.array(z.string()),
+      }),
+    )
+    .optional(),
+  revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
 });
 
@@ -243,6 +269,7 @@ const DialogueReplyShape = {
   gesture: Str.default(''),
   state: Str.optional(),
   remember: listOf(Remember),
+  revise: listOf(Revise),
   forget: listOf(Forget),
   act: Str.optional(),
 };
@@ -267,7 +294,10 @@ export const DialogueReplyWire = z.object({
   say: z.string(),
   gesture: z.string().optional(),
   state: z.string().optional(),
-  remember: z.array(z.object({ text: z.string(), tags: z.array(z.string()), pin: z.boolean().optional() })).optional(),
+  remember: z
+    .array(z.object({ kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(), about: z.string().optional(), importance: z.number().optional(), text: z.string(), tags: z.array(z.string()) }))
+    .optional(),
+  revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
   act: z.string().optional(),
 });

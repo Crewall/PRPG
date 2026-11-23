@@ -240,8 +240,13 @@ function rowToThought(r: Row, tags: string[]): Thought {
     pinned: !!(r.pinned as number),
     status: r.status as Thought['status'],
     source: r.source as Thought['source'],
+    kind: ((r.kind as string) ?? 'note') as Thought['kind'],
+    importance: r.importance == null ? 5 : Number(r.importance),
+    about: (r.about as string) ?? null,
     createdTurnId: (r.created_turn_id as string) ?? null,
     createdClockMin: r.created_clock_min == null ? null : Number(r.created_clock_min),
+    renewedClockMin: r.renewed_clock_min == null ? (r.created_clock_min == null ? null : Number(r.created_clock_min)) : Number(r.renewed_clock_min),
+    revises: (r.revises as string) ?? null,
     revokedTurnId: (r.revoked_turn_id as string) ?? null,
     lastRecalledTurnId: (r.last_recalled_turn_id as string) ?? null,
     recallCount: r.recall_count as number,
@@ -264,6 +269,7 @@ export function createThoughtStore(db: Db) {
       return r ? rowToThought(r, tagsOf(r.id as string)) : undefined;
     },
 
+    /** Active thoughts, or (includeRevoked) every thought: forgotten, revised and faded too. */
     list(storyId: string, owner: string, opts: { includeRevoked?: boolean } = {}): Thought[] {
       const rows = opts.includeRevoked
         ? db.prepare(`SELECT * FROM thoughts WHERE story_id = ? AND owner = ? ORDER BY seq ASC`).all<Row>(storyId, owner)
@@ -271,35 +277,80 @@ export function createThoughtStore(db: Db) {
       return rows.map((r) => rowToThought(r, tagsOf(r.id as string)));
     },
 
+    /** Every active thought in the story (all owners), for fading. */
+    listActiveForStory(storyId: string): Thought[] {
+      return db
+        .prepare(`SELECT * FROM thoughts WHERE story_id = ? AND status = 'active' ORDER BY owner, seq ASC`)
+        .all<Row>(storyId)
+        .map((r) => rowToThought(r, tagsOf(r.id as string)));
+    },
+
     countActive(storyId: string, owner: string): number {
       return db.prepare(`SELECT count(*) AS n FROM thoughts WHERE story_id = ? AND owner = ? AND status = 'active'`).get<{ n: number }>(storyId, owner)!.n;
     },
 
-    insert(storyId: string, owner: string, t: { text: string; tags: string[]; pinned: boolean; source: Thought['source']; clockMin?: number | null }, turnId: string | null): Thought {
+    insert(
+      storyId: string,
+      owner: string,
+      t: { text: string; tags: string[]; pinned: boolean; source: Thought['source']; clockMin?: number | null; kind?: Thought['kind']; importance?: number; about?: string | null; revises?: string | null },
+      turnId: string | null,
+    ): Thought {
       const now = Date.now();
       const tid = id();
       const seq = (db.prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM thoughts WHERE story_id = ? AND owner = ?`).get<{ m: number }>(storyId, owner)!.m ?? 0) + 1;
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
-        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, now, now);
+          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, renewed_clock_min, kind, importance, about, revises, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, t.clockMin ?? null, t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.revises ?? null, now, now);
         for (const tag of t.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tid, tag);
       });
       return store.get(tid)!;
     },
 
     revoke(thoughtId: string, turnId: string | null): void {
-      db.prepare(`UPDATE thoughts SET status = 'revoked', revoked_turn_id = ?, updated_at = ? WHERE id = ?`).run(turnId, Date.now(), thoughtId);
+      db.prepare(`UPDATE thoughts SET status = 'revoked', revoked_turn_id = ?, status_turn_id = ?, updated_at = ? WHERE id = ?`).run(turnId, turnId, Date.now(), thoughtId);
+    },
+
+    /** Set a thought's status (revised, faded, or back to active). */
+    setStatus(thoughtId: string, status: Thought['status'], turnId: string | null): void {
+      db.prepare(`UPDATE thoughts SET status = ?, status_turn_id = ?, updated_at = ? WHERE id = ?`).run(status, turnId, Date.now(), thoughtId);
+    },
+
+    /** Edit a thought in place (the user, in advanced mode). */
+    update(thoughtId: string, patch: { text?: string; kind?: Thought['kind']; importance?: number; about?: string | null; tags?: string[] }): void {
+      const sets: string[] = [];
+      const args: (string | number | null)[] = [];
+      if (patch.text !== undefined) (sets.push('text = ?'), args.push(patch.text));
+      if (patch.kind !== undefined) (sets.push('kind = ?'), args.push(patch.kind));
+      if (patch.importance !== undefined) (sets.push('importance = ?'), args.push(patch.importance));
+      if (patch.about !== undefined) (sets.push('about = ?'), args.push(patch.about));
+      db.transaction(() => {
+        if (sets.length) db.prepare(`UPDATE thoughts SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, Date.now(), thoughtId);
+        if (patch.tags) {
+          db.prepare(`DELETE FROM thought_tags WHERE thought_id = ?`).run(thoughtId);
+          for (const tag of patch.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(thoughtId, tag);
+        }
+      });
+    },
+
+    /** It came up again: fading starts over from this in-story time (docs/11 §5.7). */
+    renew(thoughtIds: string[], clockMin: number | null): void {
+      if (clockMin == null) return;
+      for (const tid of thoughtIds) db.prepare(`UPDATE thoughts SET renewed_clock_min = ? WHERE id = ?`).run(clockMin, tid);
     },
 
     setPinned(thoughtId: string, pinned: boolean): void {
       db.prepare(`UPDATE thoughts SET pinned = ?, updated_at = ? WHERE id = ?`).run(pinned ? 1 : 0, Date.now(), thoughtId);
     },
 
+    /** Shown to its owner this round: recalled, and renewed at the story's current in-story time. */
     markRecalled(thoughtIds: string[], turnId: string | null): void {
       for (const tid of thoughtIds) {
-        db.prepare(`UPDATE thoughts SET last_recalled_turn_id = ?, recall_count = recall_count + 1 WHERE id = ?`).run(turnId, tid);
+        db.prepare(
+          `UPDATE thoughts SET last_recalled_turn_id = ?, recall_count = recall_count + 1,
+             renewed_clock_min = (SELECT clock_min FROM stories WHERE stories.id = thoughts.story_id) WHERE id = ?`,
+        ).run(turnId, tid);
       }
     },
 
