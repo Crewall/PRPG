@@ -227,6 +227,15 @@ export const CharacterReplyWire = z.object({
 /** Accepts anything JSON: AI replies are salvaged, never rejected wholesale. */
 export const CharacterReplySchema = z.unknown().transform((raw) => parseCharacterReply(raw));
 
+/** A character's reply as stored in its thread (raw text), parsed again (replaying a round, docs/10 §10a). */
+export function readCharacterReply(raw: string): CharacterReply & { problems: string[] } {
+  try {
+    return parseCharacterReply(JSON.parse(extractJson(raw)));
+  } catch {
+    return parseCharacterReply({});
+  }
+}
+
 /**
  * Parse + clamp a character's reply (state ≤ 25 words; say and intent to the widest limits here, the round holds
  * them to the character's focus tier, docs/10 §5.1e). `beats`, when given, fill an empty `say` / `intent`.

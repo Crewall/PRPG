@@ -28,12 +28,15 @@ export interface Script {
   seeder: Reply[];
   compactor: Reply[];
   director: Reply[];
+  /** The block reviser after an edited reply (docs/10 §10a). */
+  reviser?: Reply[];
 }
-export const emptyScript = (): Script => ({ narrator: [], characters: {}, distributor: [], seeder: [], compactor: [], director: [] });
+export const emptyScript = (): Script => ({ narrator: [], characters: {}, distributor: [], seeder: [], compactor: [], director: [], reviser: [] });
 
 export function agentOf(req: ChatRequest): string {
   if (req.system.includes('You are the **Narrator**')) return 'narrator';
   if (req.system.includes('forgot (or broke)')) return 'distributor';
+  if (req.system.includes('edited the prose')) return 'reviser';
   if (req.system.includes('character designer')) return 'seeder';
   if (req.system.includes('You fold the oldest part')) return 'compactor';
   if (req.system.includes('You decide who is being spoken to')) return 'director';
@@ -53,6 +56,7 @@ export function dispatchDriver(script: Script, seen: { agent: string; req: ChatR
         : agent === 'seeder' ? script.seeder
         : agent === 'compactor' ? script.compactor
         : agent === 'director' ? script.director
+        : agent === 'reviser' ? (script.reviser ??= [])
         : script.characters[agent.slice('character:'.length)] ?? [];
       const next = queue.shift();
       if (next === undefined) throw new Error(`no scripted reply for ${agent}`);

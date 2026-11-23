@@ -12,7 +12,7 @@ import { logger } from '../util/logger.ts';
 import { breakScene } from '../orchestrator/scenes.ts';
 import { buildCharacterCall, buildNarratorCall, commitCall, hereFromScene, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from './builders.ts';
 import type { Declaration, PreparedCall, ThreadDeps } from './builders.ts';
-import { emptyBlock, entryToOp, mixedBeats, parsePlayerInput, parseRoundBlock, readRoundBlock, spokenLines, splitNarratorReply } from './contracts.ts';
+import { emptyBlock, entryToOp, mixedBeats, parsePlayerInput, parseRoundBlock, readCharacterReply, readRoundBlock, spokenLines, splitNarratorReply } from './contracts.ts';
 import { focusFor, focusLine, holdToLimits, limitsFor } from './focus.ts';
 import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.ts';
 import { chooseCallers } from './gate.ts';
@@ -54,6 +54,11 @@ export interface RoundOptions {
   force?: string[];
   /** Characters the user gives the floor this round (docs/10 §5.1e): they act, with the sole focus. */
   floor?: string[];
+  /**
+   * Replay a round with the narrator's prose edited by the user (docs/10 §10a): no director, character or narrator
+   * calls — their stored outputs are used — and the round block is revised to match the edited prose.
+   */
+  replay?: ReplayInput;
   /** Which part of the round is running (for error messages). */
   setStage?: (stage: string) => void;
 }
@@ -227,7 +232,9 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   stage('direction');
   const direction: DirectionResult = dialogue.length
     ? NO_DIRECTION
-    : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
+    : opts.replay
+      ? opts.replay.direction
+      : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
   const directed = direction.all || direction.to.length > 0;
   const floor = new Set(opts.floor ?? []);
   const forcedSet = new Set([...(opts.force ?? []), ...floor]);
@@ -271,6 +278,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
           const f = focus.get(oid) ?? 'background';
           const limits = limitsFor(f, mset.characterVerbosity);
           const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid), focusLine: focusLine(f, limits) });
+          if (opts.replay) {
+            // The reply this character gave the first time, byte-exact (docs/10 §10a).
+            const raw = opts.replay.characterReplies.get(oid);
+            if (raw === undefined) return { objectId: oid, error: 'no reply to replay' };
+            return { objectId: oid, call, reply: holdToLimits(readCharacterReply(raw), limits), raw };
+          }
           const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
           const { reply, raw } = await agent.declare(call.ctx, { turnId: turn.id, signal });
           return { objectId: oid, call, reply: holdToLimits(reply, limits), raw };
@@ -322,7 +335,9 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
   const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
-  const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
+  const narratorText = opts.replay
+    ? await replayNarration(deps, story, turn, nCall.roundMessage, opts.replay, signal)
+    : await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
   if (!prose) throw new Error('the narrator wrote no story text (only a block)');
 
@@ -632,6 +647,42 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
 }
 
 /** The distributor (Light tier): a round block rebuilt from the prose when the narrator's is missing or broken. */
+export interface ReplayInput {
+  direction: DirectionResult;
+  /** Each called character's raw reply from the first time. */
+  characterReplies: Map<string, string>;
+  /** The narrator's prose as the user edited it. */
+  editedProse: string;
+  /** The round block the narrator wrote the first time. */
+  originalBlock: unknown;
+}
+
+/**
+ * The narrator's reply for a replayed round (docs/10 §10a): the edited prose, and the original round block
+ * revised by a light model to match it (briefs, states, variables, cast, places…). If the revision fails, the
+ * original block stands.
+ */
+async function replayNarration(deps: RoundDeps, story: Story, turn: Turn, roundMessage: string, replay: ReplayInput, signal: AbortSignal): Promise<string> {
+  const prose = replay.editedProse.trim();
+  let block: unknown = replay.originalBlock ?? {};
+  try {
+    const bound = deps.registry.getForRole('distributor', story.settings.roles.distributor);
+    const session = deps.agents.ensureSession(story.id, 'distributor', bound.name);
+    const user = [
+      `The narrator's round message (who is present, with #handles):\n${roundMessage}`,
+      `The original round block:\n${JSON.stringify(replay.originalBlock ?? {}, null, 1)}`,
+      `The prose as the player edited it:\n${prose}`,
+      'Reply with the revised round block as JSON.',
+    ].join('\n\n');
+    const agent = new MindAgent({ session, bound, threadLog: deps.threadLog, storyId: story.id });
+    block = await agent.distribute({ system: renderPrompt('minds-reviser', { briefMaxWords: String(story.settings.minds.briefMaxWords) }), messages: [{ role: 'user', content: user }] }, { turnId: turn.id, signal });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    logger.warn('block revision failed — the original block stands', { storyId: story.id, err: (err as Error).message });
+  }
+  return `${prose}\n\n\`\`\`round\n${JSON.stringify(block)}\n\`\`\``;
+}
+
 async function distribute(deps: RoundDeps, story: Story, turn: Turn, prose: string, presentIds: string[], playerId: string | null, signal: AbortSignal): Promise<RoundBlock> {
   const bound = deps.registry.getForRole('distributor', story.settings.roles.distributor);
   const session = deps.agents.ensureSession(story.id, 'distributor', bound.name);

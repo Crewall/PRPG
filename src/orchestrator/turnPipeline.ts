@@ -37,7 +37,9 @@ import type { SheetStore, ThoughtStore, VariableStore, NameStore, TieStore, MetS
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
 import { runDialogueExchange } from '../minds/dialogue.ts';
-import type { RoundDeps } from '../minds/round.ts';
+import type { ReplayInput, RoundDeps } from '../minds/round.ts';
+import { NO_DIRECTION } from '../minds/director.ts';
+import type { DirectionResult } from '../minds/director.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
 // forward events to the client; tests implement it to collect events.
@@ -81,11 +83,16 @@ export interface RunOptions {
   force?: string[];
   /** Minds engine: characters the user gives the floor this round (the sole focus, docs/10 §5.1e). */
   floor?: string[];
+  /** Minds engine: replay the round with the narrator's prose edited (docs/10 §10a). Internal. */
+  replay?: ReplayInput;
   /** Minds engine, dialogue mode: talk directly with this character (one exchange, nobody else called). */
   dialogue?: { partner: string };
 }
 
 /** The turn the client meant to act on is no longer the story's last one. */
+/** An emitter that discards everything (a replayed round has no live listener). */
+const nullEmitter = (): TurnEmitter => ({ accepted: () => {}, status: () => {}, delta: () => {}, final: () => {}, rejected: () => {}, error: () => {} });
+
 export class StaleTurnError extends Error {
   constructor() {
     super('the story changed since this page showed it — reload to see its latest message');
@@ -226,6 +233,45 @@ export class TurnPipeline {
     });
   }
 
+  /**
+   * ✎ on the last reply of a Minds story (docs/10 §10a): everyone learns the edited version. The turn is taken
+   * back to its start and committed again with the same player input and the characters' replies byte-exact; the
+   * narrator's reply becomes the edited prose with its round block revised to match. Revert brings back the
+   * original. Returns undefined when the turn can't be replayed (then the edit is transcript-only).
+   */
+  async editReply(storyId: string, turnId: string, narration: string): Promise<Turn | undefined> {
+    this.cancel(storyId);
+    return this.locks.withStory(storyId, async () => {
+      const { stories, snapshots, db } = this.deps;
+      const story = stories.getStory(storyId);
+      const last = stories.lastTurn(storyId);
+      if (!story || story.settings.engine !== 'minds' || !last || last.id !== turnId || last.status !== 'complete') return undefined;
+      if (last.meta.mode === 'dialogue' || !last.meta.block || !snapshots.has(last.id) || !narration.trim()) return undefined;
+      // What the first run produced, read before the turn is taken back.
+      const called = ((last.meta.gate as { called?: string[] } | undefined)?.called ?? []) as string[];
+      const characterReplies = new Map<string, string>();
+      for (const oid of called) {
+        const row = db
+          .prepare(
+            `SELECT m.content AS content FROM agent_messages m JOIN agent_sessions s ON s.id = m.session_id
+             WHERE s.story_id = ? AND s.role = 'character' AND s.npc_object_id = ? AND m.turn_id = ? AND m.role = 'assistant' ORDER BY m.rowid DESC LIMIT 1`,
+          )
+          .get<{ content: string }>(storyId, oid, last.id);
+        if (row) characterReplies.set(oid, row.content);
+      }
+      const request = (last.meta.request ?? {}) as RunOptions;
+      const replay: ReplayInput = {
+        direction: (last.meta.direction as DirectionResult | undefined) ?? NO_DIRECTION,
+        characterReplies,
+        editedProse: narration,
+        originalBlock: last.meta.block,
+      };
+      snapshots.saveUndo(storyId, { action: 'edit-reply', label: 'Undo the edit (bring back the original reply)', fromIndex: last.index });
+      this.undoTurn(storyId, last.id);
+      return this.runLocked(storyId, last.playerInput, nullEmitter(), { ...request, replay });
+    });
+  }
+
   /** Revert the last destructive action (docs/10 §10a). Returns what was undone, or undefined when nothing was saved. */
   async undo(storyId: string): Promise<{ action: string; label: string } | undefined> {
     this.cancel(storyId);
@@ -284,6 +330,7 @@ export class TurnPipeline {
               signal: aborter.signal,
               force: opts.force,
               floor: opts.floor,
+              replay: opts.replay,
               setStage: (s) => (stage = s),
             });
         out.final(finalTurn);

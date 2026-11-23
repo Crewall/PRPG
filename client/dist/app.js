@@ -889,10 +889,13 @@ async function renderPlay(storyId) {
         } catch (e) { alert('resend failed: ' + e.message); saveB.disabled = false; }
         return;
       }
+      // The last reply of a Minds story: everyone learns the edited version (a light model updates the round).
+      const replay = story.settings?.engine === 'minds' && field === 'narration' && lastTurn?.id === turnId;
+      if (replay) saveB.textContent = 'updating the story…';
       try {
         const r = await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: ta.value });
         if (r.deleted) { form.remove(); refreshUndo(); return; }
-        if (r.recommitted) { await redrawTranscript(); renderDrawer(); refreshSceneHeader(); refreshUndo(); return; }
+        if (r.recommitted) { await redrawTranscript(); renderDrawer(); refreshSceneHeader(); if (!r.ok) addStatus(`(${r.error})`); return; }
         textEl.textContent = ta.value;
         form.replaceWith(bubble);
         refreshUndo();

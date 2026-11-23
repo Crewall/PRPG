@@ -243,6 +243,14 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'turn not found' };
     }
+    // ✎ on the last reply of a Minds story: everyone learns the edited version (docs/10 §10a).
+    if (body.narration?.trim() && body.playerInput === undefined && stories.lastTurn(id)?.id === turnId && body.narration.trim() !== turn.narration.trim()) {
+      const replayed = await pipeline.editReply(id, turnId, body.narration);
+      if (replayed?.status === 'complete') return { ok: true, recommitted: true, turn: replayed };
+      // The turn was taken back but the replay failed: Revert brings back the original.
+      if (!stories.getTurn(turnId)) return { ok: false, recommitted: true, error: 'the edit could not be applied to the story — ↶ Revert brings back the original' };
+      // Not replayable (a conversation exchange, an older story): a transcript-only edit below.
+    }
     app.snapshots.saveRowUndo(id, turnId, { action: 'edit-text', label: 'Undo the edit' });
     const updated = stories.setTurnText(turnId, body)!;
     if (!updated.playerInput.trim() && !updated.narration.trim()) {
