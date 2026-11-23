@@ -52,9 +52,12 @@ export function createJobStore(db: Db) {
     },
 
     /** Atomically claim the next pending job (oldest first), marking it running. */
-    claimNext(): Job | undefined {
+    /** The oldest pending job whose wait is over (`ignoreWait`: any pending job — tests drain everything). */
+    claimNext(opts: { ignoreWait?: boolean } = {}): Job | undefined {
       return db.transaction(() => {
-        const r = db.prepare(`SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`).get<Row>();
+        const r = opts.ignoreWait
+          ? db.prepare(`SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`).get<Row>()
+          : db.prepare(`SELECT * FROM jobs WHERE status = 'pending' AND (not_before IS NULL OR not_before <= ?) ORDER BY created_at ASC LIMIT 1`).get<Row>(Date.now());
         if (!r) return undefined;
         const job = rowToJob(r);
         db.prepare(`UPDATE jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?`).run(Date.now(), job.id);
@@ -67,16 +70,19 @@ export function createJobStore(db: Db) {
     },
 
     /** Record a failure; requeue as pending unless attempts exhausted (then failed). */
+    /** A failed attempt: back to pending after a wait (15 s, 1 min, 4 min…), or failed once attempts run out. */
     markFailedOrRetry(jobId: string, error: string, maxAttempts = 3): JobStatus {
       const job = this.get(jobId);
       if (!job) return 'failed';
       const status: JobStatus = job.attempts >= maxAttempts ? 'failed' : 'pending';
-      db.prepare(`UPDATE jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`).run(status, error.slice(0, 1000), Date.now(), jobId);
+      const notBefore = status === 'pending' ? Date.now() + 15_000 * 4 ** Math.max(0, job.attempts - 1) : null;
+      db.prepare(`UPDATE jobs SET status = ?, last_error = ?, not_before = ?, updated_at = ? WHERE id = ?`).run(status, error.slice(0, 1000), notBefore, Date.now(), jobId);
       return status;
     },
 
+    /** Retry a failed job now (attempts start over). */
     retry(jobId: string): void {
-      db.prepare(`UPDATE jobs SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'failed'`).run(Date.now(), jobId);
+      db.prepare(`UPDATE jobs SET status = 'pending', attempts = 0, not_before = NULL, updated_at = ? WHERE id = ? AND status = 'failed'`).run(Date.now(), jobId);
     },
 
     countPending(): number {

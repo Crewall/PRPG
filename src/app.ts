@@ -86,7 +86,11 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const settingsService = createSettingsService(settings, config);
   setPromptOverrideProvider((name) => settingsService.promptOverride(name));
   // Every model call is counted per connection per UTC day (free-model limits, docs/12 §6.1).
-  const registry = createRegistry(() => settingsService.effective(), opts.driverFactory, { onRequest: (connectionId) => usage.increment(connectionId) });
+  const registry = createRegistry(() => settingsService.effective(), opts.driverFactory, {
+    onRequest: (connectionId) => usage.increment(connectionId),
+    // An overloaded provider: the page says it is waiting instead of looking stuck.
+    onWait: (connectionId, info) => events.emit({ t: 'provider.waiting', connectionId, ...info }),
+  });
   const contexts = createContextBuilder({ stories, summaries, memory, npcProfiles, verbosityOverride: () => settingsService.verbosityOverride() });
   const pipeline = new TurnPipeline({
     stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng,

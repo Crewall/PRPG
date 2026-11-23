@@ -6,7 +6,9 @@ import { EventEmitter } from 'node:events';
 export type ServerEvent =
   | { t: 'summary.updated'; storyId: string; scope: 'scene' | 'story' }
   | { t: 'memory.updated'; storyId: string; objectIds: string[] }
-  | { t: 'job.failed'; storyId: string | null; jobId: string; type: string; error: string }
+  | { t: 'job.failed'; storyId: string | null; jobId: string; type: string; error: string; objectId?: string | null; turnId?: string | null }
+  /** A provider is overloaded or rate-limited and a call waits before trying again. */
+  | { t: 'provider.waiting'; connectionId: string; model: string; waitMs: number; status: number }
   | { t: 'scene.changed'; storyId: string; sceneId: string }
   | { t: 'npc.profile.updated'; storyId: string; objectIds: string[] }
   | { t: 'story.rewound'; storyId: string; turnId: string; playerInput: string }

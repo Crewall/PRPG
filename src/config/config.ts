@@ -248,6 +248,8 @@ export interface ModelProfile {
   reasoning?: ReasoningSetting;
   effort?: Effort;
   caps?: ModelCaps;
+  /** Models on the same connection to fall back to when this one is overloaded (a tier's fallback). */
+  fallbackModels?: string[];
 }
 
 export interface EffectiveConfig {

@@ -25,6 +25,10 @@ export interface ChatRequest {
   sessionKey?: string;
   /** Abort long generations (regeneration, user cancel). */
   signal?: AbortSignal;
+  /** Other models (same connection) to use when this one is overloaded (docs/12: a tier's fallback). */
+  fallbackModels?: string[];
+  /** Told when the provider is busy and the call waits before trying again. */
+  onWait?: (info: { model: string; waitMs: number; status: number }) => void;
 }
 
 export interface Usage {

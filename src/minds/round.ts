@@ -517,7 +517,18 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     // 5f. The narrator's thread, the clock, the turn.
     commitCall(deps, nCall, narratorText, turn.id);
     const clockMin = deps.stories.advanceClock(storyId, block.time && block.time > 0 ? block.time : DEFAULT_TURN_MINUTES);
-    for (const oid of seedQueue) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    // A mind not written yet (its seeding failed: an overloaded provider, an empty reply) is tried again each
+    // round it is present, unless a seed for it is still waiting.
+    for (const oid of presentIds) {
+      const sheet = deps.sheets.get(oid);
+      if (sheet && !sheet.seeded && !sheet.description.trim() && !seedQueue.includes(oid)) seedQueue.push(oid);
+    }
+    for (const oid of seedQueue) {
+      const waiting = deps.db
+        .prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'minds_seed' AND status IN ('pending','running') AND json_extract(payload_json, '$.objectId') = ?`)
+        .get<{ n: number }>(oid)!.n;
+      if (!waiting) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    }
     // Threads that grew past their threshold get folded after the round (docs/10 §8.4).
     queueCompactions(deps, storyId, [nCall.sessionId, ...results.filter((r) => r.call && r.reply).map((r) => r.call!.sessionId)], turn.id);
     const count = (r: string) => outcomes.filter((o) => o.result === r).length;

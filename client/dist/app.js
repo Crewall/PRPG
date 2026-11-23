@@ -883,6 +883,37 @@ async function renderPlay(storyId) {
   // server can refuse when the story has moved on (never undo an earlier turn by mistake).
   let lastTurn = null; // { id, status, playerInput }
 
+  /**
+   * A background job gave up (a mind that couldn't be written, a memory not summarised): one calm line with
+   * Retry now and the details on demand. Gone when it succeeds or your next message goes out.
+   */
+  async function jobFailedNotice(m) {
+    const err = String(m.error || 'unknown error');
+    const reason = /429|rate.?limit|overload|busy|upstream|503/i.test(err) ? 'the provider is busy'
+      : /empty reply/i.test(err) ? 'the model returned nothing'
+      : /timeout/i.test(err) ? 'the provider took too long'
+      : err.length > 80 ? `${err.slice(0, 80)}…` : err;
+    let what;
+    if (m.type === 'minds_seed') {
+      let who = 'A character';
+      try { who = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === m.objectId)?.name || who; } catch {}
+      what = `${who.charAt(0).toUpperCase() + who.slice(1)}'s mind isn't written yet (${reason}). It is tried again next round.`;
+      transcript.querySelectorAll(`.job-notice[data-object="${m.objectId}"]`).forEach((el) => el.remove());
+    } else if (m.type === 'minds_compact') what = `A long memory couldn't be summarised yet (${reason}). It is tried again after a later round.`;
+    else what = `A background task (${m.type}) failed (${reason}). Play continues.`;
+    const details = h('pre', { class: 'thread-payload gone' }, err);
+    const status = h('span', { class: 'sub' });
+    const retryB = h('button', { class: 'link', onclick: async () => {
+      retryB.disabled = true;
+      try { await api.post(`/api/stories/${storyId}/jobs/${m.jobId}/retry`); status.textContent = 'trying again…'; }
+      catch (e2) { status.textContent = e2.message; retryB.disabled = false; }
+    } }, '↻ Retry now');
+    const note = h('div', { class: 'job-notice', 'data-job': m.jobId, ...(m.objectId ? { 'data-object': m.objectId } : {}) },
+      h('span', {}, '⚠ ', what, ' '), retryB, h('button', { class: 'link', onclick: () => details.classList.toggle('gone') }, 'details'), status, details);
+    transcript.append(note);
+    scrollDown();
+  }
+
   /** A failed or stopped attempt: say so, and offer to try again or drop it. */
   function failedNotice(turnId, text) {
     const retryB = h('button', { class: 'small primary', onclick: () => regenerate(turnId, { ask: false }) }, '↻ Retry');
@@ -1432,6 +1463,8 @@ async function renderPlay(storyId) {
     switch (m.t) {
       case 'turn.accepted':
         currentTurnId = m.turnId;
+        // A new message went out: background failures from before it are old news.
+        transcript.querySelectorAll('.job-notice').forEach((el) => el.remove());
         // The server dropped any failed attempt before this turn; drop it here too.
         if (lastTurn && lastTurn.status !== 'complete' && lastTurn.id !== m.turnId) transcript.querySelectorAll(`[data-turn="${lastTurn.id}"]`).forEach((el) => el.remove());
         if (pendingPlayerBubble) pendingPlayerBubble.dataset.turn = m.turnId;
@@ -1479,12 +1512,18 @@ async function renderPlay(storyId) {
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
-      case 'minds.updated': if (m.storyId === storyId) { refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); } break;
+      case 'minds.updated': if (m.storyId === storyId) {
+        refreshSceneHeader(); if (activeTab === 'cast') renderDrawer();
+        // A mind that got written after all: its failure notice goes.
+        for (const oid of m.objectIds || []) transcript.querySelectorAll(`.job-notice[data-object="${oid}"]`).forEach((el) => el.remove());
+      } break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
       // surface the full error in the transcript instead of failing silently.
-      case 'job.failed': if (m.storyId === storyId) { markAgentError(m.type); addBubble('error', `Background agent failed — ${m.type}: ${m.error || 'unknown error'} (retry from the failed-jobs list or ignore; play continues)`); } break;
+      case 'job.failed': if (m.storyId === storyId) { markAgentError(m.type); jobFailedNotice(m); } break;
+      // An overloaded provider: say so in the live line instead of looking stuck.
+      case 'provider.waiting': if (busy) showStage(`the provider is busy — trying again in ${Math.max(1, Math.round(m.waitMs / 1000))} s…`); break;
     }
   }
 
@@ -1602,6 +1641,10 @@ async function renderSettings() {
       const temp = h('input', { type: 'number', min: '0', max: '2', step: '0.1', placeholder: '—', value: t.temperature ?? '', title: 'Empty = not sent (some models reject it)', oninput: (e) => { const v = e.target.value.trim(); t.temperature = v === '' ? undefined : parseFloat(v); } });
       const reasoning = h('select', { onchange: (e) => (t.reasoning = e.target.value) }, opt('default', 'default', t.reasoning), opt('off', 'off', t.reasoning), opt('on', 'on', t.reasoning));
       const effort = h('select', { onchange: (e) => (t.effort = e.target.value || undefined) }, opt('', '—', t.effort || ''), ...['low', 'medium', 'high', 'max'].map((x) => opt(x, x, t.effort)));
+      // If the tier's model is overloaded: another model on the same provider (OpenRouter routes it itself).
+      const sameConn = st.models.filter((x) => m && x.providerId === m.providerId && x.id !== m.id);
+      const fb = h('select', { title: 'When this model is overloaded, use this one instead (same provider)', onchange: (e) => { t.fallbackModelId = e.target.value; } },
+        opt('', 'none', t.fallbackModelId || ''), ...sameConn.map((x) => opt(x.id, modelName(x), t.fallbackModelId)));
       const rm = h('button', { class: 'link', disabled: used.length > 0 || st.tiers.length <= 1, title: used.length ? 'Reassign its roles first (Role mapping)' : '', onclick: () => { st.tiers = st.tiers.filter((x) => x !== t); paint(); } }, 'remove');
       const reqs = c ? usage[c.id] || 0 : 0;
       const info = h('div', { class: 'sub tier-info' },
@@ -1610,7 +1653,7 @@ async function renderSettings() {
         m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
         m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
         m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
-      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), rm), info);
+      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb), rm), info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
     const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');

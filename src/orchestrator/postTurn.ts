@@ -63,7 +63,7 @@ export class JobWorker {
   /** Synchronously drain the queue to empty (used by tests). Sequential. */
   async drain(): Promise<void> {
     for (;;) {
-      const job = this.jobs.claimNext();
+      const job = this.jobs.claimNext({ ignoreWait: true });
       if (!job) return;
       await this.runJob(job);
     }
@@ -84,7 +84,7 @@ export class JobWorker {
       const status = this.jobs.markFailedOrRetry(job.id, message, this.maxAttempts);
       logger.warn('job failed', { type: job.type, jobId: job.id, attempt: job.attempts, status, message });
       if (status === 'failed') {
-        this.events.emit({ t: 'job.failed', storyId: job.storyId, jobId: job.id, type: job.type, error: message });
+        this.events.emit({ t: 'job.failed', storyId: job.storyId, jobId: job.id, type: job.type, error: message, objectId: (job.payload as { objectId?: string })?.objectId ?? null, turnId: job.turnId ?? null });
       }
     }
   }
