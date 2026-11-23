@@ -15,6 +15,8 @@ import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
 import { placesAndThings } from './places.ts';
 import type { Thought } from './thoughts.ts';
+import type { Beat } from './contracts.ts';
+import { mixedBeats } from './contracts.ts';
 import { holdersFor, thoughtLens, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
 
@@ -52,6 +54,8 @@ export interface CharacterCallInput {
   now?: string;
   /** Dialogue mode (docs/10 §7): who the character is talking with — switches the ask to the conversation format. */
   conversationWith?: string;
+  /** How much to say this round (docs/10 §5.1e), the round message's last line before the ask. */
+  focusLine?: string;
 }
 
 export interface PreparedCall {
@@ -72,12 +76,16 @@ export interface Declaration {
   to?: string;
   intent?: string;
   state?: string;
+  /** Words and actions in order, when the reply gave them so (docs/10 §6). */
+  beats?: Beat[];
+  /** Its focus this round (docs/10 §5.1e). */
+  focus?: string;
 }
 
 export interface NarratorCallInput {
   storyId: string;
-  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". */
-  player: { say?: string; do?: string; ooc?: string; to?: string };
+  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". `beats`: the order (§6). */
+  player: { say?: string; do?: string; ooc?: string; to?: string; beats?: Beat[] };
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
@@ -355,6 +363,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (always.length) parts.push(`Always on your mind:\n${always.map(chosen.render).join('\n')}`);
   if (recalled.length) parts.push(`You recall:\n${recalled.map(chosen.render).join('\n')}`);
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
+  if (input.focusLine) parts.push(input.focusLine);
   parts.push(
     input.conversationWith
       ? `You are in a direct conversation with ${input.conversationWith}. Reply as JSON in the conversation format.`
@@ -479,7 +488,12 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
 
   const p = input.player;
   const said = [p.say?.trim() ? `says "${p.say.trim()}"${p.to ? ` to ${p.to}` : ''}` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
-  const playerLine = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}: ${said || 'waits.'}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
+  const who = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}`;
+  // Words and actions in the order they were typed (docs/10 §6).
+  const ordered = mixedBeats(p.beats)
+    ? `${who}, in this order${p.to ? ` (speaking to ${p.to})` : ''}:\n${p.beats!.map((b, i) => `${i + 1}. ${b.kind === 'say' ? `says "${b.text}"` : `tries: ${b.text}`}`).join('\n')}`
+    : `${who}: ${said || 'waits.'}`;
+  const playerLine = `${ordered}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
   parts.push(playerLine);
   const everyone = [...input.presentIds, ...(player ? [player.objectId] : [])];
   if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false, everyone).join('\n'));
@@ -492,7 +506,11 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
       const d = byId.get(oid);
       if (!d || d.status === 'idle') lines.push('  This round: not acting.');
       else if (d.status === 'unavailable') lines.push('  This round: unavailable (voice them briefly yourself, in character).');
-      else {
+      else if (d.beats?.length) {
+        // In the order the character gave (docs/10 §6).
+        const seq = d.beats.map((b) => (b.kind === 'say' ? `says "${b.text}"` : `tries: ${b.text}`)).join(' → ');
+        lines.push(`  This round, in this order${d.to ? ` (speaking to ${d.to})` : ''}: ${seq}${d.state?.trim() ? ` · feels: "${d.state.trim()}"` : ''}`);
+      } else {
         const bits = [
           d.say?.trim() ? `says "${d.say.trim()}"${d.to ? ` to ${d.to}` : ''}` : 'says nothing',
           d.intent?.trim() ? `tries: ${d.intent.trim()}` : '',

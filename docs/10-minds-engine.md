@@ -214,6 +214,28 @@ and things already existed or their #handles, so it named them afresh each time,
   mark gone or back, merge a duplicate into another (its thoughts' tags follow), delete. No facts, no
   promote/demote: those belong to the legacy engines. Characters live on the Cast tab.
 
+### 5.1e How much each character says (focus tiers, settled with the owner)
+
+Every called character used to get the same "short" rule and the same 80-word cap: the one the player talks to
+was too terse, bystanders too chatty. Each called character now gets a **focus** for the round, worked out from
+what the round already knows:
+
+| Focus | When | Speech | Action |
+|---|---|---|---|
+| **sole** | the dialogue partner; the only one the player addresses (no one else called by the player or the narrator); or given the floor (⚡⚡) | ~240 words | ~50 words |
+| **lead** | spoken to by the player (with others), made to act (⚡), or spotlighted by the narrator | ~120 | ~25 |
+| **part** | the player spoke to everyone, mentioned them, or they just entered | ~40 | ~15 |
+| **background** | only reacting, or still going from last round | ~15 | ~10 |
+
+- The round message ends with one line saying the focus and how much to say ("You have the floor: say and do as
+  much as {{name}} naturally would, up to about …"). The numbers are ceilings, not targets: a taciturn character
+  stays brief.
+- The reply is held to the tier's limits (cut at a sentence end).
+- **Story options → Minds engine → character verbosity** (1–5, default 3) scales every tier (×0.5, ×0.75, ×1,
+  ×1.5, ×2).
+- ⚡ on a character card cycles: off → act next round (lead) → give them the floor (sole) → off.
+- The narrator does not mark minor characters (settled with the owner: not now).
+
 ### 5.2 Settled while building M4
 
 - **The player's words, once.** A called character hears the player's words in its round message ("Right
@@ -249,6 +271,20 @@ Making it obvious:
 - a small **?** next to the box opens the syntax entry of the help panel (§11.1).
 
 Empty input = "continue / wait".
+
+**Order (settled after a play test).** The lanes used to be joined: every quoted part became one line of speech and
+every action one list, so the narrator always wrote the player's words first and the actions after, whatever
+order they were typed in. The input is now also kept as ordered **beats**: `I set a coin on the counter. "A room,
+please." I watch her hands. "And a meal."` → 1 does · 2 says · 3 does · 4 says.
+
+- The narrator's round message lists the player's beats numbered, in order; its prompt says to keep that order in
+  the prose, interleave words and actions, and let each beat land on what the one before changed (a character
+  may cut in between).
+- Characters hear the player's lines as separate utterances, in order, with `…` where something happened between
+  them (`#tall-stranger: "A room, please." … "And a meal."`). They still don't see the player's actions before
+  they declare: an action is an attempt until the narrator resolves it, and a stealthy one must stay unseen.
+- The joined `say` / `do` stay for everything that reads them (the director, name learning, older turns).
+- A character's reply may use `beats` too (§9.1), so its words and actions keep their order.
 
 ## 7. Dialogue mode (manual)
 
@@ -413,7 +449,11 @@ repair-retry applies once; after that, the fallbacks of §5 step 5 (narrator) or
 }
 ```
 
-Clamps: `say` ≤ 80 words; `intent` ≤ 25 words; `state` ≤ 25 words (one sentence); at most 3 `remember`, 3
+Optionally, `"beats": [{ "do": "draws her knife" }, { "say": "Get out." }]` instead of `say` and `intent` when the
+order of words and actions matters (§6): the narrator reads them in that order; `say` and `intent` are derived from
+them.
+
+Clamps: `say` and `intent` by the round's focus tier (§5.1e; at most 240 and 50 words); `state` ≤ 25 words (one sentence); at most 3 `remember`, 3
 `revise` and 5 `forget` per reply; `kind` defaults to `note`, `importance` to 5 (clamped to 1–10); at most 3
 active agenda items (doc 11 §5.6–5.8). `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
 anything else is rejected and logged, never fatal. Whispering (`to` + private) is a TODO.
@@ -479,6 +519,27 @@ Input: a list of `{actor, action, sheet excerpt}`, the location, and the round c
 
 The existing adjudicator prompt (realism over drama, physics not morals) carries over, extended to many actions,
 and reads numeric variables (skills, health) as factors.
+
+## 10a. Revert, remove and edit (settled with the owner)
+
+Before: ↻ regenerate and Edit (below Send) restored the state from before a turn, and the replaced reply was lost
+for good (a regenerate that failed on an overloaded provider lost a good reply); × and ✎ only changed the
+transcript, so the minds kept what was removed or edited.
+
+- **One undo slot per story, usable once.** Before any destructive action (↻ on any reply, Edit, × on the last
+  exchange, ✎ on the last reply) the app saves the full current state: everything a pre-turn snapshot holds, the
+  thread messages, recaps and change-log rows the action would delete, the turn rows and their own snapshots.
+  **↶ Revert** under the last message ("Bring back the previous reply", "Restore the removed exchange", "Undo the
+  edit") restores it exactly. A new message, or another destructive action, replaces the slot; Revert empties it.
+- **× on the last exchange** is a real undo of that turn (like Edit, without putting the text back in the box).
+- **✎ on the last reply** brings everyone up to date: the turn is taken back to its start, a light AI call revises
+  the hidden round block to match the edited prose (briefs, states, variables, newcomers, places), and the round
+  is committed again with the characters' replies kept byte-exact. Everyone's brief and memory then follow the
+  edit. Revert brings back the original.
+- **✎ on the last player message** is edit and resend (Edit).
+- **Older messages:** × and ✎ stay transcript-only (the minds keep what happened; cutting rounds out of the middle
+  of their threads would corrupt them), and Revert can bring one back.
+- **Background jobs** (seeding, compaction) started by a turn that was undone do nothing.
 
 ## 10. Advanced mode and the POV filter
 

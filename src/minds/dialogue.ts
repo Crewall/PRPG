@@ -2,7 +2,8 @@ import type { Story, Turn } from '../domain.ts';
 import { MindAgent } from '../agents/mindAgent.ts';
 import { logger } from '../util/logger.ts';
 import { buildCharacterCall, commitCall, hereFromScene, queueForCharacter } from './builders.ts';
-import { parsePlayerInput, parseRoundBlock, emptyBlock } from './contracts.ts';
+import { mixedBeats, parsePlayerInput, parseRoundBlock, emptyBlock } from './contracts.ts';
+import { clampSentences, focusLine, limitsFor } from './focus.ts';
 import type { DialogueReply, PlayerDeclaration } from './contracts.ts';
 import { applyChanges, applyThoughtOps, fadeThoughts } from './service.ts';
 import { STATE_KEY } from './variables.ts';
@@ -34,8 +35,9 @@ const handleLabel = (deps: RoundDeps, oid: string) => {
   return `#${obj?.handle ?? deps.memory.ensureHandle(oid)} ${obj?.name ?? '?'}`;
 };
 
-/** The player's line as the partner hears and sees it. */
+/** The player's line as the partner hears and sees it: words and visible actions in the order typed (docs/10 §6). */
 function playerLine(label: string, d: PlayerDeclaration): string {
+  if (mixedBeats(d.beats)) return `${label}: ${d.beats!.map((b) => (b.kind === 'say' ? `"${b.text}"` : `(${b.text})`)).join(' ')}`;
   const said = d.say ? `${label}: "${d.say}"` : `${label} says nothing`;
   return d.do ? `${said} (${d.do})` : said;
 }
@@ -93,6 +95,7 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   out.status(`${deps.memory.getObject(partner)?.name ?? 'They'} is answering…`);
   const sheetNow = deps.sheets.get(partner);
   const bound = deps.registry.getForRole('character', sheetNow?.tierId ? `tier:${sheetNow.tierId}` : story.settings.roles.character);
+  const limits = limitsFor('sole', story.settings.minds.characterVerbosity);
   const call = buildCharacterCall(deps, {
     storyId,
     objectId: partner,
@@ -100,9 +103,12 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
     situationTags: [...lastBlock.tags, ...(lastBlock.evoke[`#${handle}`] ?? [])],
     now: playerLine(pLabel, decl),
     conversationWith: pLabel,
+    focusLine: focusLine('sole', limits),
   });
   const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
-  const { reply, raw } = await agent.converse(call.ctx, { turnId: turn.id, signal: opts.signal });
+  const { reply: full, raw } = await agent.converse(call.ctx, { turnId: turn.id, signal: opts.signal });
+  // The conversation partner has the floor (docs/10 §5.1e).
+  const reply = { ...full, say: clampSentences(full.say, limits.say) };
 
   // The player reads the partner's line under the name the player knows them by.
   const name = nameFor(deps, storyId, player?.objectId, partner).name;

@@ -79,6 +79,8 @@ export interface PipelineDeps {
 export interface RunOptions {
   /** Minds engine: characters the user forces to act this round. */
   force?: string[];
+  /** Minds engine: characters the user gives the floor this round (the sole focus, docs/10 §5.1e). */
+  floor?: string[];
   /** Minds engine, dialogue mode: talk directly with this character (one exchange, nobody else called). */
   dialogue?: { partner: string };
 }
@@ -232,7 +234,11 @@ export class TurnPipeline {
     const turn = stories.appendTurn({ storyId, playerInput, status: 'streaming' });
     this.deps.snapshots.capture(storyId, turn.id, turn.index);
     // What was asked, so Retry can ask it again.
-    if (opts.dialogue || opts.force?.length) stories.updateTurn(turn.id, { meta: { request: { ...(opts.dialogue ? { dialogue: opts.dialogue } : {}), ...(opts.force?.length ? { force: opts.force } : {}) } } });
+    if (opts.dialogue || opts.force?.length || opts.floor?.length) {
+      stories.updateTurn(turn.id, {
+        meta: { request: { ...(opts.dialogue ? { dialogue: opts.dialogue } : {}), ...(opts.force?.length ? { force: opts.force } : {}), ...(opts.floor?.length ? { floor: opts.floor } : {}) } },
+      });
+    }
     out.accepted(turn.id);
 
     const aborter = new AbortController();
@@ -250,6 +256,7 @@ export class TurnPipeline {
           : await runMindsRound(this.roundDeps(), story, turn, playerInput, out, {
               signal: aborter.signal,
               force: opts.force,
+              floor: opts.floor,
               setStage: (s) => (stage = s),
             });
         out.final(finalTurn);

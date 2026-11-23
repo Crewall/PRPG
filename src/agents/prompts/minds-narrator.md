@@ -12,6 +12,9 @@ Tone: {{tone}}
 2. Write the **prose** the player reads: second person for the player's character ("you"), present tense unless
    the tone says otherwise. {{verbosity}} Never decide the player's actions, words or feelings for them. End at a
    natural point for the player to act.
+   **Keep the order of events.** When the player's (or a character's) words and actions come numbered or "in this
+   order", tell them in that order, interleaved, never all the words first: each beat lands on what the one
+   before changed, and others may react or cut in between beats.
 3. Then write the **round block** (below), which the player never sees. It tells each character what they
    perceived, and records every change.
 

@@ -64,6 +64,7 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
   const adv = ctx.advanced();
   const vars = c.variables.filter((v) => adv || c.isPlayer || v.visibility === 'public');
   const forced = ctx.forced.has(c.objectId);
+  const hasFloor = ctx.floor?.has(c.objectId);
   const unknown = !c.isPlayer && (adv ? c.playerKnowsName === false : c.nameKnown === false);
   const m = modal(`${c.isPlayer ? '🎭 ' : ''}${c.name}${c.pronouns ? ` (${c.pronouns})` : ''}`,
     h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${unknown ? (adv ? ` · you don't know this name (to you: ${c.knownAs || 'someone'})` : ' · name unknown to you') : ''}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
@@ -79,7 +80,7 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
     !adv && !c.isPlayer ? h('div', { class: 'sub' }, 'You see what anyone present could: appearance, pronouns and what is visibly true.') : null,
     h('div', { class: 'row card-actions' },
       !c.isPlayer && present ? h('button', { class: 'primary', disabled: ctx.busy() || ctx.dialoguePartner() === c.objectId ? true : null, onclick: () => { m.close(); ctx.talk(c); } }, ctx.dialoguePartner() === c.objectId ? '💬 Talking' : '💬 Talk') : null,
-      !c.isPlayer && present ? h('button', { title: 'Make sure they are called next round', onclick: () => { ctx.toggleForce(c); m.close(); } }, forced ? '⚡ Will act — undo' : '⚡ Act next round') : null,
+      !c.isPlayer && present ? h('button', { title: 'Tap to cycle: act next round → give them the floor (they may say and do much more) → off', onclick: () => { ctx.toggleForce(c); m.close(); } }, hasFloor ? '⚡⚡ Has the floor — off' : forced ? '⚡ Will act — give the floor' : '⚡ Act next round') : null,
       c.isPlayer || adv ? h('button', { onclick: () => { m.close(); openSheetEditor(ctx, c.objectId); } }, adv && !c.isPlayer ? '📋 Sheet' : '✎ Edit') : null,
       helpLink(c.isPlayer ? 'player-character' : 'cast-bar')));
 }
@@ -683,7 +684,7 @@ export async function renderCastTab(ctx, body) {
   const adv = ctx.advanced();
   const card = (c) => h('div', { class: 'mem-card' },
     h('div', { class: 'mem-head', onclick: () => openCharacterCard(ctx, c.objectId, { present: present.has(c.objectId) }) },
-      h('div', {}, h('b', {}, `${c.isPlayer ? '🎭 ' : ''}${c.name}`), c.pronouns ? h('span', { class: 'sub' }, ` (${c.pronouns})`) : null, ctx.forced.has(c.objectId) ? ' ⚡' : null,
+      h('div', {}, h('b', {}, `${c.isPlayer ? '🎭 ' : ''}${c.name}`), c.pronouns ? h('span', { class: 'sub' }, ` (${c.pronouns})`) : null, ctx.marks?.(c.objectId) || null,
         h('div', { class: 'sub' }, [c.appearance, adv && c.state ? `State: "${c.state}"` : ''].filter(Boolean).join(' · ') || '—')),
       h('span', { class: 'sub' }, c.isPlayer ? 'you' : present.has(c.objectId) ? 'here' : 'away')));
   const chars = view.characters;

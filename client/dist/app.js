@@ -147,8 +147,11 @@ async function renderPlay(storyId) {
   }
   endTalkBtn.addEventListener('click', () => { if (busy) return; setDialogue(null); submitText('', false); });
 
-  // Minds UI state: advanced mode (per story, this browser only), characters forced to act next round.
+  // Minds UI state: advanced mode (per story, this browser only), characters made to act next round (⚡) or given
+  // the floor (⚡⚡, docs/10 §5.1e).
   const forced = new Set();
+  const floor = new Set();
+  const marks = (oid) => (floor.has(oid) ? ' ⚡⚡' : forced.has(oid) ? ' ⚡' : '');
   const ADV_KEY = `prpg.advanced.${storyId}`;
   let advanced = false;
   try { advanced = localStorage.getItem(ADV_KEY) === '1'; } catch {}
@@ -162,9 +165,18 @@ async function renderPlay(storyId) {
     advanced: () => advanced,
     busy: () => busy,
     forced,
+    floor,
+    marks,
     dialoguePartner: () => dialogue?.partner,
     talk: (c) => setDialogue({ partner: c.objectId, name: c.name }),
-    toggleForce: (c) => { if (forced.has(c.objectId)) forced.delete(c.objectId); else forced.add(c.objectId); refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); },
+    // ⚡ cycles: off → act next round → give them the floor → off.
+    toggleForce: (c) => {
+      const id = c.objectId;
+      if (floor.has(id)) floor.delete(id);
+      else if (forced.has(id)) { forced.delete(id); floor.add(id); }
+      else forced.add(id);
+      refreshSceneHeader(); if (activeTab === 'cast') renderDrawer();
+    },
     refresh: () => { refreshSceneHeader(); if (activeTab === 'cast' || activeTab === 'pov') renderDrawer(); },
   };
   // How the box will be read (Minds): said / tried / note — and the syntax when it is empty. Hidden until the
@@ -345,6 +357,7 @@ async function renderPlay(storyId) {
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
+      mindsNumIn('characterVerbosity', 'character verbosity (1–5)', 'How much characters say and do, for every focus: the one with the floor, the ones you speak to, the rest of the room, the background. 3 is the default; 1 halves everything, 5 doubles it.', 1, 5),
       mindsNumIn('fadeHours', 'thoughts fade: one point per (in-story hours)', 'A thought loses one point of importance for every this many in-story hours it doesn\'t come up; at 0 it fades from the character\'s mind (you can restore it on their sheet). Agenda items and thoughts of importance 8–10 never fade.', 1, 720),
       (() => {
         const cb = h('input', { type: 'checkbox' });
@@ -488,8 +501,8 @@ async function renderPlay(storyId) {
           ? h('button', { class: 'chip pc', title: `${tip(pc)}\n\nTap for your sheet.`, onclick: () => minds.openCharacterCard(mindsCtx, pc.objectId) }, `🎭 ${pc.name}`)
           : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
-          ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
-              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${forced.has(c.objectId) ? ' ⚡' : ''}`))
+          ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) || floor.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
+              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${marks(c.objectId)}`))
           : [h('span', { class: 'sub' }, 'nobody else here yet')]),
         h('span', { class: 'spacer' }),
         h('button', { class: `chip adv${advanced ? ' on' : ''}`, title: 'Advanced mode: see and edit everything (spoilers)', onclick: () => setAdvanced(!advanced) }, advanced ? '🔍 Advanced: on' : '🔍 Advanced'),
@@ -1565,8 +1578,9 @@ async function renderPlay(storyId) {
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
     const force = !dialogue && forced.size ? [...forced] : undefined;
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}) }));
-    if (force) { forced.clear(); refreshSceneHeader(); }
+    const floorIds = !dialogue && floor.size ? [...floor] : undefined;
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}), ...(floorIds ? { floor: floorIds } : {}) }));
+    if (force || floorIds) { forced.clear(); floor.clear(); refreshSceneHeader(); }
     return true;
   }
 

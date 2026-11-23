@@ -13,9 +13,15 @@ describe('round contracts', () => {
       say: 'A room, please.',
       do: 'I set a coin on the counter.',
       ooc: 'make it rain',
+      beats: [{ kind: 'say', text: 'A room, please.' }, { kind: 'do', text: 'I set a coin on the counter.' }],
     });
-    expect(parsePlayerInput('I nod. “Fine.” Then I leave.')).toEqual({ say: 'Fine.', do: 'I nod. … Then I leave.', ooc: '' });
-    expect(parsePlayerInput('')).toEqual({ say: '', do: '', ooc: '' });
+    expect(parsePlayerInput('I nod. “Fine.” Then I leave.')).toEqual({
+      say: 'Fine.',
+      do: 'I nod. … Then I leave.',
+      ooc: '',
+      beats: [{ kind: 'do', text: 'I nod.' }, { kind: 'say', text: 'Fine.' }, { kind: 'do', text: 'Then I leave.' }],
+    });
+    expect(parsePlayerInput('')).toEqual({ say: '', do: '', ooc: '', beats: [] });
   });
 
   it('splits the narrator reply and reads blocks leniently', () => {
@@ -31,8 +37,8 @@ describe('round contracts', () => {
   });
 
   it('clamps character replies and tolerates nulls', () => {
-    const r = parseCharacterReply({ say: 'word '.repeat(100), intent: null, to: 'marta', vars: null, remember: [{ text: 'x' }, { nope: 1 }] });
-    expect(r.say.split(' ')).toHaveLength(80);
+    const r = parseCharacterReply({ say: 'word '.repeat(600), intent: null, to: 'marta', vars: null, remember: [{ text: 'x' }, { nope: 1 }] });
+    expect(r.say.split(' ')).toHaveLength(480); // the widest limit; the round holds it to the focus tier
     expect(r.intent).toBe('');
     expect(r.to).toBe('#marta');
     expect(r.vars).toEqual([]);

@@ -12,7 +12,8 @@ import { logger } from '../util/logger.ts';
 import { breakScene } from '../orchestrator/scenes.ts';
 import { buildCharacterCall, buildNarratorCall, commitCall, hereFromScene, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from './builders.ts';
 import type { Declaration, PreparedCall, ThreadDeps } from './builders.ts';
-import { emptyBlock, entryToOp, parsePlayerInput, parseRoundBlock, readRoundBlock, splitNarratorReply } from './contracts.ts';
+import { emptyBlock, entryToOp, mixedBeats, parsePlayerInput, parseRoundBlock, readRoundBlock, spokenLines, splitNarratorReply } from './contracts.ts';
+import { focusFor, focusLine, holdToLimits, limitsFor } from './focus.ts';
 import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.ts';
 import { chooseCallers } from './gate.ts';
 import type { GateCandidate } from './gate.ts';
@@ -51,6 +52,8 @@ export interface RoundOptions {
   signal: AbortSignal;
   /** Characters the user forces to act this round. */
   force?: string[];
+  /** Characters the user gives the floor this round (docs/10 §5.1e): they act, with the sole focus. */
+  floor?: string[];
   /** Which part of the round is running (for error messages). */
   setStage?: (stage: string) => void;
 }
@@ -226,27 +229,33 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     ? NO_DIRECTION
     : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
   const directed = direction.all || direction.to.length > 0;
+  const floor = new Set(opts.floor ?? []);
+  const forcedSet = new Set([...(opts.force ?? []), ...floor]);
   const gate = dialogue.length
     ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
     : directed
-      ? directedGate(presentIds, direction, new Set(opts.force ?? []), spotlight, mset.maxCharactersPerRound)
+      ? directedGate(presentIds, direction, forcedSet, spotlight, mset.maxCharactersPerRound)
       : chooseCallers({
           present: candidates,
           playerText: `${decl.say}\n${decl.do}`,
           spotlight,
           neverActed,
           actedLastRound: actedLast,
-          forced: new Set(opts.force ?? []),
+          forced: forcedSet,
           cap: mset.maxCharactersPerRound,
         });
+  // How much each called character says this round (docs/10 §5.1e).
+  const focus = new Map(gate.called.map((oid) => [oid, focusFor(oid, { called: gate.called, reasons: gate.reasons, direction, floor })]));
   const handleOf = (oid: string) => `#${deps.memory.getObject(oid)?.handle ?? deps.memory.ensureHandle(oid)}`;
   const playerTo = direction.all ? 'everyone' : direction.to.map(handleOf).join(', ');
 
   // ---- 2. Characters declare, in parallel ----
   const playerLabel = playerId ? label(deps, playerId) : 'The player character';
   // The player's words, as each character hears them right now (their name only if that character knows it).
+  // Separate lines stay separate, in order (docs/10 §6): "A room, please." … "And a meal."
+  const playerSpoken = spokenLines(decl.beats, decl.say);
   const heardNowFor = (viewer: string) =>
-    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
+    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: ${playerSpoken}${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
   const heardNow = heardNowFor(NARRATOR_OWNER);
   let results: CharacterResult[] = [];
   if (gate.called.length) {
@@ -259,10 +268,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
           const bound = deps.registry.getForRole('character', sheet?.tierId ? `tier:${sheet.tierId}` : story.settings.roles.character);
           const handle = deps.memory.getObject(oid)?.handle ?? '';
           const tags = [...lastBlock.tags, ...(lastBlock.evoke[`#${handle}`] ?? lastBlock.evoke[handle] ?? [])];
-          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid) });
+          const f = focus.get(oid) ?? 'background';
+          const limits = limitsFor(f, mset.characterVerbosity);
+          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid), focusLine: focusLine(f, limits) });
           const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
           const { reply, raw } = await agent.declare(call.ctx, { turnId: turn.id, signal });
-          return { objectId: oid, call, reply, raw };
+          return { objectId: oid, call, reply: holdToLimits(reply, limits), raw };
         } catch (err) {
           if (signal.aborted) throw err; // a user cancel must still cancel the turn
           logger.warn('character call failed', { storyId, objectId: oid, err: (err as Error).message });
@@ -277,7 +288,16 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     if (!r && oid === partnerId && partnerAct) return { objectId: oid, status: 'acted', intent: partnerAct };
     if (!r) return { objectId: oid, status: 'idle' };
     if (!r.reply) return { objectId: oid, status: 'unavailable' };
-    return { objectId: oid, status: 'acted', say: r.reply.say, to: r.reply.to, intent: r.reply.intent, state: r.reply.state };
+    return {
+      objectId: oid,
+      status: 'acted',
+      say: r.reply.say,
+      to: r.reply.to,
+      intent: r.reply.intent,
+      state: r.reply.state,
+      ...(mixedBeats(r.reply.beats) ? { beats: r.reply.beats } : {}),
+      ...(focus.get(oid) ? { focus: focus.get(oid) } : {}),
+    };
   });
 
   // ---- 3. The narrator writes (streamed; the block never reaches the player) ----
@@ -527,10 +547,11 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         queueForNarrator(deps, storyId, `Note: your briefs for ${vague.join(', ')} said he/she without naming anyone by #handle. Name people by #handle in briefs (the player too), so each character knows who is meant.`, turn.id);
       }
     }
-    const speeches: { from: string; to?: string; say: string }[] = [];
-    if (decl.say) speeches.push({ from: 'player', say: decl.say, ...(playerTo ? { to: playerTo } : {}) });
+    // What was said aloud, each speaker's lines kept apart and in order (docs/10 §6).
+    const speeches: { from: string; to?: string; say: string; line: string }[] = [];
+    if (decl.say) speeches.push({ from: 'player', say: decl.say, line: playerSpoken, ...(playerTo ? { to: playerTo } : {}) });
     for (const d of declarations) {
-      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim() });
+      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim(), line: spokenLines(d.beats, d.say) });
     }
     // Names (docs/11 §2.5): a name said aloud is learned by everyone who heard it; the player also learns the
     // names the prose shows. Learned before the briefs are written, so a brief may use a name just heard.
@@ -546,7 +567,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const oid of presentIds) {
       const heard = speeches
         .filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid)))
-        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: "${s.say}"`);
+        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: ${s.line}`);
       const brief = briefs.get(oid);
       const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
