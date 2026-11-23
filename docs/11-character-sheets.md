@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -564,7 +564,10 @@ Normal mode keeps the public card for others and your own character's sheet.
 ## 7. Data model (migration `007-minds-sheets.sql`)
 
 As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
-(`id, story_id, key, sort, def_json`), because the shape differs per type. Handles are stored without the `#`
+(`id, story_id, key, sort, def_json`), because the shape differs per type. Later migrations: `013-minds-ties.sql`
+(`character_sheets.concept`, `character_ties`), `014-minds-thoughts-v2.sql` (`thoughts.kind`, `importance`,
+`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`); relation values
+use `variable_values.holder = "<from>><to>"`. Handles are stored without the `#`
 (`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 
 ```sql

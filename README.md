@@ -57,7 +57,10 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   works out whom you are talking to (only they answer), ↻ regenerates any recent reply, a failed turn offers Retry
   or Discard, and overloaded providers are ridden out (waits, a fallback model per tier, quiet notices). New
   characters arrive whole: the narrator hands over who they are and how they are related to others (ties), and
-  their mind is written from that, from what they perceived and from who is around them.
+  their mind is written from that, from what they perceived and from who is around them. Characters keep an
+  agenda, opinions of the people that matter and deep feelings, each rated 1–10 and fading when old; variables can
+  hold a value per pair of characters (trust, affection) and are set up in a guided editor; advanced mode shows
+  each character's full sheet.
 
 ## Running it
 
