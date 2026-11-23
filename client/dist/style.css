@@ -453,3 +453,7 @@ table.vars.rel td { padding: 2px 6px; white-space: nowrap; }
 .def-card.v2 .def-head .sub { flex: none; }
 .form-row input[type=checkbox], .form-row input[type=radio], .form-row input[type=range] { width: auto; flex: none; }
 .form-row label.sub { display: inline-flex; gap: 6px; align-items: center; margin: 0; }
+
+/* ---- Revert (docs/10 §10a) ---- */
+.undo-bar { display: flex; justify-content: center; padding: 4px 12px; }
+.undo-bar button { font-size: 13px; }

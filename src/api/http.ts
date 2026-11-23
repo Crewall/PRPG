@@ -195,9 +195,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   // and restore the pre-message state; returns the prompt for editing.
   server.post('/api/stories/:id/rewind', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ turnId: z.string().optional() }).safeParse(req.body ?? {});
+    // `action: "remove"`: × on the last exchange (docs/10 §10a) — undone like Edit, the text not put back.
+    const body = z.object({ turnId: z.string().optional(), action: z.enum(['rewind', 'remove']).optional() }).safeParse(req.body ?? {});
     try {
-      const result = await pipeline.rewind(id, { expectTurnId: body.success ? body.data.turnId : undefined });
+      const result = await pipeline.rewind(id, { expectTurnId: body.success ? body.data.turnId : undefined, action: body.success ? body.data.action : undefined });
       return { ok: true, ...result };
     } catch (err) {
       reply.code(err instanceof StaleTurnError ? 409 : 400);
@@ -216,6 +217,21 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     if (stories.getStory(storyId)?.settings.engine !== 'minds') app.agents.deleteMessagesForTurn(turnId);
   };
 
+  // Revert (docs/10 §10a): what the last destructive action would bring back, and doing it.
+  server.get('/api/stories/:id/undo', async (req) => {
+    const { id } = req.params as { id: string };
+    return app.snapshots.undoInfo(id) ?? { none: true };
+  });
+  server.post('/api/stories/:id/undo', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const done = await pipeline.undo(id);
+    if (!done) {
+      reply.code(404);
+      return { error: 'nothing to revert' };
+    }
+    return { ok: true, ...done };
+  });
+
   // Edit any past message: rewrite a turn's player input and/or narration text
   // (the transcript ✎ control). Memory is left as-is; if both sides end up
   // empty the turn is dropped entirely (same as deleting the message).
@@ -227,6 +243,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'turn not found' };
     }
+    app.snapshots.saveRowUndo(id, turnId, { action: 'edit-text', label: 'Undo the edit' });
     const updated = stories.setTurnText(turnId, body)!;
     if (!updated.playerInput.trim() && !updated.narration.trim()) {
       dropTurn(id, turnId);
@@ -244,6 +261,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'turn not found' };
     }
+    app.snapshots.saveRowUndo(id, turnId, { action: 'remove-text', label: 'Restore the removed message' });
     dropTurn(id, turnId);
     return { ok: true, deleted: true };
   });

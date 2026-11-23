@@ -180,6 +180,8 @@ export function createMindsCompactHandler(deps: RoundDeps): JobHandler {
       const live = deps.threads.log(sessionId);
       const same = plan.fold.every((m, i) => live[i]?.id === m.id) && deps.threads.recap(sessionId)?.id === priorRecap?.id;
       if (!same) return;
+      // The turn that asked for it was undone while the compactor wrote (docs/10 §10a): nothing to do.
+      if (job.turnId && deps.stories.getTurn(job.turnId)?.status !== 'complete') return;
       const owner = plan.kind === 'character' ? plan.objectId! : NARRATOR_OWNER;
       // Always on their mind (docs/11 §5.9): the agenda, pinned and 9–10 thoughts.
       const pinned = deps.thoughts.list(storyId, owner).filter(alwaysOn).sort((a, b) => Number(b.kind === 'agenda') - Number(a.kind === 'agenda') || a.seq - b.seq);

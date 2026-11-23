@@ -137,16 +137,21 @@ export class TurnPipeline {
    * snapshot — summaries, memory, scenes, sessions, transcript — and deletes
    * the turn. Throws when the story has no turns.
    */
-  async rewind(storyId: string, opts: { expectTurnId?: string } = {}): Promise<RewindResult> {
+  async rewind(storyId: string, opts: { expectTurnId?: string; action?: 'rewind' | 'remove' } = {}): Promise<RewindResult> {
     this.cancel(storyId); // halt any ongoing response; its turn becomes the one we delete
     return this.locks.withStory(storyId, async () => {
-      const { stories, events } = this.deps;
+      const { stories, events, snapshots } = this.deps;
       if (!stories.getStory(storyId)) throw new Error(`story '${storyId}' not found`);
       const last = stories.lastTurn(storyId);
       if (!last) throw new Error('nothing to rewind — the story has no turns yet');
       // The client says which turn it means to remove. If the story moved on (or that turn is already gone),
       // refuse rather than silently undoing an earlier, good turn.
       if (opts.expectTurnId && last.id !== opts.expectTurnId) throw new StaleTurnError();
+      // A complete exchange can be brought back once (docs/10 §10a); a failed attempt has nothing worth keeping.
+      if (last.status === 'complete') {
+        const remove = opts.action === 'remove';
+        snapshots.saveUndo(storyId, { action: remove ? 'remove' : 'rewind', label: remove ? 'Restore the removed exchange' : 'Restore the exchange you took back', fromIndex: last.index });
+      }
       const restored = this.undoTurn(storyId, last.id);
       events.emit({ t: 'story.rewound', storyId, turnId: last.id, playerInput: last.playerInput });
       return { turnId: last.id, playerInput: last.playerInput, restored };
@@ -170,6 +175,12 @@ export class TurnPipeline {
       if (!target || target.storyId !== storyId) return void out.error('', 'that message is no longer in the story — reload'), undefined;
       if (target.id !== last.id && !snapshots.has(target.id)) {
         return void out.error('', 'that reply is too far back to write again (only recent ones can be redone)'), undefined;
+      }
+      // What is about to be replaced can be brought back once (docs/10 §10a).
+      const replaced = stories.recentTurns(storyId, 200).filter((t) => t.index >= target.index);
+      if (replaced.some((t) => t.status === 'complete')) {
+        const n = replaced.filter((t) => t.status === 'complete').length;
+        snapshots.saveUndo(storyId, { action: 'regenerate', label: n > 1 ? `Bring back the ${n} replaced replies` : 'Bring back the previous reply', fromIndex: target.index });
       }
       const req = (target.meta.request ?? {}) as RunOptions;
       // Older dialogue turns kept no request: their partner is in the meta.
@@ -208,7 +219,23 @@ export class TurnPipeline {
   }
 
   async run(storyId: string, playerInput: string, out: TurnEmitter, opts: RunOptions = {}): Promise<Turn | undefined> {
-    return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out, opts));
+    return this.locks.withStory(storyId, () => {
+      // A new message moves the story on: the last destructive action can no longer be reverted (docs/10 §10a).
+      this.deps.snapshots.clearUndo(storyId);
+      return this.runLocked(storyId, playerInput, out, opts);
+    });
+  }
+
+  /** Revert the last destructive action (docs/10 §10a). Returns what was undone, or undefined when nothing was saved. */
+  async undo(storyId: string): Promise<{ action: string; label: string } | undefined> {
+    this.cancel(storyId);
+    return this.locks.withStory(storyId, async () => {
+      const { snapshots, events } = this.deps;
+      const info = snapshots.undoInfo(storyId);
+      if (!info || !snapshots.applyUndo(storyId)) return undefined;
+      events.emit({ t: 'story.undone', storyId, action: info.action });
+      return { action: info.action, label: info.label };
+    });
   }
 
   private roundDeps(): RoundDeps {

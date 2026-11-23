@@ -135,6 +135,9 @@ async function renderPlay(storyId) {
   const endTalkBtn = h('button', { class: 'small', title: 'End the conversation; the narrator wraps it up and tells everyone else what they noticed' }, 'End conversation');
   const actBtn = h('button', { class: 'small', title: 'End the conversation by doing something: what you typed is sent as a normal action' }, 'Act');
   const dialogueBar = h('div', { class: 'dialogue-bar', style: 'display:none' }, dialogueLabel, endTalkBtn, actBtn);
+  // Revert (docs/10 §10a): one step back after a regenerate, Edit, remove or edit — usable once.
+  const undoBtn = h('button', { class: 'small' }, '↶ Revert');
+  const undoBar = h('div', { class: 'undo-bar', style: 'display:none' }, undoBtn);
   const DEFAULT_PLACEHOLDER = input.placeholder;
   function setDialogue(d) {
     dialogue = d;
@@ -436,7 +439,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, undoBar, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   updateInputPreview();
@@ -876,22 +879,65 @@ async function renderPlay(storyId) {
     cancelB.addEventListener('click', () => form.replaceWith(bubble));
     saveB.addEventListener('click', async () => {
       saveB.disabled = true;
+      // Your last message in a Minds story: edit and resend (the AIs answer the new words; ↶ Revert brings back the old).
+      if (story.settings?.engine === 'minds' && field === 'playerInput' && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+        if (busy) { saveB.disabled = false; return; }
+        try {
+          await api.post(`/api/stories/${storyId}/rewind`, { turnId });
+          await redrawTranscript();
+          submitText(ta.value.trim(), false);
+        } catch (e) { alert('resend failed: ' + e.message); saveB.disabled = false; }
+        return;
+      }
       try {
         const r = await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: ta.value });
-        if (r.deleted) { form.remove(); return; }
+        if (r.deleted) { form.remove(); refreshUndo(); return; }
+        if (r.recommitted) { await redrawTranscript(); renderDrawer(); refreshSceneHeader(); refreshUndo(); return; }
         textEl.textContent = ta.value;
         form.replaceWith(bubble);
+        refreshUndo();
       } catch (e) { alert('save failed: ' + e.message); saveB.disabled = false; }
     });
   }
   async function deleteMessage(bubble, turnId, field) {
-    const msg = story.settings?.engine === 'minds'
-      ? 'Remove this message from the transcript?\n\nThe characters still remember it. To undo the last turn completely, use Edit or ↻ Retry.'
+    const minds = story.settings?.engine === 'minds';
+    // The last exchange in a Minds story: really undone, as if it never happened (↶ Revert brings it back).
+    if (minds && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+      if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
+      if (!confirm('Remove the last exchange?\n\nEverything it changed (memories, thoughts, variables) is undone too. You can bring it back with ↶ Revert.')) return;
+      try { await api.post(`/api/stories/${storyId}/rewind`, { turnId, action: 'remove' }); await redrawTranscript(); renderDrawer(); refreshSceneHeader(); }
+      catch (e) { alert('remove failed: ' + e.message); }
+      return;
+    }
+    const msg = minds
+      ? 'Remove this message from the transcript?\n\nThe characters still remember it (only the last exchange can be undone completely). ↶ Revert brings it back.'
       : 'Delete this message? Memory is unaffected; later story flow may shift.';
     if (!confirm(msg)) return;
-    try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); }
+    try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); refreshUndo(); }
     catch (e) { alert('delete failed: ' + e.message); }
   }
+
+  /** Show ↶ Revert when the last destructive action can be undone. */
+  async function refreshUndo() {
+    let info = null;
+    try { info = await api.get(`/api/stories/${storyId}/undo`); } catch {}
+    if (!info || info.none || busy) { undoBar.style.display = 'none'; return; }
+    undoBtn.textContent = `↶ Revert: ${info.label}`;
+    undoBar.style.display = '';
+  }
+  undoBtn.addEventListener('click', async () => {
+    if (busy) return;
+    undoBtn.disabled = true;
+    try {
+      await api.post(`/api/stories/${storyId}/undo`, {});
+      await redrawTranscript();
+      // A message Edit put back in the box is in the story again.
+      if (lastTurn?.playerInput && input.value.trim() === lastTurn.playerInput.trim()) { input.value = ''; input.dispatchEvent(new Event('input')); }
+      renderDrawer(); refreshSceneHeader();
+    } catch (e) { addStatus(`(revert failed: ${e.message})`); }
+    undoBtn.disabled = false;
+    refreshUndo();
+  });
 
   // The story's last turn as this page knows it: Edit and Retry name it, so the
   // server can refuse when the story has moved on (never undo an earlier turn by mistake).
@@ -1007,6 +1053,7 @@ async function renderPlay(storyId) {
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange
     } catch {}
+    refreshUndo();
   }
   await redrawTranscript();
 
@@ -1415,7 +1462,7 @@ async function renderPlay(storyId) {
   let ws = null, current = null, busy = false, lastInput = '';
   let disposed = false, reconnectTimer = null;
   const wsInfo = { attempts: 0, since: null, lastClose: null, nextRetryAt: null };
-  const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; };
+  const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; if (b) undoBar.style.display = 'none'; };
   const wsOpen = () => ws && ws.readyState === WebSocket.OPEN;
 
   function connectWs() {
@@ -1496,7 +1543,7 @@ async function renderPlay(storyId) {
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
-        current = null; setBusy(false); scrollDown();
+        current = null; setBusy(false); scrollDown(); refreshUndo();
         lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
@@ -1533,6 +1580,7 @@ async function renderPlay(storyId) {
         for (const oid of m.objectIds || []) transcript.querySelectorAll(`.job-notice[data-object="${oid}"]`).forEach((el) => el.remove());
       } break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
+      case 'story.undone': if (m.storyId === storyId && !undoBtn.disabled) { redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
       // surface the full error in the transcript instead of failing silently.

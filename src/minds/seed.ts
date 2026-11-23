@@ -116,6 +116,9 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     const obj = deps.memory.getObject(objectId);
     const sheet = deps.sheets.get(objectId);
     if (!story || !obj || !sheet) return; // deleted or rewound meanwhile
+    // Work from a turn that was undone does nothing (docs/10 §10a).
+    const turnGone = () => !!job.turnId && !deps.stories.getTurn(job.turnId);
+    if (turnGone()) return;
     if (sheet.seeded && !force) return;
 
     const handle = obj.handle ?? deps.memory.ensureHandle(objectId)!;
@@ -134,7 +137,7 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     );
 
     const now = deps.sheets.get(objectId);
-    if (!now || !deps.memory.getObject(objectId)) return; // removed while generating
+    if (!now || !deps.memory.getObject(objectId) || turnGone()) return; // removed or undone while generating
     const description = clampWordsKeepLines(unescapeText(reply.description), maxWords);
     const state = clampWords(unescapeText(reply.state).replace(/\s*\n\s*/g, ' '), 40).text;
     deps.db.transaction(() => {
