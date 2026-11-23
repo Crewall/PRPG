@@ -53,7 +53,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   M3 (thread builders), M4 (the round), M5 (dialogue mode), M6 (thread compaction) and M7 (the UI: character
   cards with Talk and Act next round, your own character, advanced mode with sheet editing and a POV view, the
   scenario variable editor, the **?** help panel) and M8 (the old engines retired) ✅ built — **every new story is
-  a Minds story**. Retry (↻) writes the last reply again; a failed turn offers Retry or Discard.
+  a Minds story**. Since then: names are learned (strangers stay unnamed, for you and for every mind), a director
+  works out whom you are talking to (only they answer), ↻ regenerates any recent reply, a failed turn offers Retry
+  or Discard, and overloaded providers are ridden out (waits, a fallback model per tier, quiet notices).
 
 ## Running it
 

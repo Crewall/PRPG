@@ -368,3 +368,15 @@ td.vis.hidden { color: #ff8a8a; }
 .bubble.player.failed::after { content: 'not delivered'; display: block; font-size: 11px; color: #ff8a8a; margin-top: 4px; }
 .retry-tool { font-size: 15px; }
 .badge.legacy { margin-left: 8px; font-size: 11px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); vertical-align: middle; }
+
+/* The message box with its small syntax "?" in the corner (no extra row). */
+.input-wrap { position: relative; flex: 1; display: flex; min-width: 0; }
+.input-wrap textarea { flex: 1; width: 100%; padding-right: 30px; }
+.syntax-toggle { position: absolute; top: 5px; right: 6px; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 12px; font-weight: 700; line-height: 1; color: var(--muted); background: transparent; border: 1px solid var(--border); opacity: .75; }
+.syntax-toggle:hover, .syntax-toggle.on { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.regen-tool:disabled { opacity: .35; cursor: not-allowed; }
+
+/* A background job that gave up: one calm line, details on demand. */
+.job-notice { font-size: 13px; color: var(--muted); padding: 4px 2px; align-self: stretch; }
+.job-notice .link { font-size: 13px; padding: 0 4px; }
+.job-notice pre { margin: 4px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; }

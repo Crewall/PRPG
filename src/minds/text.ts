@@ -43,3 +43,27 @@ export function normalizeTag(raw: string): string {
   if (!body) return '';
   return handle ? `#${body}` : body;
 }
+
+// ---- Telling real values from copied placeholders (models sometimes copy a template's "<name>" or "…") ----
+
+const PLACEHOLDER_NAMES = new Set([
+  'name', 'a name', 'a real name', 'their name', 'his name', 'her name', 'new character', 'character', 'unknown', 'none', 'n/a', 'na',
+  'player', 'the player', 'player character', 'the player character', 'you', 'pc',
+]);
+
+/** A template placeholder copied as a value: "<their name>", "…", "...", "{name}". */
+export function isPlaceholder(value: string | undefined | null): boolean {
+  const v = (value ?? '').trim();
+  return !v || /[<>{}]/.test(v) || /^(…|\.{2,}|-+|\?+)$/.test(v);
+}
+
+/** A usable name for a person: two letters at least, not a placeholder or a stand-in like "player". */
+export function isRealName(name: string | undefined | null): boolean {
+  const n = (name ?? '').trim();
+  if (isPlaceholder(n) || n.includes('…')) return false;
+  if ((n.match(/\p{L}/gu) ?? []).length < 2) return false;
+  return !PLACEHOLDER_NAMES.has(n.toLowerCase());
+}
+
+/** A field value, or '' when it is a copied placeholder. */
+export const realValue = (value: string | undefined | null): string => (isPlaceholder(value) ? '' : (value ?? '').trim());

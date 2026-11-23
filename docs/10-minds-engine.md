@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -159,6 +159,34 @@ Reuses `shouldInvokeNpc`. A present character is called when any of these holds:
 
 Present but not called: no call, but its pending brief stays pending, so the next time it is called it reads
 everything it witnessed, in order. Cap: `maxCharactersPerRound` (default 4; spotlighted characters first).
+
+### 5.1b Who is being spoken to (the director)
+
+The gate above calls everyone who is new or acted last round, and the player's words reach everyone with no
+addressee. So when the player asked one girl her name, all three people present answered. The player can't name
+the addressee either: they may not know the name yet (doc 11 §2.5). Before the gate, the round works out **the
+direction** of the player's words:
+
+1. **Obvious cases, no AI call:**
+   - no speech (only an action): no direction, the gate works as above;
+   - only one other person present: them;
+   - the player's message names someone present: by a #handle, a name the player knows, or their known-as label
+     ("the wary woman");
+   - pure speech (no action) when exactly one person spoke to the player last round: a reply to them.
+2. **Otherwise a director** (role `director`, Light tier, prompt `minds-director`, a stateless helper) reads the
+   people present as the player knows them, the last lines spoken (who said what to whom) and the player's
+   message, and answers `{ "to": ["#handle"], "all": false, "react": ["#handle"], "why": "…" }`. If it fails,
+   there is no direction and the gate works as above.
+
+**What the direction changes:**
+- **The gate:** when the words are for particular people, those are called, plus anyone the director says would
+  react, the narrator's spotlight and forced characters; nobody else (no "first appearance" or "acted last
+  round" calls). `all` calls everyone (capped).
+- **What everyone hears:** the player's line carries its direction, `#tall-stranger: "What's your name?" (to
+  #elf-girl-in-green)`, live and in the *Heard* lists; the narrator reads "says … to #…".
+- **The character prompt:** words said to someone else aren't yours to answer: react, or cut in only when you
+  really would.
+- The turn records it (`meta.direction`: to, all, react, and whether it came from a rule or the director).
 
 ### 5.2 Settled while building M4
 
@@ -553,8 +581,10 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 ## 14. TODO (explicitly later)
 
-- **Branching:** Retry (↻) replaces the last reply; keeping the earlier attempts as alternatives to switch between
-  (per turn, with their snapshots) is later.
+- **Branching:** ↻ regenerates a reply (an earlier one takes the later turns with it); keeping the replaced attempts
+  as alternatives to switch between (per turn, with their snapshots) is later.
+- A version check: the page notices the server was updated and offers to reload (an open tab keeps running the
+  old scripts after an update).
 - Converting a legacy story to Minds properly (characters → sheets, memory facts → descriptions and thoughts, the
   transcript → a narrator recap); today a switch keeps the transcript and the minds start fresh.
 - The character interviewer for Minds: draft the player's sheet in ≤ 3 questions (doc 11 §2.1); today the player

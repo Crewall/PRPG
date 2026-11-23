@@ -41,6 +41,8 @@ export function defaultDriverFactory(conn: ResolvedConnection, config: Effective
 export interface RegistryHooks {
   /** Called once per model call (not per internal HTTP retry), with the connection id. */
   onRequest?(connectionId: string): void;
+  /** A provider is busy: the call waits before trying again. */
+  onWait?(connectionId: string, info: { model: string; waitMs: number; status: number }): void;
 }
 
 /**
@@ -89,6 +91,8 @@ export function createRegistry(getConfig: () => EffectiveConfig, factory: Driver
             effort: profile.effort,
             sessionKey: req.sessionKey,
             signal: req.signal,
+            ...(profile.fallbackModels?.length ? { fallbackModels: profile.fallbackModels } : {}),
+            onWait: (info) => hooks.onWait?.(conn.id, info),
           },
           onDelta,
         );

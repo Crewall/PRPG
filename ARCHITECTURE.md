@@ -68,6 +68,8 @@ src/
     round.ts            the round: gate → characters → narrator → block → one commit (and the dialogue wrap-up)
     dialogue.ts         dialogue mode: one exchange with one character per turn; the transcript for the wrap-up
     compaction.ts       minds_compact job: fold a thread's oldest half into a recap
+    director.ts         who the player's words are meant for: rules first, else a Light-tier director
+    names.ts            who knows whose name: labels per viewer, learning from speech, masking briefs
     contracts.ts        player input lanes, character reply, round block (lenient parsing)
     gate.ts             who acts this round
     seed.ts             minds_seed job: a mind for a newly introduced character
@@ -95,10 +97,11 @@ story can't switch back). The classic engine and NPC Story Mode are **retired** 
 the stories that already use them, marked *legacy*, until they are deleted (M9).
 
 **Every engine, before a new turn:** a failed, stopped or interrupted attempt at the end of the story is undone
-from its snapshot first, so its message can't linger while the AIs never saw it. **Retry** (`turn.retry`) undoes
-the last turn and runs it again with the same message and options; **Edit** (rewind) undoes it and returns the
-message. Both name the turn they mean (`turnId`); if the story's last turn is another one, the server refuses
-(409) rather than undo an earlier turn.
+from its snapshot first, so its message can't linger while the AIs never saw it. **Regenerate / Retry**
+(`turn.retry`, ↻ on every reply) undoes a turn — an earlier one takes every later turn with it — and runs it again
+with the same message and options (only turns that still have a snapshot: the last 16); **Edit** (rewind) undoes
+the last one and returns the message. Both say which turn the page considers the last; if the story moved on, the
+server refuses (409) rather than undo the wrong turns.
 
 ### Classic engine (legacy)
 
@@ -143,15 +146,24 @@ message. Both name the turn they mean (`turnId`); if the story's last turn is an
 
 1. Turn row and snapshot, as above. Parse the player's input: `"…"` said, `((…))` a note to the narrator, the
    rest what they try.
-2. The gate picks who acts: forced, the narrator's spotlight, first appearance, mentioned by the player, acted
-   last round (capped).
+2. **Direction** (doc 10 §5.1b): whom the player's words are meant for — a rule (one person present, someone named
+   or described, a reply to who just spoke) or the director (Light tier). With a direction, those spoken to act
+   (plus who'd react, the spotlight, forced ones); without one, the gate picks: forced, the narrator's spotlight,
+   first appearance, mentioned by the player, acted last round (capped). Everyone hears where the words went.
 3. Called characters declare in parallel, each on its own **persistent thread** (Medium tier): their pending
    briefs, the player's words "right now", their sheet, recalled thoughts. Replies are stored byte-exact.
 4. The narrator (Heavy tier) streams the prose; the fenced round block that follows is never shown. A missing
    or broken block goes to the distributor (Light tier), then to plain briefs.
 5. One transaction commits everything: threads, thoughts, cast and scene changes, variable and state changes by
-   the rules, the narrator's notes, each character's brief plus the exact words it heard, the clock, the turn.
-6. New characters get a `minds_seed` job; threads over their threshold get a `minds_compact` job. No scribes run.
+   the rules, the narrator's notes, names learned (from speech heard, the prose for the player, the block's
+   `names`), each character's brief (names it doesn't know replaced by handles) plus the exact words it heard,
+   the clock, the turn.
+6. New characters (and present ones whose mind still isn't written) get a `minds_seed` job; threads over their
+   threshold get a `minds_compact` job. No scribes run.
+
+**Names** (doc 11 §2.5, `minds.nameKnowledge`, on for new stories): nobody knows a stranger's name. Handles are
+made from a known-as label (`#elf-girl-in-green`), and each mind, and the player's UI, see a name only once it is
+known.
 
 Threads only ever append, so each request is a prefix of the next one (cache hits). When one grows past its
 threshold (8k tokens for a character, 32k for the narrator), a Light-tier compactor folds its oldest half into a
@@ -187,13 +199,14 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `story_summaries` | scene summaries and the story digest |
 | `memory_suggestions` | merge/contradiction inbox for the user |
 | `npc_profiles` | NPC Story Mode: personality + notes per character (also the classic engine's prose portrait) |
-| `turn_snapshots` | pre-turn copy of mutable state, last 8 per story (rewind / edit) |
-| `jobs` | background work queue |
+| `turn_snapshots` | pre-turn copy of mutable state, last 16 per story (rewind, edit, regenerate) |
+| `jobs` | background work queue (`not_before`: backoff between attempts) |
 | `settings` | runtime settings (`runtimeConfig`), seeded from `config.json` on first boot |
 | `rules` | unused (the overseer was never built) |
 | `character_sheets` | Minds: description, appearance, one-sentence state, player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
 | `thoughts` / `thought_tags` | Minds: self-written memories with tags, pinned / active / revoked |
+| `name_knowledge` | Minds: who knows whose name (viewer → subject) |
 
 `memory_objects.handle` (unique per story) gives every roster object a `#handle`. `agent_messages` gained `kind`
 and `compacted` for Minds threads.
@@ -236,7 +249,8 @@ and `compacted` for Minds threads.
 | `minds_seed` | a character the Minds narrator introduces | description, state, starting values, thoughts |
 | `minds_compact` | a Minds thread over its threshold after a turn | fold its oldest half into a recap (rewind undoes it) |
 
-Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot), and report failures on the bus.
+Jobs retry 3 times with a growing wait between attempts (15 s, 1 min, 4 min), survive restarts (stuck `running`
+jobs are requeued on boot), and report failures on the bus (shown as one quiet line with Retry now).
 
 ## 7. API and events (summary; the full list is in `src/api/http.ts`)
 
@@ -255,13 +269,14 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
 WebSocket in: `turn.submit` (Minds options: `force`, character ids that must act; `dialogue: { partner }`, one
 dialogue exchange), `turn.retry` (`turnId`: undo the last turn and run it again), `turn.cancel`.
 WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`, `minds.updated`,
-`scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `thread.activity` (live agent status bar).
+`scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `provider.waiting` (an overloaded provider:
+the call waits), `thread.activity` (live agent status bar).
 
 ## 8. Testing and commands
 
 ```bash
 npm install
-npm test            # Vitest, 230 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 245 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

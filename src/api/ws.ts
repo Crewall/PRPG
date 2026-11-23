@@ -9,7 +9,8 @@ const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('turn.submit'), storyId: z.string(), input: z.string(), force: z.array(z.string()).optional(), dialogue: z.object({ partner: z.string() }).optional() }),
   z.object({ t: z.literal('turn.cancel'), storyId: z.string() }),
   // Retry the story's last turn (a failed attempt, or a reply to write again); turnId = the one the client means.
-  z.object({ t: z.literal('turn.retry'), storyId: z.string(), turnId: z.string().optional() }),
+  // Regenerate a turn (default: the last one); lastTurnId = the story's last turn as the client knows it.
+  z.object({ t: z.literal('turn.retry'), storyId: z.string(), turnId: z.string().optional(), lastTurnId: z.string().optional() }),
 ]);
 
 // WebSocket endpoint at /ws. Protocol per 06-orchestration.md (Layer-1 subset:
@@ -54,7 +55,7 @@ export async function registerWsRoutes(server: FastifyInstance, app: App): Promi
 
       const running =
         parsed.t === 'turn.retry'
-          ? app.pipeline.retry(parsed.storyId, emitter, { expectTurnId: parsed.turnId })
+          ? app.pipeline.retry(parsed.storyId, emitter, { turnId: parsed.turnId, expectTurnId: parsed.lastTurnId ?? parsed.turnId })
           : app.pipeline.run(parsed.storyId, parsed.input, emitter, { force: parsed.force, dialogue: parsed.dialogue });
       running.catch((err) => {
         send({ t: 'turn.error', message: (err as Error).message });

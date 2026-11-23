@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -97,6 +97,45 @@ in its next round message ("name people by #handle so each character knows who i
 delivered.
 
 *Later (doc 10 §14):* "known as" names per observer (Marta knows the player only as "the stranger" until told).
+
+### 2.5 Names: who knows whom
+
+Nobody knows a stranger's name. Until a name is heard, people are known by what they look like, and the app keeps
+it that way for the player and for every mind. (A play test showed the leak: the player asked an unnamed girl her
+name, her name was already on her chip, in everyone's "Here:" list and inside her handle, `#liraelen`.)
+
+**Data.** Each sheet has a **known-as** label (≤ 5 words, public, e.g. "the elf girl in green"): how someone who
+doesn't know the name refers to them. A `name_knowledge` row (viewer → subject) records that the viewer knows the
+subject's name: a character's object id, or the player character's id for the player. Rewind and Retry cover it.
+
+**Neutral handles.** In a story with names on, a new character's handle comes from its known-as label
+(`#elf-girl-in-green`), never from its name, so the handle gives nothing away. Handles never change once given; the
+label can be updated (she changes clothes) without changing the handle.
+
+**Who knows a name:**
+- every character knows its own;
+- `cast.enter` may say whom the newcomer already knows (`"knows": ["#handle"]`) and who already knows the
+  newcomer (`"knownBy": [...]`): family, old friends;
+- **heard speech teaches names**: when a name of someone in the story is said aloud (as a whole word, the full name
+  or its first word), everyone who heard the line learns that name; the player hears what is said around them;
+- the narrator records any other learning in its block: `"names": { "#learner": ["#whose name"] }` (a letter, a
+  name tag, an introduction it narrated without quoting);
+- the user can mark a name as known or unknown for the player in advanced mode.
+
+**What each viewer sees:**
+- **A character's "Here:" block and the lines it heard** name a person only if it knows the name:
+  `- #elf-girl-in-green (name unknown to you; she/her) — An elf girl in a green cloak.` /
+  `#elf-girl-in-green: "Have you seen my brother?"`.
+- **Briefs:** the narrator is told who knows which name; as a safety net, the app replaces any name the reader
+  doesn't know with that person's #handle before delivery (heard speech is never altered: hearing a name is how
+  it is learned).
+- **The player:** chips, cards, the dialogue banner and the Cast tab show the known-as label until the player knows
+  the name. Advanced mode shows the real name, marked "unknown to you".
+- **The narrator** knows every name; its round message lists, per person present, whose names they know, and its
+  prose uses a name only when the player knows it.
+
+**Switch:** `minds.nameKnowledge` (Story options → Minds engine). On for new stories; off for stories created
+before it existed, where everyone keeps knowing everyone's name (their handles were made from names anyway).
 
 ## 3. State
 

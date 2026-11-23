@@ -17,7 +17,7 @@ import type { ThreadDeps } from '../minds/builders.ts';
 const APPEARANCE_MAX_WORDS = 40;
 
 export async function registerMindsRoutes(server: FastifyInstance, app: App): Promise<void> {
-  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts };
+  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names };
 
   const storyOr404 = (id: string, reply: { code(n: number): unknown }) => {
     const story = app.stories.getStory(id);
@@ -101,6 +101,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     description: z.string().optional(),
     appearance: z.string().optional(),
     pronouns: z.string().max(40).optional(),
+    knownAs: z.string().max(60).optional(),
+    /** Advanced: whether the player knows this character's name (docs/11 §2.5). */
+    playerKnowsName: z.boolean().optional(),
     state: z.string().optional(),
     tierId: z.string().nullable().optional(),
   });
@@ -124,7 +127,8 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const sheet = createCharacter(deps, id, { ...body.data, name: body.data.name });
+    const { playerKnowsName: _known, ...fields } = body.data;
+    const sheet = createCharacter(deps, id, { ...fields, name: body.data.name });
     reply.code(201);
     return { ...sheet, handle: app.memory.getObject(sheet.objectId)?.handle ?? null };
   });
@@ -146,8 +150,15 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const { state, name, ...patch } = body.data;
+    const { state, name, playerKnowsName, ...patch } = body.data;
     if (name) app.memory.updateObject(oid, { name });
+    if (playerKnowsName !== undefined) {
+      const pc = app.sheets.player(id)?.objectId;
+      if (pc && pc !== oid) {
+        if (playerKnowsName) app.names.learn(id, pc, oid, null);
+        else app.names.forget(pc, oid);
+      }
+    }
     // State goes through the rules so the change is logged ($state history).
     if (state !== undefined) applyChanges(deps, id, [{ change: { holder: oid, key: STATE_KEY, op: 'set', value: state }, by: 'user' }]);
     return updateSheet(deps, id, oid, patch);

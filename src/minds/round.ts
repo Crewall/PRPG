@@ -20,8 +20,11 @@ import type { GateCandidate } from './gate.ts';
 import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
-import { slugify } from './text.ts';
+import { isPlaceholder, isRealName, realValue, slugify } from './text.ts';
+import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
+import { NO_DIRECTION, resolveDirection } from './director.ts';
+import type { DirectionResult } from './director.ts';
 import { queueCompactions } from './compaction.ts';
 
 // One normal round of the Minds engine (docs/10 §5): characters declare (in
@@ -99,21 +102,27 @@ function settlePlayer(
   deps: RoundDeps,
   storyId: string,
   playerId: string | null,
-  p: { name?: string; pronouns?: string; appearance?: string },
+  p: { name?: string; pronouns?: string; appearance?: string; knownAs?: string },
   presentIds: string[],
 ): { playerId?: string; changed?: boolean; problem?: string } {
-  const pronouns = p.pronouns?.trim() ?? '';
-  const appearance = p.appearance?.trim() ?? '';
+  const pronouns = realValue(p.pronouns).slice(0, 40);
+  const appearance = realValue(p.appearance);
+  const knownAs = realValue(p.knownAs).slice(0, 60);
   if (playerId) {
     const sheet = deps.sheets.get(playerId);
     if (!sheet) return { playerId };
-    const patch = { ...(!sheet.appearance.trim() && appearance ? { appearance } : {}), ...(!sheet.pronouns.trim() && pronouns ? { pronouns } : {}) };
+    const patch = {
+      ...(!sheet.appearance.trim() && appearance ? { appearance } : {}),
+      ...(!sheet.pronouns.trim() && pronouns ? { pronouns } : {}),
+      ...(!sheet.knownAs.trim() && knownAs ? { knownAs } : {}),
+    };
     if (!Object.keys(patch).length) return { playerId };
     deps.sheets.upsert(storyId, playerId, patch);
     return { playerId, changed: true };
   }
   const name = p.name?.trim();
   if (!name) return { problem: 'player: no name given for the new player character' };
+  if (!isRealName(name)) return { problem: `player: "${name}" is not a name` };
   const existing = deps.memory.findByName(storyId, name);
   if (existing) {
     if (presentIds.includes(existing.id) || existing.type !== 'character') return { problem: `player: '${name}' is already someone else` };
@@ -125,7 +134,25 @@ function settlePlayer(
     });
     return { playerId: existing.id, changed: true };
   }
-  return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns }).objectId, changed: true };
+  return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns, knownAs }).objectId, changed: true };
+}
+
+/** The gate when the player's words have a direction: those spoken to, those who'd react, the spotlight, forced. */
+function directedGate(presentIds: string[], d: DirectionResult, forced: Set<string>, spotlight: Set<string>, cap: number) {
+  const reasons: Record<string, string> = {};
+  const order: string[] = [];
+  const add = (oid: string, why: string) => {
+    if (!presentIds.includes(oid) || reasons[oid]) return;
+    reasons[oid] = why;
+    order.push(oid);
+  };
+  for (const oid of forced) add(oid, 'forced');
+  for (const oid of d.all ? presentIds : d.to) add(oid, 'spoken to');
+  for (const oid of d.react) add(oid, 'would react');
+  for (const oid of spotlight) add(oid, 'spotlight');
+  const called = order.slice(0, Math.max(1, cap));
+  for (const oid of order.slice(called.length)) delete reasons[oid];
+  return { called, idle: presentIds.filter((x) => !called.includes(x)), reasons };
 }
 
 /** Resolve a block key ("#marta", "Marta Vell", "world", "#player") to a holder id. */
@@ -188,21 +215,35 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     else if (previous && last.turnId === previous.id) actedLast.add(oid);
   }
   const spotlight = new Set(lastBlock.spotlight.map((k) => resolveKey(deps, storyId, k, playerId)).filter((x): x is string => !!x));
+  // Who the player's words are meant for (docs/10 §5.1b): when they are for particular people, those answer —
+  // not everyone who happens to be new or spoke last round.
+  stage('direction');
+  const direction: DirectionResult = dialogue.length
+    ? NO_DIRECTION
+    : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
+  const directed = direction.all || direction.to.length > 0;
   const gate = dialogue.length
     ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
-    : chooseCallers({
-    present: candidates,
-    playerText: `${decl.say}\n${decl.do}`,
-    spotlight,
-    neverActed,
-    actedLastRound: actedLast,
-    forced: new Set(opts.force ?? []),
-    cap: mset.maxCharactersPerRound,
-  });
+    : directed
+      ? directedGate(presentIds, direction, new Set(opts.force ?? []), spotlight, mset.maxCharactersPerRound)
+      : chooseCallers({
+          present: candidates,
+          playerText: `${decl.say}\n${decl.do}`,
+          spotlight,
+          neverActed,
+          actedLastRound: actedLast,
+          forced: new Set(opts.force ?? []),
+          cap: mset.maxCharactersPerRound,
+        });
+  const handleOf = (oid: string) => `#${deps.memory.getObject(oid)?.handle ?? deps.memory.ensureHandle(oid)}`;
+  const playerTo = direction.all ? 'everyone' : direction.to.map(handleOf).join(', ');
 
   // ---- 2. Characters declare, in parallel ----
   const playerLabel = playerId ? label(deps, playerId) : 'The player character';
-  const heardNow = mset.playerSpeechHeardImmediately && decl.say ? `${playerLabel}: "${decl.say}"` : undefined;
+  // The player's words, as each character hears them right now (their name only if that character knows it).
+  const heardNowFor = (viewer: string) =>
+    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
+  const heardNow = heardNowFor(NARRATOR_OWNER);
   let results: CharacterResult[] = [];
   if (gate.called.length) {
     stage('characters');
@@ -214,7 +255,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
           const bound = deps.registry.getForRole('character', sheet?.tierId ? `tier:${sheet.tierId}` : story.settings.roles.character);
           const handle = deps.memory.getObject(oid)?.handle ?? '';
           const tags = [...lastBlock.tags, ...(lastBlock.evoke[`#${handle}`] ?? lastBlock.evoke[handle] ?? [])];
-          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNow });
+          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid) });
           const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
           const { reply, raw } = await agent.declare(call.ctx, { turnId: turn.id, signal });
           return { objectId: oid, call, reply, raw };
@@ -250,12 +291,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   // The player character must exist and be describable (docs/11 §2.1): ask the narrator for what is missing.
   const playerSheet = playerId ? deps.sheets.get(playerId) : undefined;
   const playerAsk = !playerSheet
-    ? 'The player has no character yet. In the block, add "player": {"name": "…", "pronouns": "…", "appearance": "…"}: what the story has established about them, else invent what fits the premise.'
+    ? 'The player has no character yet. In the block, add "player" with their name (a real name, not a description), their pronouns and a one-line appearance: what the story has established about them, else invent what fits the premise.'
     : !playerSheet.appearance.trim() || !playerSheet.pronouns.trim()
       ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
       : undefined;
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
-  const nCall = buildNarratorCall(deps, { storyId, player: decl, presentIds, declarations, situationTags: lastBlock.tags, context });
+  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
@@ -310,6 +351,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       }
     }
     for (const o of block.objects) {
+      if (isPlaceholder(o.name)) continue;
+      o.line = realValue(o.line);
       const existing = deps.memory.findByName(storyId, o.name) ?? (o.name.trim().startsWith('#') ? deps.memory.findByHandle(storyId, o.name.trim()) : undefined);
       if (existing) {
         // The narrator keeps places' and things' public one-liners current (docs/11 §2.4).
@@ -328,18 +371,35 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     }
     const entered: string[] = [];
     for (const e of block.cast.enter) {
+      if (!isRealName(e.name)) {
+        blockProblems.push(`cast.enter: "${e.name}" is not a name`);
+        continue;
+      }
+      e.appearance = realValue(e.appearance);
+      e.pronouns = realValue(e.pronouns).slice(0, 40);
       const existing = deps.memory.findByName(storyId, e.name) ?? deps.memory.findByHandle(storyId, slugify(e.name));
       let oid: string;
       if (existing && existing.id !== playerId) {
         oid = existing.id;
         const sheet = deps.sheets.get(oid);
+        const knownAs = realValue(e.knownAs).slice(0, 60);
         deps.sheets.upsert(storyId, oid, {
           ...(sheet?.appearance ? {} : { appearance: e.appearance }),
           ...(sheet?.pronouns || !e.pronouns.trim() ? {} : { pronouns: e.pronouns.trim() }),
+          ...(sheet?.knownAs || !knownAs ? {} : { knownAs }),
         });
       } else if (!existing) {
-        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns }).objectId;
+        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns, knownAs: realValue(e.knownAs).slice(0, 60) }).objectId;
       } else continue;
+      // Whom the newcomer already knows by name, and who already knows theirs (family, old friends).
+      for (const k of e.knows) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world') learnName(deps, storyId, oid, other, turn.id);
+      }
+      for (const k of e.knownBy) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world') learnName(deps, storyId, other, oid, turn.id);
+      }
       if (!current().activeNpcIds.includes(oid)) {
         deps.stories.addActiveNpc(current().id, oid);
         entered.push(oid);
@@ -393,6 +453,16 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     outcomes = applyChanges(deps, storyId, proposals, turn.id);
     for (const o of outcomes) if (o.proposal.change.holder !== 'world') changedIds.add(o.proposal.change.holder);
 
+    // 5c'. Names learned other than by hearing them (docs/11 §2.5).
+    for (const [learnerKey, subjects] of Object.entries(block.names)) {
+      const learner = resolveKey(deps, storyId, learnerKey, playerId);
+      if (!learner || learner === 'world') continue;
+      for (const k of subjects) {
+        const subject = resolveKey(deps, storyId, k, playerId);
+        if (subject && subject !== 'world') learnName(deps, storyId, learner, subject, turn.id);
+      }
+    }
+
     // 5d. The narrator's own notes.
     applyThoughtOps(deps, storyId, NARRATOR_OWNER, block.notes, 'self', turn.id);
 
@@ -411,15 +481,28 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         queueForNarrator(deps, storyId, `Note: your briefs for ${vague.join(', ')} said he/she without naming anyone by #handle. Name people by #handle in briefs (the player too), so each character knows who is meant.`, turn.id);
       }
     }
-    const speeches: { from: string; line: string }[] = [];
-    if (decl.say) speeches.push({ from: 'player', line: `${playerLabel}: "${decl.say}"` });
+    const speeches: { from: string; to?: string; say: string }[] = [];
+    if (decl.say) speeches.push({ from: 'player', say: decl.say, ...(playerTo ? { to: playerTo } : {}) });
     for (const d of declarations) {
-      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, line: `${label(deps, d.objectId)}${d.to ? ` (to ${d.to})` : ''}: "${d.say.trim()}"` });
+      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim() });
     }
+    // Names (docs/11 §2.5): a name said aloud is learned by everyone who heard it; the player also learns the
+    // names the prose shows. Learned before the briefs are written, so a brief may use a name just heard.
+    if (namesOn(deps, storyId)) {
+      for (const sp of speeches) {
+        const speaker = sp.from === 'player' ? playerId : sp.from;
+        learnFromSpeech(deps, storyId, [...presentIds, playerId].filter((x) => x && x !== speaker), sp.say, turn.id);
+      }
+      if (playerId) learnFromSpeech(deps, storyId, [playerId], prose, turn.id);
+    }
+    const speakerLabel = (hearer: string, from: string) => (from === 'player' ? (playerId ? labelFor(deps, storyId, hearer, playerId) : 'The player character') : labelFor(deps, storyId, hearer, from));
     const heardPlayerAlready = new Set(heardNow ? results.filter((r) => r.reply).map((r) => r.objectId) : []);
     for (const oid of presentIds) {
-      const heard = speeches.filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid))).map((s) => `- ${s.line}`);
-      const parts = [briefs.get(oid) ?? 'Nothing notable changes for you.'];
+      const heard = speeches
+        .filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid)))
+        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: "${s.say}"`);
+      const brief = briefs.get(oid);
+      const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
       const notes = memoryNotes.get(oid);
       if (notes?.length) parts.push(`About your memory: ${notes.join(' ')}`);
@@ -427,13 +510,25 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     }
     for (const oid of entered) {
       const loc = current().locationObjectId ? deps.memory.getObject(current().locationObjectId!)?.name : undefined;
-      queueForCharacter(deps, storyId, oid, briefs.get(oid) ?? `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
+      const brief = briefs.get(oid);
+      queueForCharacter(deps, storyId, oid, brief ? maskUnknownNames(deps, storyId, oid, brief) : `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
     }
 
     // 5f. The narrator's thread, the clock, the turn.
     commitCall(deps, nCall, narratorText, turn.id);
     const clockMin = deps.stories.advanceClock(storyId, block.time && block.time > 0 ? block.time : DEFAULT_TURN_MINUTES);
-    for (const oid of seedQueue) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    // A mind not written yet (its seeding failed: an overloaded provider, an empty reply) is tried again each
+    // round it is present, unless a seed for it is still waiting.
+    for (const oid of presentIds) {
+      const sheet = deps.sheets.get(oid);
+      if (sheet && !sheet.seeded && !sheet.description.trim() && !seedQueue.includes(oid)) seedQueue.push(oid);
+    }
+    for (const oid of seedQueue) {
+      const waiting = deps.db
+        .prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'minds_seed' AND status IN ('pending','running') AND json_extract(payload_json, '$.objectId') = ?`)
+        .get<{ n: number }>(oid)!.n;
+      if (!waiting) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    }
     // Threads that grew past their threshold get folded after the round (docs/10 §8.4).
     queueCompactions(deps, storyId, [nCall.sessionId, ...results.filter((r) => r.call && r.reply).map((r) => r.call!.sessionId)], turn.id);
     const count = (r: string) => outcomes.filter((o) => o.result === r).length;
@@ -450,6 +545,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         presentNpcIds: presentIds,
         player: decl,
         gate: { called: gate.called, idle: gate.idle, reasons: gate.reasons },
+        ...(direction.source !== 'none' ? { direction } : {}),
         declarations: declarations.map((d) => ({ ...d, error: byId.get(d.objectId)?.error, problems: byId.get(d.objectId)?.reply?.problems })),
         block,
         blockSource,

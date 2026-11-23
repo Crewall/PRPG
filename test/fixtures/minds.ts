@@ -27,14 +27,16 @@ export interface Script {
   distributor: Reply[];
   seeder: Reply[];
   compactor: Reply[];
+  director: Reply[];
 }
-export const emptyScript = (): Script => ({ narrator: [], characters: {}, distributor: [], seeder: [], compactor: [] });
+export const emptyScript = (): Script => ({ narrator: [], characters: {}, distributor: [], seeder: [], compactor: [], director: [] });
 
 export function agentOf(req: ChatRequest): string {
   if (req.system.includes('You are the **Narrator**')) return 'narrator';
   if (req.system.includes('forgot (or broke)')) return 'distributor';
   if (req.system.includes('character designer')) return 'seeder';
   if (req.system.includes('You fold the oldest part')) return 'compactor';
+  if (req.system.includes('You decide who is being spoken to')) return 'director';
   const m = req.system.match(/^You are \*\*(.+?)\*\*/);
   return m ? `character:${m[1]}` : 'other';
 }
@@ -50,6 +52,7 @@ export function dispatchDriver(script: Script, seen: { agent: string; req: ChatR
         : agent === 'distributor' ? script.distributor
         : agent === 'seeder' ? script.seeder
         : agent === 'compactor' ? script.compactor
+        : agent === 'director' ? script.director
         : script.characters[agent.slice('character:'.length)] ?? [];
       const next = queue.shift();
       if (next === undefined) throw new Error(`no scripted reply for ${agent}`);
@@ -92,7 +95,7 @@ export function mindsHarness(opts: { player?: boolean } = {}) {
   const script = emptyScript();
   const seen: { agent: string; req: ChatRequest }[] = [];
   const app: App = createApp(mindsConfig, { driverFactory: () => dispatchDriver(script, seen), dbPath: join(dir, 'm.db'), startWorker: false });
-  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts };
+  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names };
   const storyId = app.stories.createStory({ title: 'Inn', settings: { engine: 'minds', premise: 'A smugglers’ inn.' } as never }).id;
   app.variables.replaceDefs(
     storyId,

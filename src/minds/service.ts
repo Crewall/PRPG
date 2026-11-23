@@ -1,6 +1,7 @@
 import type { StoryStore } from '../db/stores/storyStore.ts';
+import { handleBaseFor, knowsName, namesOn } from './names.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
-import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch } from '../db/stores/mindsStore.ts';
+import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore } from '../db/stores/mindsStore.ts';
 import { STATE_KEY, appliesTo, canSee, defaultValue, renderValue, runPipeline, splitFinalId } from './variables.ts';
 import type { ChangeOutcome, HolderInfo, Proposal, VariableDef, VariableValue, Viewer } from './variables.ts';
 import { MAX_FORGET_PER_REPLY, MAX_REMEMBER_PER_REPLY, parseThoughtHandle, prepareRemember, thoughtHandle } from './thoughts.ts';
@@ -15,6 +16,8 @@ export interface MindsDeps {
   sheets: SheetStore;
   variables: VariableStore;
   thoughts: ThoughtStore;
+  /** Who knows whose name (docs/11 §2.5). Absent: names are common knowledge. */
+  names?: NameStore;
 }
 
 /** Every variable holder in the story: each character with a sheet, plus 'world'. */
@@ -122,18 +125,30 @@ export function applyThoughtOps(
 export function createCharacter(
   deps: MindsDeps,
   storyId: string,
-  input: { name: string; isPlayer?: boolean; description?: string; appearance?: string; pronouns?: string; state?: string },
+  input: { name: string; isPlayer?: boolean; description?: string; appearance?: string; pronouns?: string; knownAs?: string; state?: string },
 ): CharacterSheet {
-  const obj = deps.memory.createObject({ storyId, type: 'character', name: input.name.trim(), aliases: [], summary: '', salience: 0.6, status: 'active' });
+  // With names on, the handle comes from the known-as label, so it doesn't give the name away (docs/11 §2.5).
+  const knownAs = input.knownAs?.trim() || (namesOn(deps, storyId) ? defaultKnownAs(input.appearance) : '');
+  const obj = deps.memory.createObject(
+    { storyId, type: 'character', name: input.name.trim(), aliases: [], summary: '', salience: 0.6, status: 'active' },
+    { handleFrom: handleBaseFor(deps, storyId, input.name.trim(), knownAs) },
+  );
   const sheet = deps.sheets.upsert(storyId, obj.id, {
     isPlayer: !!input.isPlayer,
     description: input.description ?? '',
     appearance: input.appearance ?? '',
     pronouns: input.pronouns?.trim() ?? '',
+    knownAs,
     state: input.state ?? '',
   });
   if (input.isPlayer) deps.stories.updateStory(storyId, { settings: { playerObjectId: obj.id } });
   return sheet;
+}
+
+/** A known-as label from an appearance when none was given: its first phrase, up to five words ("a stranger" if empty). */
+export function defaultKnownAs(appearance: string | undefined): string {
+  const first = (appearance ?? '').split(/[,.;:—–(]/)[0].trim().split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
+  return first ? (/^(a|an|the)\s/i.test(first) ? first : `the ${first.toLowerCase()}`) : 'a stranger';
 }
 
 /** Update a sheet. Becoming the player character also marks it on the story. */
@@ -161,6 +176,13 @@ export interface CharacterView {
   isPlayer: boolean;
   appearance: string;
   pronouns: string;
+  /** What strangers call them. */
+  knownAs: string;
+  /** Whether the viewing player knows this name (`name` is then the real name; otherwise the known-as label). */
+  nameKnown: boolean;
+  /** Advanced view: the real name, and whether the player knows it. */
+  realName?: string;
+  playerKnowsName?: boolean;
   /** Present only when the viewer may see it. */
   description?: string;
   state?: string;
@@ -188,13 +210,20 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
     if (!obj) continue;
     const holder = holders.get(sheet.objectId)!;
     const own = viewer.kind === 'advanced' || viewer.kind === 'narrator' || (viewer.kind === 'player' && viewer.playerId === sheet.objectId) || (viewer.kind === 'character' && viewer.id === sheet.objectId);
+    // Names (docs/11 §2.5): the player's view shows a name only once the player knows it.
+    const playerId = viewer.kind === 'player' ? viewer.playerId : deps.sheets.player(storyId)?.objectId ?? null;
+    const known = sheet.isPlayer || knowsName(deps, storyId, playerId, sheet.objectId);
+    const shownName = viewer.kind === 'player' && !known ? sheet.knownAs.trim() || 'someone' : obj.name;
     characters.push({
       objectId: sheet.objectId,
       handle: holder.handle ?? '',
-      name: obj.name,
+      name: shownName,
       isPlayer: sheet.isPlayer,
       appearance: sheet.appearance,
       pronouns: sheet.pronouns,
+      knownAs: sheet.knownAs,
+      nameKnown: viewer.kind === 'player' ? known : true,
+      ...(viewer.kind === 'advanced' ? { realName: obj.name, playerKnowsName: known } : {}),
       ...(own ? { description: sheet.description, state: sheet.state } : {}),
       ...(viewer.kind === 'advanced' ? { tierId: sheet.tierId } : {}),
       seeded: sheet.seeded,

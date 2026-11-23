@@ -36,16 +36,27 @@ function retryAfterMs(res: Response): number | undefined {
  */
 export async function requestWithRetry(
   make: () => Promise<Response>,
-  opts: { signal?: AbortSignal; maxRetries?: number; baseDelayMs?: number } = {},
+  opts: { signal?: AbortSignal; maxRetries?: number; baseDelayMs?: number; onWait?: (waitMs: number, status: number) => void } = {},
 ): Promise<Response> {
   const maxRetries = opts.maxRetries ?? 2;
-  const base = opts.baseDelayMs ?? 1000;
+  const base = opts.baseDelayMs ?? 3000;
   for (let attempt = 0; ; attempt++) {
     const res = await make();
     const throttled = res.status === 429 || res.status === 503;
     if (!throttled || attempt >= maxRetries) return res;
-    const wait = retryAfterMs(res) ?? Math.min(base * 2 ** attempt, 30_000);
+    // An overload needs time: the server's Retry-After, OpenRouter's rate-limit reset, else 3 s, 9 s, 27 s.
+    const wait = retryAfterMs(res) ?? (await resetFromBody(res)) ?? Math.min(base * 3 ** attempt, 30_000);
     await res.body?.cancel().catch(() => {}); // free the socket before waiting
+    opts.onWait?.(wait, res.status);
     await sleep(wait, opts.signal);
   }
+}
+
+/** OpenRouter reports when a per-minute limit resets inside the error body (X-RateLimit-Reset, epoch ms). */
+async function resetFromBody(res: Response): Promise<number | undefined> {
+  const text = await res.clone().text().catch(() => '');
+  const m = text.match(/X-RateLimit-Reset\\?"?\s*:\s*\\?"?(\d{12,})/i);
+  if (!m) return undefined;
+  const ms = Number(m[1]) - Date.now();
+  return ms > 0 ? Math.min(ms + 500, 60_000) : undefined;
 }

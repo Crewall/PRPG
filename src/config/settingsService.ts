@@ -58,6 +58,8 @@ export const TierCfg = z.object({
   temperature: z.number().min(0).max(2).optional(),
   reasoning: ReasoningSetting.default('default'),
   effort: Effort.optional(),
+  /** A model to fall back to when the tier's model is overloaded (same provider connection only). */
+  fallbackModelId: z.string().default(''),
 });
 export type TierCfg = z.infer<typeof TierCfg>;
 
@@ -128,6 +130,7 @@ export const DEFAULT_ROLE_TIER: Record<RoleName, string> = {
   distributor: 'light',
   seeder: 'medium',
   compactor: 'light',
+  director: 'light',
 };
 
 // Roles added after the original config shape: when absent, they inherit an
@@ -158,6 +161,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'minds-distributor', label: 'Minds — round-block fallback' },
   { name: 'minds-seed', label: 'Minds — new-character seeder' },
   { name: 'minds-compactor', label: 'Minds — thread compactor' },
+  { name: 'minds-director', label: 'Minds — director (who is spoken to)' },
 ];
 
 // ---- Building tiers from per-role bindings (seed + migration share this) ----
@@ -181,7 +185,7 @@ function sameBinding(a: Binding, b: Binding): boolean {
  * gets a tier of its own.
  */
 function buildTiers(bindings: Partial<Record<RoleName, Binding>>, fallback: Binding): { tiers: TierCfg[]; roleTiers: Record<string, string> } {
-  const tiers: TierCfg[] = DEFAULT_TIERS.map((t) => ({ id: t.id, label: t.label, ...(bindings[t.anchor] ?? fallback) }));
+  const tiers: TierCfg[] = DEFAULT_TIERS.map((t) => ({ id: t.id, label: t.label, fallbackModelId: '', ...(bindings[t.anchor] ?? fallback) }));
   const roleTiers: Record<string, string> = {};
   for (const role of ALL_ROLES) {
     const b = bindings[role];
@@ -199,7 +203,7 @@ function buildTiers(bindings: Partial<Record<RoleName, Binding>>, fallback: Bind
     if (match) {
       roleTiers[role] = match.id;
     } else {
-      const own: TierCfg = { id: `role-${role}`, label: ROLE_LABELS[role], ...b };
+      const own: TierCfg = { id: `role-${role}`, label: ROLE_LABELS[role], fallbackModelId: '', ...b };
       tiers.push(own);
       roleTiers[role] = own.id;
     }
@@ -354,6 +358,7 @@ export function compileSettings(s: RuntimeSettings, llm: { maxRetries: number })
     if (!m) continue;
     let reasoning: ModelProfile['reasoning'] = t.reasoning;
     if (m.caps.reasoning === 'none' || (m.caps.reasoning === 'always' && t.reasoning === 'off')) reasoning = undefined;
+    const fallback = t.fallbackModelId ? s.models.find((x) => x.id === t.fallbackModelId) : undefined;
     modelProfiles[`tier:${t.id}`] = {
       ...baseProfile(m),
       temperature: m.caps.sampling ? t.temperature : undefined,
@@ -361,6 +366,8 @@ export function compileSettings(s: RuntimeSettings, llm: { maxRetries: number })
       reasoning,
       // An effort level the model doesn't accept is dropped (the provider's default applies).
       effort: m.caps.reasoning === 'none' || (t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort)) ? undefined : t.effort,
+      // The fallback must live on the same connection (one request can only go to one provider).
+      ...(fallback && fallback.providerId === m.providerId && fallback.model !== m.model ? { fallbackModels: [fallback.model] } : {}),
     };
   }
   // role:<role> — what each role runs (its tier's profile).

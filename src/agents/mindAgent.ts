@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { Agent } from './agent.ts';
 import type { BuiltContext } from './agent.ts';
-import { CharacterReplySchema, CharacterReplyWire, DialogueReplySchema, DialogueReplyWire, RoundBlockSchema } from '../minds/contracts.ts';
+import { CharacterReplySchema, CharacterReplyWire, DialogueReplySchema, DialogueReplyWire, DirectionReply, RoundBlockSchema } from '../minds/contracts.ts';
 import { zodToJsonSchema } from '../llm/jsonSchema.ts';
 
 const REPLY_WIRE_SCHEMA = zodToJsonSchema(CharacterReplyWire);
 const DIALOGUE_WIRE_SCHEMA = zodToJsonSchema(DialogueReplyWire);
-import type { CharacterReply, DialogueReply, RoundBlock } from '../minds/contracts.ts';
+import type { CharacterReply, DialogueReply, Direction, RoundBlock } from '../minds/contracts.ts';
 
 // Minds engine agents (docs/10). Contexts come from src/minds/builders.ts (the
 // isolation boundary); replies are parsed leniently in src/minds/contracts.ts.
@@ -62,6 +62,11 @@ export class MindAgent extends Agent {
   /** The distributor: a round block rebuilt from the narrator's prose. */
   async distribute(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<RoundBlock> {
     return this.invokeJson(ctx, RoundBlockSchema, opts);
+  }
+
+  /** The director: who the player's words are meant for (docs/10 §5.1b). */
+  async direct(ctx: BuiltContext, opts: { turnId?: string; signal?: AbortSignal } = {}): Promise<Direction> {
+    return this.invokeJson(ctx, DirectionReply, { ...opts, maxTokens: 300 });
   }
 
   /** The compactor: a recap of a thread's oldest rounds. */

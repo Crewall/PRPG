@@ -207,6 +207,11 @@ export function createStoryStore(db: Db) {
       db.prepare(`DELETE FROM turns WHERE id = ?`).run(turnId);
     },
 
+    /** Delete every turn at or after `index` (regenerating an earlier reply drops what followed it). */
+    deleteTurnsFrom(storyId: string, index: number): void {
+      db.prepare(`DELETE FROM turns WHERE story_id = ? AND idx >= ?`).run(storyId, index);
+    },
+
     recentTurns(storyId: string, k: number): Turn[] {
       // Last K completed/streaming turns in chronological order.
       const rows = db

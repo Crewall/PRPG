@@ -167,10 +167,19 @@ async function renderPlay(storyId) {
     toggleForce: (c) => { if (forced.has(c.objectId)) forced.delete(c.objectId); else forced.add(c.objectId); refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); },
     refresh: () => { refreshSceneHeader(); if (activeTab === 'cast' || activeTab === 'pov') renderDrawer(); },
   };
-  // How the box will be read (Minds): said / tried / note — and the syntax when it is empty.
+  // How the box will be read (Minds): said / tried / note — and the syntax when it is empty. Hidden until the
+  // small ? in the corner of the box is pressed, so it never takes room from the chat.
   const inputPreview = h('div', { class: 'input-preview', style: 'display:none' });
+  let syntaxOpen = false;
+  const syntaxBtn = h('button', { class: 'syntax-toggle', type: 'button', title: 'How to write: "said aloud", what you try, ((note to the narrator))' }, '?');
+  syntaxBtn.addEventListener('click', () => {
+    if (story.settings?.engine !== 'minds') { openHelp('input-syntax'); return; }
+    syntaxOpen = !syntaxOpen;
+    syntaxBtn.classList.toggle('on', syntaxOpen);
+    updateInputPreview();
+  });
   const updateInputPreview = () => {
-    if (story.settings?.engine !== 'minds') { inputPreview.style.display = 'none'; return; }
+    if (story.settings?.engine !== 'minds' || !syntaxOpen) { inputPreview.style.display = 'none'; return; }
     const lanes = h('span', { class: 'lanes' });
     minds.renderInputPreview(lanes, input.value, { dialogue: !!dialogue });
     inputPreview.replaceChildren(
@@ -335,7 +344,14 @@ async function renderPlay(storyId) {
         helpLink('scenario')),
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
-      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
+      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
+      (() => {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = !!minds.nameKnowledge;
+        cb.addEventListener('change', async () => { minds.nameKnowledge = cb.checked; await patchSettings({ minds: { ...minds } }); refreshSceneHeader(); });
+        return h('label', { class: 'opt-row', title: 'On: nobody knows a stranger\'s name until they hear it; people are known by how they look. Off: everyone knows every name (older stories).' },
+          cb, h('span', {}, 'names are learned (strangers stay unnamed) '), helpLink('names'));
+      })());
 
     // Which engine plays this story (docs/10 §4, §13 M8). Minds is the engine; the classic
     // engine and NPC story mode are retired: they keep running the stories that use them.
@@ -406,7 +422,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   updateInputPreview();
@@ -418,6 +434,7 @@ async function renderPlay(storyId) {
       const field = (label, el, hint) => h('label', { class: 'form-row' }, h('span', { class: 'sub' }, label), el, hint ? h('span', { class: 'hint' }, hint) : null);
       const nameIn = h('input', { type: 'text', value: pc?.name || '', placeholder: 'e.g. Kael' });
       const pronIn = h('input', { type: 'text', value: pc?.pronouns || '', placeholder: 'she/her, he/him, they/them…', list: 'pronoun-list', maxlength: '40' });
+      const knownIn = h('input', { type: 'text', value: pc?.knownAs || '', placeholder: 'e.g. the tall stranger in a grey cloak', maxlength: '60' });
       const lookIn = h('textarea', { rows: '2', placeholder: 'What anyone sees at a glance: build, clothes, anything striking.' });
       lookIn.value = pc?.appearance || '';
       const whoIn = h('textarea', { rows: '4', placeholder: 'Optional: who you are, background, what you want. Only the narrator reads this.' });
@@ -425,7 +442,7 @@ async function renderPlay(storyId) {
       const err = h('div', { class: 'sub err' });
       const close = (v) => { modal.remove(); resolve(v); };
       const save = h('button', { class: 'primary', onclick: async () => {
-        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
         if (!body.name) { err.textContent = 'Give your character a name.'; return; }
         try {
           if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
@@ -442,6 +459,7 @@ async function renderPlay(storyId) {
           field('Pronouns', pronIn),
           h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
           field('Appearance', lookIn),
+          field('Others first know you as', knownIn, 'Until someone learns your name, this is what they call you. Empty: taken from your appearance.'),
           field('Who you are', whoIn),
           err,
           h('div', { class: 'row', style: 'gap:8px; justify-content:flex-end; flex-wrap:wrap' },
@@ -804,7 +822,7 @@ async function renderPlay(storyId) {
   // ⧉/✎/× controls; edit/delete are bound to its turn + field (player input or
   // narration). Memory is left untouched server-side; later story flow may shift
   // (accepted). A bubble whose sibling is also emptied drops the whole turn.
-  function messageBubble(cls, text, turnId, field) {
+  function messageBubble(cls, text, turnId, field, opts = {}) {
     const b = h('div', { class: `bubble ${cls}`, 'data-turn': turnId });
     const textEl = h('span', { class: 'msg-text' }, text);
     const copyBtn = h('button', { class: 'link', title: 'copy this message' }, '⧉');
@@ -817,6 +835,16 @@ async function renderPlay(storyId) {
       copyBtn,
       h('button', { class: 'link', title: 'edit this message', onclick: () => editMessage(b, textEl, turnId, field, cls) }, '✎'),
       h('button', { class: 'link danger', title: 'delete this message', onclick: () => deleteMessage(b, turnId, field) }, '×'));
+    // ↻ on every AI answer: write it again (an earlier one takes the later turns with it; no branching yet).
+    if (field === 'narration') {
+      const redoable = opts.redoable !== false;
+      tools.append(h('button', {
+        class: 'link regen-tool',
+        title: redoable ? 'Write this reply again' : 'Too far back to write again (only recent replies can be redone)',
+        disabled: redoable ? null : true,
+        onclick: () => regenerate(turnId),
+      }, '↻'));
+    }
     b.append(textEl, tools);
     return b;
   }
@@ -855,9 +883,40 @@ async function renderPlay(storyId) {
   // server can refuse when the story has moved on (never undo an earlier turn by mistake).
   let lastTurn = null; // { id, status, playerInput }
 
+  /**
+   * A background job gave up (a mind that couldn't be written, a memory not summarised): one calm line with
+   * Retry now and the details on demand. Gone when it succeeds or your next message goes out.
+   */
+  async function jobFailedNotice(m) {
+    const err = String(m.error || 'unknown error');
+    const reason = /429|rate.?limit|overload|busy|upstream|503/i.test(err) ? 'the provider is busy'
+      : /empty reply/i.test(err) ? 'the model returned nothing'
+      : /timeout/i.test(err) ? 'the provider took too long'
+      : err.length > 80 ? `${err.slice(0, 80)}…` : err;
+    let what;
+    if (m.type === 'minds_seed') {
+      let who = 'A character';
+      try { who = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === m.objectId)?.name || who; } catch {}
+      what = `${who.charAt(0).toUpperCase() + who.slice(1)}'s mind isn't written yet (${reason}). It is tried again next round.`;
+      transcript.querySelectorAll(`.job-notice[data-object="${m.objectId}"]`).forEach((el) => el.remove());
+    } else if (m.type === 'minds_compact') what = `A long memory couldn't be summarised yet (${reason}). It is tried again after a later round.`;
+    else what = `A background task (${m.type}) failed (${reason}). Play continues.`;
+    const details = h('pre', { class: 'thread-payload gone' }, err);
+    const status = h('span', { class: 'sub' });
+    const retryB = h('button', { class: 'link', onclick: async () => {
+      retryB.disabled = true;
+      try { await api.post(`/api/stories/${storyId}/jobs/${m.jobId}/retry`); status.textContent = 'trying again…'; }
+      catch (e2) { status.textContent = e2.message; retryB.disabled = false; }
+    } }, '↻ Retry now');
+    const note = h('div', { class: 'job-notice', 'data-job': m.jobId, ...(m.objectId ? { 'data-object': m.objectId } : {}) },
+      h('span', {}, '⚠ ', what, ' '), retryB, h('button', { class: 'link', onclick: () => details.classList.toggle('gone') }, 'details'), status, details);
+    transcript.append(note);
+    scrollDown();
+  }
+
   /** A failed or stopped attempt: say so, and offer to try again or drop it. */
   function failedNotice(turnId, text) {
-    const retryB = h('button', { class: 'small primary', onclick: () => retryLast(turnId) }, '↻ Retry');
+    const retryB = h('button', { class: 'small primary', onclick: () => regenerate(turnId, { ask: false }) }, '↻ Retry');
     const discardB = h('button', { class: 'small ghost', title: 'Drop this attempt; your message goes back in the box', onclick: () => discardAttempt(turnId) }, 'Discard');
     const b = h('div', { class: 'bubble error', 'data-turn': turnId }, h('div', {}, text), h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, retryB, discardB));
     transcript.append(b);
@@ -865,24 +924,23 @@ async function renderPlay(storyId) {
     return b;
   }
 
-  /** ↻ on the latest reply: write it again (the current one is replaced; branching is a later feature). */
-  function markLastReply() {
-    transcript.querySelectorAll('.retry-tool').forEach((el) => el.remove());
-    if (!lastTurn || lastTurn.status !== 'complete') return;
-    const bubble = [...transcript.querySelectorAll(`.bubble.narration[data-turn="${lastTurn.id}"]`)].at(-1);
-    const tools = bubble?.querySelector('.msg-tools');
-    if (!tools) return;
-    tools.append(h('button', { class: 'link retry-tool', title: 'Write this reply again (the current one is replaced)', onclick: () => {
-      if (confirm('Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) retryLast(lastTurn.id);
-    } }, '↻'));
-  }
-
-  /** Retry the last turn: the server undoes it and runs it again with the same message. */
-  function retryLast(turnId) {
+  /**
+   * ↻ Regenerate a reply: the server undoes that turn (and every later one) and runs it again with the same
+   * message. The replaced replies are not kept (branching is a later feature).
+   */
+  function regenerate(turnId, { ask = true } = {}) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
     if (!wsOpen()) { addStatus('(not connected — tap the status dot for details)'); return; }
-    const text = lastTurn?.id === turnId ? lastTurn.playerInput : '';
-    transcript.querySelectorAll(`[data-turn="${turnId}"]`).forEach((el) => el.remove());
+    const all = [...transcript.children];
+    const first = all.findIndex((el) => el.dataset?.turn === turnId);
+    if (first < 0) return;
+    const later = new Set(all.slice(first).map((el) => el.dataset?.turn).filter((id) => id && id !== turnId));
+    if (ask && !confirm(later.size
+      ? `Write this reply again?\n\nThe ${later.size} later turn${later.size > 1 ? 's' : ''} after it ${later.size > 1 ? 'are' : 'is'} removed too, and the story continues from the new reply. Nothing replaced is kept.`
+      : 'Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) return;
+    const text = transcript.querySelector(`.bubble.player[data-turn="${turnId}"] .msg-text`)?.textContent
+      ?? transcript.querySelector(`.bubble.player[data-turn="${turnId}"]`)?.firstChild?.textContent ?? '';
+    for (const el of all.slice(first)) el.remove();
     clearStage();
     if (text && input.value.trim() === text.trim()) { input.value = ''; input.style.height = 'auto'; updateInputPreview(); }
     currentTurnId = null;
@@ -891,7 +949,7 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus();
-    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId }));
+    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId, ...(lastTurn ? { lastTurnId: lastTurn.id } : {}) }));
   }
 
   /** Drop a failed attempt (its message goes back in the box). */
@@ -921,16 +979,15 @@ async function renderPlay(storyId) {
           if (failed) b.classList.add('failed');
           transcript.append(b);
         }
-        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration', { redoable: t.redoable || t.id === turns.at(-1)?.id })); }
       }
       const tail = turns.at(-1);
       lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
       if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
-      markLastReply();
       const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
         let name = 'them';
-        try { name = (await api.get(`/api/memory/objects/${lastTurn.meta.partner}`))?.name || name; } catch {}
+        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastTurn.meta.partner)?.name || name; } catch {}
         setDialogue({ partner: lastTurn.meta.partner, name });
       }
       follow = true;
@@ -1406,6 +1463,8 @@ async function renderPlay(storyId) {
     switch (m.t) {
       case 'turn.accepted':
         currentTurnId = m.turnId;
+        // A new message went out: background failures from before it are old news.
+        transcript.querySelectorAll('.job-notice').forEach((el) => el.remove());
         // The server dropped any failed attempt before this turn; drop it here too.
         if (lastTurn && lastTurn.status !== 'complete' && lastTurn.id !== m.turnId) transcript.querySelectorAll(`[data-turn="${lastTurn.id}"]`).forEach((el) => el.remove());
         if (pendingPlayerBubble) pendingPlayerBubble.dataset.turn = m.turnId;
@@ -1417,14 +1476,13 @@ async function renderPlay(storyId) {
         clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
         // has a persisted id — no reload needed to fix a just-written message.
-        if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration'); current.replaceWith(nb); current = nb; }
+        if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration', { redoable: true }); current.replaceWith(nb); current = nb; }
         if (pendingPlayerBubble) { const pb = messageBubble('player', pendingPlayerText, m.turnId, 'playerInput'); pendingPlayerBubble.replaceWith(pb); pendingPlayerBubble = null; }
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown();
         lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
-        markLastReply();
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
           setDialogue(null);
@@ -1448,19 +1506,24 @@ async function renderPlay(storyId) {
         // Don't lose the message: put it back in the box for another try.
         if (m.t === 'turn.error' && !input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
         current = null; pendingPlayerBubble = null; setBusy(false);
-        markLastReply();
         break;
       }
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
-      case 'minds.updated': if (m.storyId === storyId) { refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); } break;
+      case 'minds.updated': if (m.storyId === storyId) {
+        refreshSceneHeader(); if (activeTab === 'cast') renderDrawer();
+        // A mind that got written after all: its failure notice goes.
+        for (const oid of m.objectIds || []) transcript.querySelectorAll(`.job-notice[data-object="${oid}"]`).forEach((el) => el.remove());
+      } break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
       // surface the full error in the transcript instead of failing silently.
-      case 'job.failed': if (m.storyId === storyId) { markAgentError(m.type); addBubble('error', `Background agent failed — ${m.type}: ${m.error || 'unknown error'} (retry from the failed-jobs list or ignore; play continues)`); } break;
+      case 'job.failed': if (m.storyId === storyId) { markAgentError(m.type); jobFailedNotice(m); } break;
+      // An overloaded provider: say so in the live line instead of looking stuck.
+      case 'provider.waiting': if (busy) showStage(`the provider is busy — trying again in ${Math.max(1, Math.round(m.waitMs / 1000))} s…`); break;
     }
   }
 
@@ -1529,7 +1592,7 @@ async function renderPlay(storyId) {
 // ---------------- Settings ----------------
 // Provider connections → models → tiers → role mapping (docs/12). The user
 // normally only touches the Tiers card: every role on a tier follows it.
-const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder', compactor: 'Compactor' };
+const ROLE_LABELS = { storyteller: 'Storyteller', npc: 'NPC', scribe_memory: 'Memory scribe', scribe_story: 'Story scribe', overseer: 'Rule overseer', context_planner: 'Context planner', adjudicator: 'Adjudicator', player_intake: 'Character interviewer', randomizer: 'Premise randomizer', narrator: 'Narrator', character: 'Character mind', distributor: 'Block fallback', seeder: 'Seeder', compactor: 'Compactor', director: 'Director' };
 const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
 const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
 const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);
@@ -1578,6 +1641,10 @@ async function renderSettings() {
       const temp = h('input', { type: 'number', min: '0', max: '2', step: '0.1', placeholder: '—', value: t.temperature ?? '', title: 'Empty = not sent (some models reject it)', oninput: (e) => { const v = e.target.value.trim(); t.temperature = v === '' ? undefined : parseFloat(v); } });
       const reasoning = h('select', { onchange: (e) => (t.reasoning = e.target.value) }, opt('default', 'default', t.reasoning), opt('off', 'off', t.reasoning), opt('on', 'on', t.reasoning));
       const effort = h('select', { onchange: (e) => (t.effort = e.target.value || undefined) }, opt('', '—', t.effort || ''), ...['low', 'medium', 'high', 'max'].map((x) => opt(x, x, t.effort)));
+      // If the tier's model is overloaded: another model on the same provider (OpenRouter routes it itself).
+      const sameConn = st.models.filter((x) => m && x.providerId === m.providerId && x.id !== m.id);
+      const fb = h('select', { title: 'When this model is overloaded, use this one instead (same provider)', onchange: (e) => { t.fallbackModelId = e.target.value; } },
+        opt('', 'none', t.fallbackModelId || ''), ...sameConn.map((x) => opt(x.id, modelName(x), t.fallbackModelId)));
       const rm = h('button', { class: 'link', disabled: used.length > 0 || st.tiers.length <= 1, title: used.length ? 'Reassign its roles first (Role mapping)' : '', onclick: () => { st.tiers = st.tiers.filter((x) => x !== t); paint(); } }, 'remove');
       const reqs = c ? usage[c.id] || 0 : 0;
       const info = h('div', { class: 'sub tier-info' },
@@ -1586,7 +1653,7 @@ async function renderSettings() {
         m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
         m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
         m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
-      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), rm), info);
+      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb), rm), info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
     const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');

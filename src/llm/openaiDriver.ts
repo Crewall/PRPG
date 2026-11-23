@@ -29,6 +29,8 @@ export interface OpenAiOptions {
   /** Retries of a transient provider error before anything streamed (default 2), and the first pause. */
   transientRetries?: number;
   transientDelayMs?: number;
+  /** First wait on a 429/503 without a Retry-After (default 3 s, then ×3). */
+  throttleDelayMs?: number;
 }
 
 /** The request body for one chat completion (exported for tests). */
@@ -72,6 +74,8 @@ export function buildOpenAiBody(req: ChatRequest, preset: ProviderPreset = 'cust
   // OpenRouter sticky routing: one session per agent thread keeps it on the
   // same upstream provider, so that provider's prompt cache keeps hitting.
   if (preset === 'openrouter' && req.sessionKey) body.session_id = req.sessionKey.slice(0, 256);
+  // OpenRouter routes to the next model itself when one is overloaded or down.
+  if (preset === 'openrouter' && req.fallbackModels?.length) body.models = [req.model, ...req.fallbackModels];
   return body;
 }
 
@@ -131,7 +135,7 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
       const send = (b: Record<string, unknown>) =>
         requestWithRetry(
           () => fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(b), signal: controller.signal }),
-          { signal: controller.signal, maxRetries },
+          { signal: controller.signal, maxRetries, baseDelayMs: opts.throttleDelayMs, onWait: (waitMs, status) => req.onWait?.({ model: req.model, waitMs, status }) },
         );
 
       let res: Response;
@@ -209,7 +213,15 @@ export function openaiDriver(opts: OpenAiOptions): LlmDriver {
           return await attempt(req, tracked);
         } catch (err) {
           const e = err as LlmError;
-          const transient = e instanceof LlmError && e.retryable && !/timeout/i.test(e.message);
+          // Throttling (429/503) was already waited out per request; retrying it here would only add load.
+          const throttled = e instanceof LlmError && (e.status === 429 || e.status === 503);
+          const transient = e instanceof LlmError && e.retryable && !throttled && !/timeout/i.test(e.message);
+          // Out of tries on an overloaded model: the tier's fallback model, once (OpenRouter routes it itself).
+          const next = req.fallbackModels?.[0];
+          if (next && preset !== 'openrouter' && !streamed && !req.signal?.aborted && e instanceof LlmError && e.retryable && (throttled || i >= transientRetries)) {
+            logger.warn('model overloaded — using the tier\'s fallback model', { model: req.model, fallback: next, err: e.message.slice(0, 200) });
+            return this.chat({ ...req, model: next, fallbackModels: req.fallbackModels!.slice(1) }, onDelta);
+          }
           if (!transient || streamed || req.signal?.aborted || i >= transientRetries) throw err;
           logger.warn('provider error — retrying', { model: req.model, attempt: i + 1, err: e.message.slice(0, 200) });
           await pause(transientDelayMs * 2 ** i, req.signal);

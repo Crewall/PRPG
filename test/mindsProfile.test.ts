@@ -146,11 +146,12 @@ describe('the Threads view and Minds scenes', () => {
     await h.opening();
     h.script.characters['Marta'] = [JSON.stringify({ say: 'Yes?' })];
     h.script.characters['Tom'] = [fail('model timeout')];
+    h.script.director.push(JSON.stringify({ to: [], all: true, react: [], why: 'a greeting to the room' }));
     h.script.narrator.push(round('Marta looks up.', { briefs: {} }));
     await h.play('"Hello."');
     const calls = listCalls(h.app, h.storyId);
     const turn2 = calls.filter((c) => c.turnIndex === 1);
-    expect(turn2.map((c) => `${c.mind}:${c.status}`).sort()).toEqual(['Marta:done', 'Narrator:done', 'Tom:failed']);
+    expect(turn2.map((c) => `${c.mind}:${c.status}`).sort()).toEqual(['Director: who is spoken to:done', 'Marta:done', 'Narrator:done', 'Tom:failed']);
     const tom = turn2.find((c) => c.mind === 'Tom')!;
     expect(tom.error).toMatch(/model timeout/);
     expect(tom.response).not.toBeNull();
@@ -228,5 +229,48 @@ describe('M7 endpoints', () => {
     const r = await server.inject({ method: 'POST', url: `/api/stories/${h.storyId}/minds`, payload: { name: 'Rin', isPlayer: true, pronouns: 'she/her', appearance: 'Short, sea-green coat.' } });
     expect(r.statusCode).toBe(201);
     expect(h.app.sheets.player(h.storyId)).toMatchObject({ pronouns: 'she/her', appearance: 'Short, sea-green coat.' });
+  });
+});
+
+describe('copied placeholders and example names', () => {
+  let h: MindsHarness;
+  afterEach(() => h.close());
+
+  it('a "…" or "<name>" player or character is refused; placeholder fields stay empty', async () => {
+    h = mindsHarness({ player: false });
+    h.script.narrator.push(
+      round('You wake.', {
+        player: { name: '…', pronouns: '…', appearance: '…' },
+        cast: { enter: [{ name: '<their name>', appearance: '<one line>' }, { name: 'Liraelen', pronouns: '<their pronouns>', appearance: 'An elf girl in green.' }] },
+        briefs: {},
+      }),
+    );
+    const c = await h.play('');
+    expect(h.app.sheets.player(h.storyId)).toBeUndefined();
+    const problems = (c.final?.meta.blockProblems as string[]).join(' | ');
+    expect(problems).toMatch(/player: "…" is not a name/);
+    expect(problems).toMatch(/cast.enter: "<their name>" is not a name/);
+    const lira = h.app.sheets.get(h.idOf('Liraelen'))!;
+    expect(lira.pronouns).toBe('');
+    expect(lira.appearance).toBe('An elf girl in green.');
+    // The narrator is asked again next round.
+    h.script.characters['Liraelen'] = [JSON.stringify({ say: '' })];
+    h.script.narrator.push(round('Still raining.', { player: { name: 'Rin', pronouns: 'she/her', appearance: 'Short.' }, briefs: {} }));
+    await h.play('');
+    expect(h.requests('narrator').at(-1)!.messages.at(-1)!.content).toContain('The player has no character yet');
+    expect(h.app.memory.getObject(h.app.sheets.player(h.storyId)!.objectId)!.name).toBe('Rin');
+  });
+
+  it("the narrator's rules use the story's own player handle, never example people", async () => {
+    h = mindsHarness();
+    await h.opening();
+    const system = h.requests('narrator')[0].system;
+    expect(system).toContain('("#kael climbs the stairs")'); // the harness player is Kael: the real handle
+    h.close();
+    h = mindsHarness({ player: false });
+    await h.opening();
+    const bare = h.requests('narrator')[0].system;
+    expect(bare).not.toMatch(/kael|marta/i);
+    expect(bare).toContain('never copy it');
   });
 });

@@ -11,6 +11,7 @@ import { STATE_KEY, appliesTo, canSee, renderRange, renderValue } from './variab
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
 import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
+import { knowsName, knownNames, namesOn } from './names.ts';
 import type { Thought } from './thoughts.ts';
 import { holdersFor, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
@@ -35,7 +36,7 @@ export interface ThreadDeps extends MindsDeps {
 export interface HereInfo {
   location?: { handle: string; name: string; line?: string };
   /** Others present, the player character included: their public profile. */
-  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string }[];
+  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string; nameKnown?: boolean }[];
   items: { handle: string; name: string; line?: string }[];
 }
 
@@ -73,7 +74,8 @@ export interface Declaration {
 
 export interface NarratorCallInput {
   storyId: string;
-  player: { say?: string; do?: string; ooc?: string };
+  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". */
+  player: { say?: string; do?: string; ooc?: string; to?: string };
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
@@ -247,7 +249,10 @@ export function renderHere(here: HereInfo): string {
   const loc = here.location;
   const lines = [`Here: ${loc ? `${h(loc.handle)} (${loc.name})${loc.line ? ` — ${loc.line}` : ''}` : 'an unnamed place'}`];
   for (const p of [...here.present].sort((a, b) => a.handle.localeCompare(b.handle))) {
-    const who = `${h(p.handle)} ${p.name}${p.pronouns ? ` (${p.pronouns})` : ''}`;
+    // A name the viewer hasn't learned stays out (docs/11 §2.5): the handle is made from what they look like.
+    const who = p.nameKnown === false
+      ? `${h(p.handle)}, name unknown to you${p.pronouns ? ` (${p.pronouns})` : ''}`
+      : `${h(p.handle)} ${p.name}${p.pronouns ? ` (${p.pronouns})` : ''}`;
     lines.push(`- ${who}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
   }
   const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
@@ -328,6 +333,14 @@ function narratorSession(deps: ThreadDeps, storyId: string): string {
   return deps.agents.ensureSession(storyId, 'narrator', 'minds').id;
 }
 
+/** The narrator's rule for names, when the story tracks who knows whom (docs/11 §2.5). */
+const NAMES_RULE = `
+- **Names: nobody knows a stranger's name.** Each sheet in your round message says whose names that person knows.
+  In a brief, use a name only if its reader knows it; otherwise the person's #handle (the app replaces any other
+  name with the handle). In the prose, use a name only if the player knows it; otherwise describe the person. A
+  name said aloud is learned by everyone who heard it. Record any other learning (a letter, an introduction you
+  narrate) in "names". Give every newcomer a "knownAs" (what strangers call them) and say whom they already know.`;
+
 /** The narrator's frozen system prompt: rules, style, block contract, premise, every variable with its rules, secret notes. */
 export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string {
   const story = deps.stories.getStory(storyId);
@@ -346,6 +359,7 @@ export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string 
     premise: s.premise.trim() || '(none given)',
     variables: lines.length ? lines.join('\n') : '(none defined for this story)',
     secretNotes: s.minds.narratorNotes.trim() || '(none)',
+    namesRule: namesOn(deps, storyId) ? NAMES_RULE : '',
     briefMaxWords: String(s.minds.briefMaxWords),
   });
 }
@@ -354,6 +368,12 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
   const obj = deps.memory.getObject(holder.id);
   const sheet = deps.sheets.get(holder.id);
   const lines = [`${h(holder.handle)} (${obj?.name ?? '?'}${sheet?.pronouns ? `, ${sheet.pronouns}` : ''})${sheet?.appearance ? ` — ${sheet.appearance}` : ''}`];
+  if (namesOn(deps, storyId)) {
+    // Who knows whose name (docs/11 §2.5): briefs and prose use a name only for someone who knows it.
+    const others = deps.sheets.listForStory(storyId).map((x) => x.objectId).filter((id) => id !== holder.id);
+    const known = knownNames(deps, storyId, holder.id, others).map((id) => h(deps.memory.getObject(id)?.handle));
+    lines.push(`  Known to strangers as: ${sheet?.knownAs || '(not set)'} · knows the names of: ${known.length ? known.join(', ') : 'nobody yet'}`);
+  }
   if (full && sheet?.description) lines.push(`  Who: ${sheet.description.replace(/\s+/g, ' ').trim()}`);
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
@@ -378,7 +398,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   if (input.context?.trim()) parts.push(input.context.trim());
 
   const p = input.player;
-  const said = [p.say?.trim() ? `says "${p.say.trim()}"` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
+  const said = [p.say?.trim() ? `says "${p.say.trim()}"${p.to ? ` to ${p.to}` : ''}` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
   const playerLine = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}: ${said || 'waits.'}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
   parts.push(playerLine);
   if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false).join('\n'));
@@ -462,6 +482,7 @@ export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories']
         return {
           handle: deps.memory.ensureHandle(oid) ?? '',
           name: obj.name,
+          ...(knowsName(deps, storyId, objectId, oid) ? {} : { nameKnown: false }),
           appearance: sheet?.appearance ?? '',
           ...(sheet?.pronouns ? { pronouns: sheet.pronouns } : {}),
           ...(visibly ? { visibly } : {}),

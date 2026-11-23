@@ -33,7 +33,7 @@ import { truncateToTokens } from './contextBuilder.ts';
 import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import type { Story, Turn } from '../domain.ts';
 import type { Db } from '../db/db.ts';
-import type { SheetStore, ThoughtStore, VariableStore } from '../db/stores/mindsStore.ts';
+import type { SheetStore, ThoughtStore, VariableStore, NameStore } from '../db/stores/mindsStore.ts';
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
 import { runDialogueExchange } from '../minds/dialogue.ts';
@@ -69,6 +69,7 @@ export interface PipelineDeps {
   sheets: SheetStore;
   variables: VariableStore;
   thoughts: ThoughtStore;
+  names: NameStore;
   threads: ThreadStore;
   verbosityOverride?: () => Record<string, string>;
 }
@@ -149,20 +150,30 @@ export class TurnPipeline {
   }
 
   /**
-   * Retry: undo the story's last turn (a failed attempt, or a reply the player wants written again) and run it
-   * once more with the same input and options. The earlier attempt is lost (branching is a TODO, docs/10 §14).
+   * Regenerate (Retry): undo a turn — by default the story's last one — and run it once more with the same input
+   * and options. An earlier turn takes every later turn with it (the story is restored to just before it); the
+   * earlier attempt is lost (branching is a TODO, docs/10 §14). `expectTurnId` is the story's last turn as the
+   * client knows it: if the story moved on since, nothing is undone.
    */
-  async retry(storyId: string, out: TurnEmitter, opts: { expectTurnId?: string } = {}): Promise<Turn | undefined> {
+  async retry(storyId: string, out: TurnEmitter, opts: { turnId?: string; expectTurnId?: string } = {}): Promise<Turn | undefined> {
     this.cancel(storyId);
     return this.locks.withStory(storyId, async () => {
-      const last = this.deps.stories.lastTurn(storyId);
+      const { stories, snapshots } = this.deps;
+      const last = stories.lastTurn(storyId);
       if (!last) return void out.error('', 'nothing to retry — the story has no turns yet'), undefined;
       if (opts.expectTurnId && last.id !== opts.expectTurnId) return void out.error('', new StaleTurnError().message), undefined;
-      const req = (last.meta.request ?? {}) as RunOptions;
+      const target = opts.turnId ? stories.getTurn(opts.turnId) : last;
+      if (!target || target.storyId !== storyId) return void out.error('', 'that message is no longer in the story — reload'), undefined;
+      if (target.id !== last.id && !snapshots.has(target.id)) {
+        return void out.error('', 'that reply is too far back to write again (only recent ones can be redone)'), undefined;
+      }
+      const req = (target.meta.request ?? {}) as RunOptions;
       // Older dialogue turns kept no request: their partner is in the meta.
-      const runOpts: RunOptions = { ...req, ...(!req.dialogue && last.meta.mode === 'dialogue' && typeof last.meta.partner === 'string' ? { dialogue: { partner: last.meta.partner } } : {}) };
-      this.undoTurn(storyId, last.id);
-      return this.runLocked(storyId, last.playerInput, out, runOpts);
+      const runOpts: RunOptions = { ...req, ...(!req.dialogue && target.meta.mode === 'dialogue' && typeof target.meta.partner === 'string' ? { dialogue: { partner: target.meta.partner } } : {}) };
+      // The snapshot taken before `target` holds the state before it; later turns go with it.
+      this.undoTurn(storyId, target.id);
+      stories.deleteTurnsFrom(storyId, target.index);
+      return this.runLocked(storyId, target.playerInput, out, runOpts);
     });
   }
 
@@ -199,7 +210,7 @@ export class TurnPipeline {
   private roundDeps(): RoundDeps {
     const d = this.deps;
     return {
-      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts,
+      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names,
       agents: d.agents, threads: d.threads, registry: d.registry, threadLog: d.threadLog, jobs: d.jobs, events: d.events,
       verbosityOverride: d.verbosityOverride,
     };

@@ -61,13 +61,14 @@ function rowToLink(r: Row): KnowledgeLink {
 export function createMemoryStore(db: Db) {
   const store = {
     // ---- Objects ----
-    createObject(o: NewMemoryObject): MemoryObject {
+    /** `opts.handleFrom`: what the handle is made from (default: the name; Minds names make it from a known-as label). */
+    createObject(o: NewMemoryObject, opts: { handleFrom?: string } = {}): MemoryObject {
       const now = Date.now();
       const oid = id();
       db.prepare(
         `INSERT INTO memory_objects (id, story_id, type, name, aliases_json, summary, salience, status, handle, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(oid, o.storyId, o.type, o.name, JSON.stringify(o.aliases ?? []), o.summary ?? '', o.salience ?? 0.5, o.status ?? 'active', store.freeHandle(o.storyId, o.name), now, now);
+      ).run(oid, o.storyId, o.type, o.name, JSON.stringify(o.aliases ?? []), o.summary ?? '', o.salience ?? 0.5, o.status ?? 'active', store.freeHandle(o.storyId, opts.handleFrom || o.name), now, now);
       return store.getObject(oid)!;
     },
 
