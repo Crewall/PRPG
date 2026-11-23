@@ -107,7 +107,8 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     // M8 (docs/10 §13): new stories use the Minds engine. The classic engine and NPC story mode are retired —
     // they keep running the stories that already use them, but no new story starts on them.
     const { npcStories: _legacyFlag, ...rest } = body.settings ?? {};
-    const merged = { ...rest, engine: 'minds' as const, premise: body.seed || body.settings?.premise || '' };
+    // Names are learned in new stories (docs/11 §2.5): nobody knows a stranger's name.
+    const merged = { ...rest, engine: 'minds' as const, minds: { ...(rest.minds ?? {}), nameKnowledge: true }, premise: body.seed || body.settings?.premise || '' };
     if (!merged.tone && toneDefault) merged.tone = toneDefault;
     const settings = resolveStorySettings({ ...defaultStorySettings(), engine: undefined }, merged);
     const story = stories.createStory({ title: body.title, settings });

@@ -37,11 +37,12 @@ the story with new information.
   "tags": ["topics", "places", "#handles that matter in this moment"],
   "evoke": { "#handle": ["topics this character should recall"] },
   "notes": { "remember": [{ "text": "a private note to yourself", "tags": ["topic"] }], "forget": ["t3"] },
-  "cast": { "enter": [{ "name": "<their name>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>" }], "exit": ["#handle"] },
+  "cast": { "enter": [{ "name": "<their name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>", "knows": ["#handles of people they already know by name"], "knownBy": ["#handles of people who already know their name"] }], "exit": ["#handle"] },
+  "names": { "#handle of someone who learned a name": ["#handle whose name they learned"] },
   "objects": [{ "name": "new or existing item or place", "type": "item", "line": "one public line, including whose it is" }],
   "scene": { "break": false, "title": null, "location": "#handle", "items": ["#handles of things in view"] },
   "time": 10,
-  "player": { "name": "<a real name>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>" }
+  "player": { "name": "<a real name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>" }
 }
 ```
 Text in <angle brackets> stands for what you write there: never copy it.
@@ -52,7 +53,7 @@ Text in <angle brackets> stands for what you write there: never copy it.
   Only use #handles that exist in this story (in your round message); never invent people from examples.
 - "objects" creates places and things, or updates the public line of existing ones. Say whose they are when it
   matters ("the room {{playerHandle}} rented"): characters see these lines.
-- "player" only when your round message asks for it (the player character is missing or incomplete).
+- "player" only when your round message asks for it (the player character is missing or incomplete).{{namesRule}}
 - In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. Change a variable only when its rules
   allow you to, and follow its guidance.
 - "time" is the number of in-story minutes this round took.

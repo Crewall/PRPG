@@ -64,8 +64,9 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
   const adv = ctx.advanced();
   const vars = c.variables.filter((v) => adv || c.isPlayer || v.visibility === 'public');
   const forced = ctx.forced.has(c.objectId);
+  const unknown = !c.isPlayer && (adv ? c.playerKnowsName === false : c.nameKnown === false);
   const m = modal(`${c.isPlayer ? '🎭 ' : ''}${c.name}${c.pronouns ? ` (${c.pronouns})` : ''}`,
-    h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
+    h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${unknown ? (adv ? ` · you don't know this name (to you: ${c.knownAs || 'someone'})` : ' · name unknown to you') : ''}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
     c.appearance ? h('p', {}, c.appearance) : h('p', { class: 'sub' }, '(no appearance yet)'),
     c.state ? h('p', {}, h('span', { class: 'sub' }, 'State: '), `"${c.state}"`) : null,
     c.description ? h('details', { open: c.isPlayer ? null : true }, h('summary', { class: 'sub' }, c.isPlayer ? 'Who you are' : 'Who they are (private)'), h('p', { class: 'prose' }, c.description)) : null,
@@ -91,8 +92,11 @@ export async function openSheetEditor(ctx, objectId) {
   const c = view.characters.find((x) => x.objectId === objectId);
   if (!c) return;
   const adv = ctx.advanced();
-  const nameIn = input(c.name);
+  const nameIn = input(c.realName ?? c.name);
   const pronIn = input(c.pronouns, { list: 'pronoun-list', maxlength: '40' });
+  const knownAsIn = input(c.knownAs, { maxlength: '60', placeholder: 'e.g. the elf girl in green' });
+  const knowsBox = h('input', { type: 'checkbox' });
+  knowsBox.checked = c.playerKnowsName !== false;
   const lookIn = textarea(c.appearance, 2);
   const whoIn = textarea(c.description, 5);
   const stateIn = input(c.state);
@@ -101,7 +105,8 @@ export async function openSheetEditor(ctx, objectId) {
   const saved = h('span', { class: 'sub' });
   const save = h('button', { class: 'primary', onclick: async () => {
     err.textContent = ''; saved.textContent = '';
-    const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+    const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownAsIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+    if (adv && !c.isPlayer) body.playerKnowsName = knowsBox.checked;
     if (adv || c.isPlayer) body.state = stateIn.value.trim();
     if (adv && !c.isPlayer) body.tierId = tierSel.value || null;
     try { await api.patch(`/api/stories/${ctx.storyId}/minds/${c.objectId}`, body); saved.textContent = 'Saved.'; ctx.refresh(); } catch (e) { err.textContent = e.message; }
@@ -110,6 +115,8 @@ export async function openSheetEditor(ctx, objectId) {
   const sections = [
     row('Name', nameIn),
     row('Pronouns', pronIn, 'Public: others see these with the name.'),
+    row('Known to strangers as', knownAsIn, 'What someone who doesn\'t know the name calls them.'),
+    adv && !c.isPlayer ? h('label', { class: 'sub' }, knowsBox, ' You (the player) know this name') : null,
     h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
     row('Appearance', lookIn, 'Public: what anyone sees at a glance.'),
     row(c.isPlayer ? 'Who you are' : 'Description', whoIn, c.isPlayer ? 'Only the narrator reads this.' : 'Private: only this character\'s mind and the narrator read it.'),

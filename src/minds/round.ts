@@ -21,6 +21,7 @@ import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './s
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { isPlaceholder, isRealName, realValue, slugify } from './text.ts';
+import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { queueCompactions } from './compaction.ts';
 
@@ -99,15 +100,20 @@ function settlePlayer(
   deps: RoundDeps,
   storyId: string,
   playerId: string | null,
-  p: { name?: string; pronouns?: string; appearance?: string },
+  p: { name?: string; pronouns?: string; appearance?: string; knownAs?: string },
   presentIds: string[],
 ): { playerId?: string; changed?: boolean; problem?: string } {
   const pronouns = realValue(p.pronouns).slice(0, 40);
   const appearance = realValue(p.appearance);
+  const knownAs = realValue(p.knownAs).slice(0, 60);
   if (playerId) {
     const sheet = deps.sheets.get(playerId);
     if (!sheet) return { playerId };
-    const patch = { ...(!sheet.appearance.trim() && appearance ? { appearance } : {}), ...(!sheet.pronouns.trim() && pronouns ? { pronouns } : {}) };
+    const patch = {
+      ...(!sheet.appearance.trim() && appearance ? { appearance } : {}),
+      ...(!sheet.pronouns.trim() && pronouns ? { pronouns } : {}),
+      ...(!sheet.knownAs.trim() && knownAs ? { knownAs } : {}),
+    };
     if (!Object.keys(patch).length) return { playerId };
     deps.sheets.upsert(storyId, playerId, patch);
     return { playerId, changed: true };
@@ -126,7 +132,7 @@ function settlePlayer(
     });
     return { playerId: existing.id, changed: true };
   }
-  return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns }).objectId, changed: true };
+  return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns, knownAs }).objectId, changed: true };
 }
 
 /** Resolve a block key ("#marta", "Marta Vell", "world", "#player") to a holder id. */
@@ -203,7 +209,10 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
 
   // ---- 2. Characters declare, in parallel ----
   const playerLabel = playerId ? label(deps, playerId) : 'The player character';
-  const heardNow = mset.playerSpeechHeardImmediately && decl.say ? `${playerLabel}: "${decl.say}"` : undefined;
+  // The player's words, as each character hears them right now (their name only if that character knows it).
+  const heardNowFor = (viewer: string) =>
+    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"` : undefined;
+  const heardNow = heardNowFor(NARRATOR_OWNER);
   let results: CharacterResult[] = [];
   if (gate.called.length) {
     stage('characters');
@@ -215,7 +224,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
           const bound = deps.registry.getForRole('character', sheet?.tierId ? `tier:${sheet.tierId}` : story.settings.roles.character);
           const handle = deps.memory.getObject(oid)?.handle ?? '';
           const tags = [...lastBlock.tags, ...(lastBlock.evoke[`#${handle}`] ?? lastBlock.evoke[handle] ?? [])];
-          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNow });
+          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid) });
           const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
           const { reply, raw } = await agent.declare(call.ctx, { turnId: turn.id, signal });
           return { objectId: oid, call, reply, raw };
@@ -342,13 +351,24 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (existing && existing.id !== playerId) {
         oid = existing.id;
         const sheet = deps.sheets.get(oid);
+        const knownAs = realValue(e.knownAs).slice(0, 60);
         deps.sheets.upsert(storyId, oid, {
           ...(sheet?.appearance ? {} : { appearance: e.appearance }),
           ...(sheet?.pronouns || !e.pronouns.trim() ? {} : { pronouns: e.pronouns.trim() }),
+          ...(sheet?.knownAs || !knownAs ? {} : { knownAs }),
         });
       } else if (!existing) {
-        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns }).objectId;
+        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns, knownAs: realValue(e.knownAs).slice(0, 60) }).objectId;
       } else continue;
+      // Whom the newcomer already knows by name, and who already knows theirs (family, old friends).
+      for (const k of e.knows) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world') learnName(deps, storyId, oid, other, turn.id);
+      }
+      for (const k of e.knownBy) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world') learnName(deps, storyId, other, oid, turn.id);
+      }
       if (!current().activeNpcIds.includes(oid)) {
         deps.stories.addActiveNpc(current().id, oid);
         entered.push(oid);
@@ -402,6 +422,16 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     outcomes = applyChanges(deps, storyId, proposals, turn.id);
     for (const o of outcomes) if (o.proposal.change.holder !== 'world') changedIds.add(o.proposal.change.holder);
 
+    // 5c'. Names learned other than by hearing them (docs/11 §2.5).
+    for (const [learnerKey, subjects] of Object.entries(block.names)) {
+      const learner = resolveKey(deps, storyId, learnerKey, playerId);
+      if (!learner || learner === 'world') continue;
+      for (const k of subjects) {
+        const subject = resolveKey(deps, storyId, k, playerId);
+        if (subject && subject !== 'world') learnName(deps, storyId, learner, subject, turn.id);
+      }
+    }
+
     // 5d. The narrator's own notes.
     applyThoughtOps(deps, storyId, NARRATOR_OWNER, block.notes, 'self', turn.id);
 
@@ -420,15 +450,28 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         queueForNarrator(deps, storyId, `Note: your briefs for ${vague.join(', ')} said he/she without naming anyone by #handle. Name people by #handle in briefs (the player too), so each character knows who is meant.`, turn.id);
       }
     }
-    const speeches: { from: string; line: string }[] = [];
-    if (decl.say) speeches.push({ from: 'player', line: `${playerLabel}: "${decl.say}"` });
+    const speeches: { from: string; to?: string; say: string }[] = [];
+    if (decl.say) speeches.push({ from: 'player', say: decl.say });
     for (const d of declarations) {
-      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, line: `${label(deps, d.objectId)}${d.to ? ` (to ${d.to})` : ''}: "${d.say.trim()}"` });
+      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim() });
     }
+    // Names (docs/11 §2.5): a name said aloud is learned by everyone who heard it; the player also learns the
+    // names the prose shows. Learned before the briefs are written, so a brief may use a name just heard.
+    if (namesOn(deps, storyId)) {
+      for (const sp of speeches) {
+        const speaker = sp.from === 'player' ? playerId : sp.from;
+        learnFromSpeech(deps, storyId, [...presentIds, playerId].filter((x) => x && x !== speaker), sp.say, turn.id);
+      }
+      if (playerId) learnFromSpeech(deps, storyId, [playerId], prose, turn.id);
+    }
+    const speakerLabel = (hearer: string, from: string) => (from === 'player' ? (playerId ? labelFor(deps, storyId, hearer, playerId) : 'The player character') : labelFor(deps, storyId, hearer, from));
     const heardPlayerAlready = new Set(heardNow ? results.filter((r) => r.reply).map((r) => r.objectId) : []);
     for (const oid of presentIds) {
-      const heard = speeches.filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid))).map((s) => `- ${s.line}`);
-      const parts = [briefs.get(oid) ?? 'Nothing notable changes for you.'];
+      const heard = speeches
+        .filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid)))
+        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: "${s.say}"`);
+      const brief = briefs.get(oid);
+      const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
       const notes = memoryNotes.get(oid);
       if (notes?.length) parts.push(`About your memory: ${notes.join(' ')}`);
@@ -436,7 +479,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     }
     for (const oid of entered) {
       const loc = current().locationObjectId ? deps.memory.getObject(current().locationObjectId!)?.name : undefined;
-      queueForCharacter(deps, storyId, oid, briefs.get(oid) ?? `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
+      const brief = briefs.get(oid);
+      queueForCharacter(deps, storyId, oid, brief ? maskUnknownNames(deps, storyId, oid, brief) : `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
     }
 
     // 5f. The narrator's thread, the clock, the turn.

@@ -68,6 +68,13 @@
     "body": "The description is private: who the character is, their voice, drives and secrets. Only that character's own mind and the narrator read it. Appearance and pronouns are public: everyone present sees them, along with any public variables (\"visibly: wounded\"). Places and things have a public line too (\"Kael's rented room\")."
   },
   {
+    "id": "names",
+    "group": "Sheets",
+    "title": "Names: who knows whom",
+    "body": "Nobody knows a stranger's name. Until someone hears it, a person is known by how they look: the chip says \"the elf girl in green\", and every mind sees them the same way. A name said aloud is learned by everyone who hears it; the narrator records other ways (a letter, an introduction), and newcomers can already know family and friends. In advanced mode you can see real names and mark a name as known. Story options → Minds engine switches it (on for new stories).",
+    "example": "\"I'm Tamsin.\" — now everyone who heard it calls her Tamsin."
+  },
+  {
     "id": "state",
     "group": "Sheets",
     "title": "State",

@@ -92,7 +92,7 @@ export function mindsHarness(opts: { player?: boolean } = {}) {
   const script = emptyScript();
   const seen: { agent: string; req: ChatRequest }[] = [];
   const app: App = createApp(mindsConfig, { driverFactory: () => dispatchDriver(script, seen), dbPath: join(dir, 'm.db'), startWorker: false });
-  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts };
+  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names };
   const storyId = app.stories.createStory({ title: 'Inn', settings: { engine: 'minds', premise: 'A smugglers’ inn.' } as never }).id;
   app.variables.replaceDefs(
     storyId,

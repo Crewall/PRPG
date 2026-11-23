@@ -89,6 +89,8 @@ export const StorySettings = z.object({
       maxActiveThoughts: z.number().int().positive().default(80),
       narratorSeesThoughts: z.boolean().default(false),
       playerSpeechHeardImmediately: z.boolean().default(true),
+      // Names: who knows whom (docs/11 §2.5). New stories turn it on; older ones keep names common knowledge.
+      nameKnowledge: z.boolean().default(false),
       // The narrator's secret setup notes (plans, twists): only the narrator sees them.
       narratorNotes: z.string().default(''),
     })

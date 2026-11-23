@@ -17,6 +17,8 @@ export interface CharacterSheet {
   appearance: string;
   /** Public: how others refer to them ("she/her"). */
   pronouns: string;
+  /** Public: what someone who doesn't know their name calls them ("the elf girl in green"; docs/11 §2.5). */
+  knownAs: string;
   state: string;
   tierId: string | null;
   seeded: boolean;
@@ -31,6 +33,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   description: r.description as string,
   appearance: r.appearance as string,
   pronouns: (r.pronouns as string) ?? '',
+  knownAs: (r.known_as as string) ?? '',
   state: r.state as string,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
@@ -38,7 +41,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'state' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -60,18 +63,19 @@ export function createSheetStore(db: Db) {
         description: patch.description ?? prev?.description ?? '',
         appearance: patch.appearance ?? prev?.appearance ?? '',
         pronouns: patch.pronouns ?? prev?.pronouns ?? '',
+        knownAs: patch.knownAs ?? prev?.knownAs ?? '',
         state: patch.state ?? prev?.state ?? '',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, state, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
-           appearance = excluded.appearance, pronouns = excluded.pronouns, state = excluded.state, tier_id = excluded.tier_id,
-           seeded = excluded.seeded, updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, state = excluded.state,
+           tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 
@@ -320,3 +324,36 @@ export function createThoughtStore(db: Db) {
   return store;
 }
 export type ThoughtStore = ReturnType<typeof createThoughtStore>;
+
+// ---- Names: who knows whom (docs/11 §2.5) ----
+
+export function createNameStore(db: Db) {
+  return {
+    /** Does `viewer` know `subject`'s name (as recorded)? */
+    knows(viewer: string, subject: string): boolean {
+      return !!db.prepare(`SELECT 1 FROM name_knowledge WHERE viewer = ? AND subject = ?`).get(viewer, subject);
+    },
+    /** Every subject whose name `viewer` knows. */
+    knownBy(viewer: string): Set<string> {
+      return new Set(db.prepare(`SELECT subject FROM name_knowledge WHERE viewer = ?`).all<Row>(viewer).map((r) => r.subject as string));
+    },
+    /** Record that `viewer` learned `subject`'s name (no-op when already known). Returns true when it was new. */
+    learn(storyId: string, viewer: string, subject: string, turnId: string | null): boolean {
+      if (viewer === subject) return false;
+      const r = db
+        .prepare(`INSERT OR IGNORE INTO name_knowledge (story_id, viewer, subject, learned_turn_id, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(storyId, viewer, subject, turnId, Date.now());
+      return Number(r.changes) > 0;
+    },
+    forget(viewer: string, subject: string): void {
+      db.prepare(`DELETE FROM name_knowledge WHERE viewer = ? AND subject = ?`).run(viewer, subject);
+    },
+    listForStory(storyId: string): { viewer: string; subject: string; learnedTurnId: string | null }[] {
+      return db
+        .prepare(`SELECT viewer, subject, learned_turn_id FROM name_knowledge WHERE story_id = ? ORDER BY created_at`)
+        .all<Row>(storyId)
+        .map((r) => ({ viewer: r.viewer as string, subject: r.subject as string, learnedTurnId: (r.learned_turn_id as string) ?? null }));
+    },
+  };
+}
+export type NameStore = ReturnType<typeof createNameStore>;

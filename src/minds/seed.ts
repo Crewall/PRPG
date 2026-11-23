@@ -5,12 +5,25 @@ import { renderPrompt } from '../agents/prompts.ts';
 import { renderRecentStory } from '../orchestrator/handlers.ts';
 import { applyChanges, applyThoughtOps, holdersFor } from './service.ts';
 import { STATE_KEY, appliesTo, renderRange } from './variables.ts';
+import { knowsName, namesOn } from './names.ts';
 import type { Proposal } from './variables.ts';
 import type { RoundDeps } from './round.ts';
 
 // minds_seed (docs/11 §2.3): give a character the narrator just introduced a
 // mind — description, state, starting values and 3–10 thoughts — parsing the
 // story first and inventing second. Never overwrites what the user wrote.
+
+/** Whose names the newcomer knows (docs/11 §2.5): the others are strangers, written as their #handles. */
+function namesNote(deps: RoundDeps, storyId: string, objectId: string, name: string): string {
+  const lines = deps.sheets
+    .listForStory(storyId)
+    .filter((s) => s.objectId !== objectId && deps.memory.getObject(s.objectId))
+    .map((s) => {
+      const o = deps.memory.getObject(s.objectId)!;
+      return knowsName(deps, storyId, objectId, s.objectId) ? `- #${o.handle} ${o.name}: ${name} knows this name` : `- #${o.handle} (${s.knownAs || 'a stranger'}): ${name} doesn't know this name; write #${o.handle}, never the name`;
+    });
+  return `People in the story, as ${name} knows them:\n${lines.join('\n') || '(nobody yet)'}`;
+}
 
 export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
   return async (job: Job) => {
@@ -31,6 +44,7 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     const user = [
       `The premise: ${story.settings.premise.trim() || '(none given)'}`,
       `How ${obj.name} was introduced: ${sheet.appearance || '(no description yet)'}`,
+      ...(namesOn(deps, storyId) ? [namesNote(deps, storyId, objectId, obj.name)] : []),
       `The story so far (most recent last):\n${renderRecentStory(deps.stories, storyId) || '(nothing yet)'}`,
       `Variables ${obj.name} holds:\n${defs.map((d) => `- ${d.key} (${renderRange(d)}): ${d.description || d.label}`).join('\n') || '(none)'}`,
       `Create the mind for ${obj.name}. Reply as JSON.`,

@@ -344,7 +344,14 @@ async function renderPlay(storyId) {
         helpLink('scenario')),
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
-      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
+      mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
+      (() => {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = !!minds.nameKnowledge;
+        cb.addEventListener('change', async () => { minds.nameKnowledge = cb.checked; await patchSettings({ minds: { ...minds } }); refreshSceneHeader(); });
+        return h('label', { class: 'opt-row', title: 'On: nobody knows a stranger\'s name until they hear it; people are known by how they look. Off: everyone knows every name (older stories).' },
+          cb, h('span', {}, 'names are learned (strangers stay unnamed) '), helpLink('names'));
+      })());
 
     // Which engine plays this story (docs/10 §4, §13 M8). Minds is the engine; the classic
     // engine and NPC story mode are retired: they keep running the stories that use them.
@@ -427,6 +434,7 @@ async function renderPlay(storyId) {
       const field = (label, el, hint) => h('label', { class: 'form-row' }, h('span', { class: 'sub' }, label), el, hint ? h('span', { class: 'hint' }, hint) : null);
       const nameIn = h('input', { type: 'text', value: pc?.name || '', placeholder: 'e.g. Kael' });
       const pronIn = h('input', { type: 'text', value: pc?.pronouns || '', placeholder: 'she/her, he/him, they/them…', list: 'pronoun-list', maxlength: '40' });
+      const knownIn = h('input', { type: 'text', value: pc?.knownAs || '', placeholder: 'e.g. the tall stranger in a grey cloak', maxlength: '60' });
       const lookIn = h('textarea', { rows: '2', placeholder: 'What anyone sees at a glance: build, clothes, anything striking.' });
       lookIn.value = pc?.appearance || '';
       const whoIn = h('textarea', { rows: '4', placeholder: 'Optional: who you are, background, what you want. Only the narrator reads this.' });
@@ -434,7 +442,7 @@ async function renderPlay(storyId) {
       const err = h('div', { class: 'sub err' });
       const close = (v) => { modal.remove(); resolve(v); };
       const save = h('button', { class: 'primary', onclick: async () => {
-        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
         if (!body.name) { err.textContent = 'Give your character a name.'; return; }
         try {
           if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
@@ -451,6 +459,7 @@ async function renderPlay(storyId) {
           field('Pronouns', pronIn),
           h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
           field('Appearance', lookIn),
+          field('Others first know you as', knownIn, 'Until someone learns your name, this is what they call you. Empty: taken from your appearance.'),
           field('Who you are', whoIn),
           err,
           h('div', { class: 'row', style: 'gap:8px; justify-content:flex-end; flex-wrap:wrap' },
@@ -947,7 +956,7 @@ async function renderPlay(storyId) {
       const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
         let name = 'them';
-        try { name = (await api.get(`/api/memory/objects/${lastTurn.meta.partner}`))?.name || name; } catch {}
+        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastTurn.meta.partner)?.name || name; } catch {}
         setDialogue({ partner: lastTurn.meta.partner, name });
       }
       follow = true;

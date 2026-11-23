@@ -8,6 +8,7 @@ import { applyChanges, applyThoughtOps } from './service.ts';
 import { STATE_KEY } from './variables.ts';
 import type { RoundDeps, RoundEmitter } from './round.ts';
 import { queueCompactions } from './compaction.ts';
+import { labelFor, learnFromSpeech, nameFor } from './names.ts';
 
 // Dialogue mode (docs/10 §7): a quick back-and-forth with one character. Each
 // exchange is its own turn (so rewind and edit just work): the player's line
@@ -82,7 +83,8 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   }
 
   const decl = parsePlayerInput(playerInput);
-  const pLabel = player ? handleLabel(deps, player.objectId) : 'The player character';
+  // The partner hears the player as it knows them (their name only once learned; docs/11 §2.5).
+  const pLabel = player ? labelFor(deps, storyId, partner, player.objectId) : 'The player character';
   // The last real round's block (exchanges carry none): its tags still colour what comes to mind.
   const previous = deps.stories.recentTurns(storyId, 60).filter((t) => t.status === 'complete' && t.index < turn.index && t.meta.mode !== 'dialogue').at(-1);
   const lastBlock = previous?.meta.block ? parseRoundBlock(previous.meta.block).block : emptyBlock();
@@ -102,8 +104,9 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
   const { reply, raw } = await agent.converse(call.ctx, { turnId: turn.id, signal: opts.signal });
 
-  const name = deps.memory.getObject(partner)?.name ?? '?';
-  const line = renderDialogueLine(name, reply);
+  // The player reads the partner's line under the name the player knows them by.
+  const name = nameFor(deps, storyId, player?.objectId, partner).name;
+  const line = renderDialogueLine(name.charAt(0).toUpperCase() + name.slice(1), reply);
   for (let i = 0; i < line.length; i += 24) out.delta(line.slice(i, i + 24));
 
   opts.setStage?.('saving the exchange');
@@ -112,6 +115,11 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
     const ops = applyThoughtOps(deps, storyId, partner, { remember: reply.remember, forget: reply.forget }, 'self', turn.id);
     if (ops.notes.length) queueForCharacter(deps, storyId, partner, `About your memory: ${ops.notes.join(' ')}`, turn.id);
     if (reply.state) applyChanges(deps, storyId, [{ change: { holder: partner, key: STATE_KEY, op: 'set', value: reply.state }, by: 'self', proposer: partner }], turn.id);
+    // Names said in the exchange are learned by the one who heard them.
+    if (player) {
+      learnFromSpeech(deps, storyId, [partner], decl.say, turn.id);
+      learnFromSpeech(deps, storyId, [player.objectId], reply.say, turn.id);
+    }
     const clockMin = deps.stories.advanceClock(storyId, 1);
     queueCompactions(deps, storyId, [call.sessionId], turn.id);
     deps.stories.updateTurn(turn.id, {
