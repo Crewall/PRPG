@@ -230,3 +230,46 @@ describe('M7 endpoints', () => {
     expect(h.app.sheets.player(h.storyId)).toMatchObject({ pronouns: 'she/her', appearance: 'Short, sea-green coat.' });
   });
 });
+
+describe('copied placeholders and example names', () => {
+  let h: MindsHarness;
+  afterEach(() => h.close());
+
+  it('a "…" or "<name>" player or character is refused; placeholder fields stay empty', async () => {
+    h = mindsHarness({ player: false });
+    h.script.narrator.push(
+      round('You wake.', {
+        player: { name: '…', pronouns: '…', appearance: '…' },
+        cast: { enter: [{ name: '<their name>', appearance: '<one line>' }, { name: 'Liraelen', pronouns: '<their pronouns>', appearance: 'An elf girl in green.' }] },
+        briefs: {},
+      }),
+    );
+    const c = await h.play('');
+    expect(h.app.sheets.player(h.storyId)).toBeUndefined();
+    const problems = (c.final?.meta.blockProblems as string[]).join(' | ');
+    expect(problems).toMatch(/player: "…" is not a name/);
+    expect(problems).toMatch(/cast.enter: "<their name>" is not a name/);
+    const lira = h.app.sheets.get(h.idOf('Liraelen'))!;
+    expect(lira.pronouns).toBe('');
+    expect(lira.appearance).toBe('An elf girl in green.');
+    // The narrator is asked again next round.
+    h.script.characters['Liraelen'] = [JSON.stringify({ say: '' })];
+    h.script.narrator.push(round('Still raining.', { player: { name: 'Rin', pronouns: 'she/her', appearance: 'Short.' }, briefs: {} }));
+    await h.play('');
+    expect(h.requests('narrator').at(-1)!.messages.at(-1)!.content).toContain('The player has no character yet');
+    expect(h.app.memory.getObject(h.app.sheets.player(h.storyId)!.objectId)!.name).toBe('Rin');
+  });
+
+  it("the narrator's rules use the story's own player handle, never example people", async () => {
+    h = mindsHarness();
+    await h.opening();
+    const system = h.requests('narrator')[0].system;
+    expect(system).toContain('("#kael climbs the stairs")'); // the harness player is Kael: the real handle
+    h.close();
+    h = mindsHarness({ player: false });
+    await h.opening();
+    const bare = h.requests('narrator')[0].system;
+    expect(bare).not.toMatch(/kael|marta/i);
+    expect(bare).toContain('never copy it');
+  });
+});

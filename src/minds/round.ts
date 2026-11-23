@@ -20,7 +20,7 @@ import type { GateCandidate } from './gate.ts';
 import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
-import { slugify } from './text.ts';
+import { isPlaceholder, isRealName, realValue, slugify } from './text.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { queueCompactions } from './compaction.ts';
 
@@ -102,8 +102,8 @@ function settlePlayer(
   p: { name?: string; pronouns?: string; appearance?: string },
   presentIds: string[],
 ): { playerId?: string; changed?: boolean; problem?: string } {
-  const pronouns = p.pronouns?.trim() ?? '';
-  const appearance = p.appearance?.trim() ?? '';
+  const pronouns = realValue(p.pronouns).slice(0, 40);
+  const appearance = realValue(p.appearance);
   if (playerId) {
     const sheet = deps.sheets.get(playerId);
     if (!sheet) return { playerId };
@@ -114,6 +114,7 @@ function settlePlayer(
   }
   const name = p.name?.trim();
   if (!name) return { problem: 'player: no name given for the new player character' };
+  if (!isRealName(name)) return { problem: `player: "${name}" is not a name` };
   const existing = deps.memory.findByName(storyId, name);
   if (existing) {
     if (presentIds.includes(existing.id) || existing.type !== 'character') return { problem: `player: '${name}' is already someone else` };
@@ -250,7 +251,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   // The player character must exist and be describable (docs/11 §2.1): ask the narrator for what is missing.
   const playerSheet = playerId ? deps.sheets.get(playerId) : undefined;
   const playerAsk = !playerSheet
-    ? 'The player has no character yet. In the block, add "player": {"name": "…", "pronouns": "…", "appearance": "…"}: what the story has established about them, else invent what fits the premise.'
+    ? 'The player has no character yet. In the block, add "player" with their name (a real name, not a description), their pronouns and a one-line appearance: what the story has established about them, else invent what fits the premise.'
     : !playerSheet.appearance.trim() || !playerSheet.pronouns.trim()
       ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
       : undefined;
@@ -310,6 +311,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       }
     }
     for (const o of block.objects) {
+      if (isPlaceholder(o.name)) continue;
+      o.line = realValue(o.line);
       const existing = deps.memory.findByName(storyId, o.name) ?? (o.name.trim().startsWith('#') ? deps.memory.findByHandle(storyId, o.name.trim()) : undefined);
       if (existing) {
         // The narrator keeps places' and things' public one-liners current (docs/11 §2.4).
@@ -328,6 +331,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     }
     const entered: string[] = [];
     for (const e of block.cast.enter) {
+      if (!isRealName(e.name)) {
+        blockProblems.push(`cast.enter: "${e.name}" is not a name`);
+        continue;
+      }
+      e.appearance = realValue(e.appearance);
+      e.pronouns = realValue(e.pronouns).slice(0, 40);
       const existing = deps.memory.findByName(storyId, e.name) ?? deps.memory.findByHandle(storyId, slugify(e.name));
       let oid: string;
       if (existing && existing.id !== playerId) {
