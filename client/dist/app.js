@@ -3,30 +3,11 @@
 // summaries & threads under a debug flag, /look perception command).
 // Svelte is nominated for later polish (docs/07); this is the working baseline.
 
+import { h, api } from './ui.js';
+import { openHelp, helpLink, firstRunHint } from './help.js';
+import * as minds from './minds.js';
+
 const app = document.getElementById('app');
-const h = (tag, attrs = {}, ...kids) => {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') el.className = v;
-    else if (k === 'html') el.innerHTML = v;
-    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-    else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v);
-  }
-  for (const kid of kids.flat()) {
-    if (kid == null || kid === false) continue;
-    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
-  }
-  return el;
-};
-
-const api = {
-  async get(p) { const r = await fetch(p); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
-  async post(p, b, opts = {}) { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}), signal: opts.signal }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
-  async patch(p, b) { const r = await fetch(p, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
-  async put(p, b) { const r = await fetch(p, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
-  async del(p) { const r = await fetch(p, { method: 'DELETE' }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
-};
-
 // Clipboard copy that also works on plain-http LAN/Termux, where the async
 // Clipboard API is unavailable (needs a secure context): fall back to a hidden
 // textarea + execCommand. Returns true on success.
@@ -58,6 +39,7 @@ function topbar(...right) {
     h('h1', { onclick: () => (location.hash = '/'), style: 'cursor:pointer' }, 'PRPG'),
     h('span', { class: 'spacer' }),
     ...right,
+    h('button', { class: 'ghost small help-btn', title: 'How it works', onclick: () => openHelp() }, '?'),
   );
 }
 
@@ -160,8 +142,42 @@ async function renderPlay(storyId) {
     input.placeholder = d ? `"What you say" (small gestures outside the quotes) — Ctrl+Enter to send` : DEFAULT_PLACEHOLDER;
     sendBtn.textContent = d ? 'Say' : 'Send';
     refreshSceneHeader();
+    updateInputPreview();
   }
   endTalkBtn.addEventListener('click', () => { if (busy) return; setDialogue(null); submitText('', false); });
+
+  // Minds UI state: advanced mode (per story, this browser only), characters forced to act next round.
+  const forced = new Set();
+  const ADV_KEY = `prpg.advanced.${storyId}`;
+  let advanced = false;
+  try { advanced = localStorage.getItem(ADV_KEY) === '1'; } catch {}
+  const setAdvanced = (on) => {
+    advanced = on;
+    try { localStorage.setItem(ADV_KEY, on ? '1' : '0'); } catch {}
+    refreshSceneHeader(); renderDrawer();
+  };
+  const mindsCtx = {
+    storyId,
+    advanced: () => advanced,
+    busy: () => busy,
+    forced,
+    dialoguePartner: () => dialogue?.partner,
+    talk: (c) => setDialogue({ partner: c.objectId, name: c.name }),
+    toggleForce: (c) => { if (forced.has(c.objectId)) forced.delete(c.objectId); else forced.add(c.objectId); refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); },
+    refresh: () => { refreshSceneHeader(); if (activeTab === 'cast' || activeTab === 'pov') renderDrawer(); },
+  };
+  // How the box will be read (Minds): said / tried / note — and the syntax when it is empty.
+  const inputPreview = h('div', { class: 'input-preview', style: 'display:none' });
+  const updateInputPreview = () => {
+    if (story.settings?.engine !== 'minds') { inputPreview.style.display = 'none'; return; }
+    const lanes = h('span', { class: 'lanes' });
+    minds.renderInputPreview(lanes, input.value, { dialogue: !!dialogue });
+    inputPreview.replaceChildren(
+      input.value.trim() ? lanes : h('span', { class: 'sub' }, dialogue ? '"what you say" · a small gesture outside the quotes' : '"quotes" = said aloud · the rest = what you try · ((…)) = note to the narrator'),
+      helpLink('input-syntax', 'How to write your message'));
+    lanes.style.display = '';
+    inputPreview.style.display = '';
+  };
   actBtn.addEventListener('click', () => {
     if (busy) return;
     const text = input.value.trim();
@@ -310,8 +326,12 @@ async function renderPlay(storyId) {
       });
       return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
     };
-    const mindsBlock = h('details', {},
+    const mindsBlock = h('details', { ...(s.engine === 'minds' ? { open: true } : {}) },
       h('summary', { class: 'sub' }, 'Minds engine'),
+      h('div', { class: 'row', style: 'gap:8px; flex-wrap:wrap; margin:6px 0' },
+        h('button', { class: 'small', onclick: () => { modal.remove(); minds.openScenarioEditor(mindsCtx); } }, '⚙ Scenario variables…'),
+        h('button', { class: 'small', onclick: () => { modal.remove(); setAdvanced(!advanced); } }, advanced ? 'Advanced mode: on' : 'Advanced mode: off'),
+        helpLink('scenario')),
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000));
@@ -331,15 +351,17 @@ async function renderPlay(storyId) {
     const engineSel = h('select', { onchange: async (e) => {
       engineHint.textContent = engineHints[e.target.value] || '';
       await patchSettings({ engine: e.target.value });
+      activeTab = e.target.value === 'minds' ? 'cast' : 'memory';
       renderDrawer();
       refreshSceneHeader();
+      updateInputPreview();
     } }, ...ENGINES.map(([v, l]) => h('option', { value: v, ...((s.engine || 'classic') === v ? { selected: true } : {}) }, l)));
     engineHint.textContent = engineHints[s.engine || 'classic'];
 
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
         h('h3', {}, 'Story options'),
-        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine'), engineSel, engineHint),
+        h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Engine ', helpLink('engine')), engineSel, engineHint),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Storyteller verbosity'), vSlider, vLabel),
         h('div', { class: 'opt-block' }, h('div', { class: 'sub' }, 'Narrator tone'), h('div', { class: 'row', style: 'gap:8px' }, toneIn, toneStatus)),
         toggle('Adjudicator (dice-decided outcomes)', 'Uncertain, consequential actions are judged by an impartial AI referee and decided by a hidden dice roll. Off = the storyteller decides everything itself.',
@@ -380,10 +402,53 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, scrollBox, dialogueBar, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, input, h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
+  updateInputPreview();
   let activeNpcIds = new Set();
+  // The player character (Minds, docs/11 §2.1): who you play, as the other minds perceive you.
+  // Resolves when the form closes (saved, skipped or cancelled).
+  function showPlayerForm(pc) {
+    return new Promise((resolve) => {
+      const field = (label, el, hint) => h('label', { class: 'form-row' }, h('span', { class: 'sub' }, label), el, hint ? h('span', { class: 'hint' }, hint) : null);
+      const nameIn = h('input', { type: 'text', value: pc?.name || '', placeholder: 'e.g. Kael' });
+      const pronIn = h('input', { type: 'text', value: pc?.pronouns || '', placeholder: 'she/her, he/him, they/them…', list: 'pronoun-list', maxlength: '40' });
+      const lookIn = h('textarea', { rows: '2', placeholder: 'What anyone sees at a glance: build, clothes, anything striking.' });
+      lookIn.value = pc?.appearance || '';
+      const whoIn = h('textarea', { rows: '4', placeholder: 'Optional: who you are, background, what you want. Only the narrator reads this.' });
+      whoIn.value = pc?.description || '';
+      const err = h('div', { class: 'sub err' });
+      const close = (v) => { modal.remove(); resolve(v); };
+      const save = h('button', { class: 'primary', onclick: async () => {
+        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+        if (!body.name) { err.textContent = 'Give your character a name.'; return; }
+        try {
+          if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
+          else await api.post(`/api/stories/${storyId}/minds`, { ...body, isPlayer: true });
+          close('saved');
+          refreshSceneHeader();
+        } catch (e) { err.textContent = e.message; }
+      } }, pc ? 'Save' : 'Play as this character');
+      const modal = h('div', { class: 'modal-bg' },
+        h('div', { class: 'modal' },
+          h('h3', {}, pc ? 'Your character' : 'Who do you play?'),
+          h('div', { class: 'sub' }, 'The other characters see your name, pronouns and appearance, so they can tell you apart from everyone else.'),
+          field('Name', nameIn),
+          field('Pronouns', pronIn),
+          h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
+          field('Appearance', lookIn),
+          field('Who you are', whoIn),
+          err,
+          h('div', { class: 'row', style: 'gap:8px; justify-content:flex-end; flex-wrap:wrap' },
+            pc ? null : h('button', { class: 'ghost', title: 'The narrator creates your character from the premise; you can edit it later from the 🎭 chip.', onclick: () => close('skipped') }, 'Let the narrator decide'),
+            pc ? h('button', { class: 'ghost', onclick: () => close('cancelled') }, 'Cancel') : null,
+            save)));
+      document.body.append(modal);
+      nameIn.focus();
+    });
+  }
+
   async function refreshSceneHeader() {
     // Minds engine: the scene's present characters, each its own mind (tooltip: what you can see of them).
     if (story.settings?.engine === 'minds') {
@@ -394,15 +459,18 @@ async function renderPlay(storyId) {
       const pc = view.characters.find((c) => c.isPlayer);
       const here = view.characters.filter((c) => present.has(c.objectId) && !c.isPlayer);
       activeNpcIds = new Set(here.map((c) => c.objectId));
-      const tip = (c) => [c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
+      const tip = (c) => [c.pronouns ? `(${c.pronouns})` : '', c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
       npcChips.replaceChildren(
-        pc ? h('span', { class: 'chip pc', title: tip(pc) }, `🎭 ${pc.name}`) : h('span', { class: 'sub' }, '🎭 no player character'),
+        pc
+          ? h('button', { class: 'chip pc', title: `${tip(pc)}\n\nTap for your sheet.`, onclick: () => minds.openCharacterCard(mindsCtx, pc.objectId) }, `🎭 ${pc.name}`)
+          : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
-          ? here.map((c) => h('button', { class: 'chip', title: `${tip(c)}\n\nTap to talk with ${c.name} directly.`, onclick: () => {
-              if (busy || dialogue?.partner === c.objectId) return;
-              if (confirm(`Talk with ${c.name}?\n\nYour messages go to ${c.name} only, back and forth, until you end the conversation. Then the narrator wraps it up.`)) setDialogue({ partner: c.objectId, name: c.name });
-            } }, dialogue?.partner === c.objectId ? `💬 ${c.name}` : c.name))
+          ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
+              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${forced.has(c.objectId) ? ' ⚡' : ''}`))
           : [h('span', { class: 'sub' }, 'nobody else here yet')]),
+        h('span', { class: 'spacer' }),
+        h('button', { class: `chip adv${advanced ? ' on' : ''}`, title: 'Advanced mode: see and edit everything (spoilers)', onclick: () => setAdvanced(!advanced) }, advanced ? '🔍 Advanced: on' : '🔍 Advanced'),
+        helpLink('advanced'),
       );
       return;
     }
@@ -687,6 +755,16 @@ async function renderPlay(storyId) {
   };
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
+  // The turn's progress ("the narrator is writing…"): one live line, replaced by
+  // each new stage and gone when the turn ends — it never piles up in the chat.
+  let liveStage = null;
+  const showStage = (t) => {
+    if (!liveStage) liveStage = h('div', { class: 'status-line live' });
+    liveStage.textContent = t;
+    transcript.append(liveStage); // (re)placed at the bottom
+    scrollDown();
+  };
+  const clearStage = () => { liveStage?.remove(); liveStage = null; };
 
   // Feature: copy/edit/delete ANY past message. Each transcript bubble carries
   // ⧉/✎/× controls; edit/delete are bound to its turn + field (player input or
@@ -762,10 +840,17 @@ async function renderPlay(storyId) {
 
   // A brand-new story opens itself: the storyteller sets the scene unprompted.
   let autoOpened = false;
-  function maybeAutoOpen() {
+  async function maybeAutoOpen() {
     if (autoOpened || turnCount > 0 || busy || !wsOpen()) return;
     autoOpened = true;
-    addStatus('(the storyteller opens the story…)');
+    // A new Minds story asks who you play first (docs/11 §2.1); skipping lets the narrator decide.
+    if (story.settings?.engine === 'minds') {
+      let hasPc = true;
+      try { hasPc = (await api.get(`/api/stories/${storyId}/minds`)).characters.some((c) => c.isPlayer); } catch {}
+      if (!hasPc) await showPlayerForm(null);
+      if (turnCount > 0 || busy || !wsOpen()) return;
+    }
+    showStage('the storyteller opens the story…');
     submitText('', false);
   }
 
@@ -790,7 +875,7 @@ async function renderPlay(storyId) {
   });
 
   // ---- Drawer tabs (Memory always; Summaries/Threads under debug) ----
-  let activeTab = 'memory';
+  let activeTab = story?.settings?.engine === 'minds' ? 'cast' : 'memory';
   // Set by "open mind" (from a dossier) so the NPC minds tab expands & scrolls
   // to that character on its next render.
   let pendingMindExpand = null;
@@ -807,7 +892,8 @@ async function renderPlay(storyId) {
     await renderDrawer();
   }
   async function renderDrawer() {
-    const tabs = [['memory', 'Memory']];
+    const isMinds = story.settings?.engine === 'minds';
+    const tabs = isMinds ? [['cast', 'Cast'], ...(advanced ? [['pov', 'POV']] : []), ['memory', 'Memory']] : [['memory', 'Memory']];
     // NPC Story Mode: each character's mind (personality + private notes) is a
     // first-class, player-editable panel — the mode's replacement for the
     // memory browser's NPC role.
@@ -818,7 +904,9 @@ async function renderPlay(storyId) {
       h('button', { class: 'tab' + (activeTab === k ? ' active' : ''), onclick: () => { activeTab = k; renderDrawer(); } }, label)));
     const body = h('div', { class: 'drawer-body' }, h('div', { class: 'empty' }, 'Loading…'));
     drawer.replaceChildren(tabRow, body);
-    if (activeTab === 'minds') await renderMinds(body);
+    if (activeTab === 'cast') await minds.renderCastTab(mindsCtx, body);
+    else if (activeTab === 'pov') await minds.renderPovTab(mindsCtx, body);
+    else if (activeTab === 'minds') await renderMinds(body);
     else if (activeTab === 'memory') await renderMemory(body);
     else if (activeTab === 'summaries') await renderSummaries(body);
     else await renderThreads(body);
@@ -1081,6 +1169,7 @@ async function renderPlay(storyId) {
   function parsedPayload(l) {
     const p = l.payload || {};
     const box = h('div', { class: 'thread-parsed' });
+    if (p.error) box.append(h('div', { class: 'call-error' }, `failed: ${p.error}`));
     if (l.direction === 'request') {
       if (p.model) box.append(h('div', { class: 'sub' }, `model: ${p.model}`));
       if (p.system) box.append(h('details', {}, h('summary', { class: 'sub' }, 'system prompt'), h('div', { class: 'prose' }, p.system)));
@@ -1112,22 +1201,36 @@ async function renderPlay(storyId) {
     return box;
   }
 
+  // One row per agent call: whose mind, when (turn · game time · clock), size,
+  // speed, cache use — request and response together; failures say why.
   async function renderThreads(body) {
     body.replaceChildren();
-    let logs = [];
-    try { logs = await api.get(`/api/stories/${storyId}/threadlog?limit=60`); } catch {}
-    if (!logs.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
-    for (const l of logs) {
+    let calls = [];
+    try { calls = await api.get(`/api/stories/${storyId}/calls?limit=40`); } catch {}
+    if (!calls.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
+    const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    for (const c of calls) {
       const detail = h('div', { class: 'gone' });
       let built = false;
-      body.append(h('div', { class: 'mem-card' },
-        h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('gone'); } },
-          h('span', { class: `role-badge ${l.agentRole}` }, l.agentRole),
-          // Requests carry no duration; show the input size and how long ago it
-          // was sent instead of a misleading "0ms". Responses show real latency.
-          h('span', { class: 'sub' }, l.direction === 'response'
-            ? `response · ${l.tokensOut ?? 0}tk · ${((l.durationMs ?? 0) / 1000).toFixed(1)}s`
-            : `request · ${l.tokensIn ?? 0}tk · sent ${Math.max(0, Math.round((Date.now() - l.createdAt) / 1000))}s ago`)),
+      const when = [c.turnIndex != null ? `turn ${c.turnIndex + 1}` : '', c.gameTime || '', clock(c.startedAt)].filter(Boolean).join(' · ');
+      const cachePct = c.cacheRead && c.tokensIn ? ` · cache ${Math.round((100 * c.cacheRead) / c.tokensIn)}%` : '';
+      const size = c.status === 'waiting'
+        ? `${c.tokensIn ?? 0}tk sent · waiting ${Math.max(0, Math.round((Date.now() - c.startedAt) / 1000))}s`
+        : c.status === 'failed'
+          ? `failed after ${((c.durationMs ?? 0) / 1000).toFixed(1)}s`
+          : `${c.tokensIn ?? 0}→${c.tokensOut ?? 0}tk · ${((c.durationMs ?? 0) / 1000).toFixed(1)}s${cachePct}`;
+      body.append(h('div', { class: `mem-card call ${c.status}` },
+        h('div', { class: 'mem-head', onclick: () => {
+          if (!built) {
+            detail.append(h('div', { class: 'sub' }, 'request'), parsedPayload(c.request));
+            if (c.response) detail.append(h('div', { class: 'sub' }, 'response'), parsedPayload(c.response));
+            built = true;
+          }
+          detail.classList.toggle('gone');
+        } },
+          h('div', { class: 'call-who' }, h('span', { class: `role-badge ${c.role}` }, c.role), h('b', {}, c.mind)),
+          h('div', { class: 'call-meta' }, h('span', { class: 'sub' }, when), h('span', { class: c.status === 'failed' ? 'sub err' : 'sub' }, size))),
+        c.error ? h('div', { class: 'call-error' }, c.error) : null,
         detail));
     }
   }
@@ -1198,9 +1301,10 @@ async function renderPlay(storyId) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
       case 'turn.accepted': currentTurnId = m.turnId; current = addBubble('narration cursor', ''); showReplyStart(current); break;
-      case 'turn.status': addStatus(m.text); break;
-      case 'turn.delta': if (!current) { current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
+      case 'turn.status': showStage(m.text); break;
+      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
       case 'turn.final':
+        clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
         // has a persisted id — no reload needed to fix a just-written message.
         if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration'); current.replaceWith(nb); current = nb; }
@@ -1215,8 +1319,9 @@ async function renderPlay(storyId) {
           setTimeout(() => submitText('', false), 300);
         } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
         break;
-      case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
+      case 'turn.rejected': clearStage(); if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'turn.error':
+        clearStage();
         if (current) current.remove();
         addBubble('error', `The turn failed — ${m.message}`);
         // Don't lose the message: put it back in the box for another try.
@@ -1226,7 +1331,7 @@ async function renderPlay(storyId) {
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
       case 'scene.changed': api.get(`/api/stories/${storyId}`).then((s) => { sceneLabel.textContent = s.scene?.title || 'Scene'; }).catch(() => {}); refreshSceneHeader(); break;
-      case 'minds.updated': if (m.storyId === storyId) refreshSceneHeader(); break;
+      case 'minds.updated': if (m.storyId === storyId) { refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); } break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
@@ -1269,7 +1374,9 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}) }));
+    const force = !dialogue && forced.size ? [...forced] : undefined;
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}) }));
+    if (force) { forced.clear(); refreshSceneHeader(); }
     return true;
   }
 
@@ -1279,7 +1386,7 @@ async function renderPlay(storyId) {
       if (await handleSlash(text)) { input.value = ''; input.style.height = 'auto'; return; }
     }
     // Clear the box only once the message is actually on its way.
-    if (submitText(text, false)) { input.value = ''; input.style.height = 'auto'; }
+    if (submitText(text, false)) { input.value = ''; input.style.height = 'auto'; updateInputPreview(); }
   };
   sendBtn.addEventListener('click', submit);
   cancelBtn.addEventListener('click', () => { if (wsOpen()) ws.send(JSON.stringify({ t: 'turn.cancel', storyId })); });
@@ -1287,7 +1394,7 @@ async function renderPlay(storyId) {
   // accidental Enter must never fire a half-written message). Sending is the
   // Send button or Ctrl/Cmd+Enter.
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } });
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
+  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; updateInputPreview(); });
 
   connectWs();
   renderDrawer();
@@ -1358,7 +1465,7 @@ async function renderSettings() {
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
     const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');
-    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model tiers'),
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Model tiers ', helpLink('tiers')),
       h('div', { class: 'sub', style: 'margin-bottom:10px' }, 'Every AI role runs on a tier. Change a tier\'s model once and all its roles follow. Temperature left empty is not sent. Reasoning "off" makes characters and helpers much faster.'),
       ...rows, h('div', { class: 'row', style: 'gap:10px; flex-wrap:wrap' }, add, suggest));
   }
@@ -1464,7 +1571,7 @@ async function renderSettings() {
       st.connections.push({ id: taken.has(k) ? newSettingsId('c') : k, label: p.label, kind: p.kind, preset: k, baseUrl: p.baseUrl, apiKey: '', configured: false, hint: '' });
       paint();
     } }, '+ Add provider');
-    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Providers'),
+    return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Providers ', helpLink('providers')),
       h('div', { class: 'sub' }, 'API connections. You can have several, e.g. DeepSeek and OpenRouter at once. Keys stay on this server.'),
       ...blocks, h('div', { class: 'row', style: 'margin-top:12px; gap:8px' }, pick, add));
   }

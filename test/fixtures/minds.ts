@@ -87,7 +87,7 @@ export const textOf = (req: ChatRequest) => `${req.system}\n${req.messages.map((
  * (health: self-visible; suspicion: hidden, NPCs only; alarm: world).
  * `opening()` plays round 1, in which the narrator brings in Marta and Tom.
  */
-export function mindsHarness() {
+export function mindsHarness(opts: { player?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'prpg-minds-'));
   const script = emptyScript();
   const seen: { agent: string; req: ChatRequest }[] = [];
@@ -102,7 +102,7 @@ export function mindsHarness() {
       { key: 'alarm', label: 'Alarm', type: 'number', min: 0, max: 5, scope: 'world', visibility: 'public', changedBy: ['narrator'] },
     ].map((d) => VariableDef.parse(d)),
   );
-  createCharacter(deps, storyId, { name: 'Kael', isPlayer: true, appearance: 'Tall, rain-soaked.' });
+  if (opts.player !== false) createCharacter(deps, storyId, { name: 'Kael', isPlayer: true, appearance: 'Tall, rain-soaked.' });
 
   const h = {
     dir,

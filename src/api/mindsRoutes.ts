@@ -7,7 +7,7 @@ import { SCENARIO_TEMPLATES } from '../minds/templates.ts';
 import { applyChanges, applyThoughtOps, createCharacter, mindsView, updateSheet } from '../minds/service.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
-import { buildCharacterCall, buildNarratorCall, hereFromScene, NARRATOR_OWNER } from '../minds/builders.ts';
+import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, NARRATOR_OWNER } from '../minds/builders.ts';
 import type { ThreadDeps } from '../minds/builders.ts';
 
 // Minds engine data layer API (docs/10 §11, docs/11): scenario variables,
@@ -41,31 +41,50 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     return app.variables.listDefs(id);
   });
 
-  server.put('/api/stories/:id/variables/defs', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!storyOr404(id, reply)) return { error: 'story not found' };
-    const body = z.object({ defs: z.array(z.unknown()) }).safeParse(req.body);
-    if (!body.success) {
-      reply.code(400);
-      return { error: 'expected { defs: [...] }' };
-    }
+  /** Validate a definition list from the scenario editor: the defs in order, or the first problem. */
+  const parseDefs = (body: unknown): { defs: VariableDef[] } | { error: string } => {
+    const parsed = z.object({ defs: z.array(z.unknown()) }).safeParse(body);
+    if (!parsed.success) return { error: 'expected { defs: [...] }' };
     const defs: VariableDef[] = [];
-    for (const [i, raw] of body.data.defs.entries()) {
-      const parsed = VariableDef.safeParse(raw);
-      if (!parsed.success) {
-        reply.code(400);
-        return { error: `variable ${i + 1}: ${parsed.error.issues.map((x) => `${x.path.join('.') || '(root)'}: ${x.message}`).join('; ')}` };
-      }
-      defs.push({ ...parsed.data, appliesTo: normalizeAppliesTo(parsed.data.appliesTo), order: i });
+    for (const [i, raw] of parsed.data.defs.entries()) {
+      const d = VariableDef.safeParse(raw);
+      if (!d.success) return { error: `variable ${i + 1}: ${d.error.issues.map((x) => `${x.path.join('.') || '(root)'}: ${x.message}`).join('; ')}` };
+      defs.push({ ...d.data, appliesTo: normalizeAppliesTo(d.data.appliesTo), order: i });
     }
     try {
       validateDefs(defs);
     } catch (err) {
-      reply.code(400);
       return { error: (err as Error).message };
     }
-    app.variables.replaceDefs(id, defs);
+    return { defs };
+  };
+
+  server.put('/api/stories/:id/variables/defs', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!storyOr404(id, reply)) return { error: 'story not found' };
+    const r = parseDefs(req.body);
+    if ('error' in r) {
+      reply.code(400);
+      return r;
+    }
+    app.variables.replaceDefs(id, r.defs);
     return app.variables.listDefs(id);
+  });
+
+  // The scenario editor's live preview (docs/11 §4.8): how a character, the player character's sheet and the
+  // narrator will read these definitions — without saving them.
+  server.post('/api/stories/:id/variables/preview', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!storyOr404(id, reply)) return { error: 'story not found' };
+    const r = parseDefs(req.body);
+    if ('error' in r) {
+      reply.code(400);
+      return r;
+    }
+    return {
+      character: characterVariableLines(r.defs, { id: 'preview', isPlayer: false, handle: 'someone' }),
+      narrator: narratorVariableLines(r.defs),
+    };
   });
 
   // ---- Sheets ----
@@ -81,6 +100,7 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     isPlayer: z.boolean().optional(),
     description: z.string().optional(),
     appearance: z.string().optional(),
+    pronouns: z.string().max(40).optional(),
     state: z.string().optional(),
     tierId: z.string().nullable().optional(),
   });
@@ -157,7 +177,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     const { id } = req.params as { id: string };
     if (!storyOr404(id, reply)) return { error: 'story not found' };
     const q = req.query as { holder?: string; limit?: string };
-    return app.variables.listChanges(id, { holder: q.holder, limit: q.limit ? Math.min(1000, Number(q.limit)) : undefined });
+    return app.variables
+      .listChanges(id, { holder: q.holder, limit: q.limit ? Math.min(1000, Number(q.limit)) : undefined })
+      .map((r) => ({ ...r, holderName: r.holder === 'world' ? 'the world' : (app.memory.getObject(r.holder)?.name ?? r.holder) }));
   });
 
   // ---- Thoughts (advanced mode) ----

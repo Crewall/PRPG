@@ -180,9 +180,9 @@ export function createSnapshotStore(db: Db) {
           db.prepare(`DELETE FROM character_sheets WHERE story_id = ?`).run(storyId);
           for (const s of p.sheets) {
             db.prepare(
-              `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, state, tier_id, seeded, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
+              `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, state, tier_id, seeded, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
           }
         }
         if (p.variableValues) {
@@ -202,9 +202,9 @@ export function createSnapshotStore(db: Db) {
           db.prepare(`DELETE FROM thoughts WHERE story_id = ?`).run(storyId); // cascades thought_tags
           for (const t of p.thoughts) {
             db.prepare(
-              `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at);
+              `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.created_clock_min ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at);
           }
           for (const tt of p.thoughtTags ?? []) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
         }

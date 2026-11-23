@@ -274,3 +274,91 @@ button.link[disabled] { opacity: .35; cursor: not-allowed; }
 /* Dialogue mode (Minds) */
 .dialogue-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel-2); font-size: 14px; }
 .dialogue-bar span { flex: 1 1 auto; }
+
+/* Threads view: one row per agent call */
+.mem-card.call .mem-head { flex-wrap: wrap; }
+.call-who { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.call-who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; margin-left: auto; }
+.mem-card.call.failed { border-color: #7a3b3b; }
+.mem-card.call.waiting { border-style: dashed; }
+.sub.err, .call-error { color: #ff8a8a; }
+.call-error { font-size: 12px; padding: 0 11px 9px; word-break: break-word; }
+.status-line.live { opacity: .85; }
+
+/* Forms in modals (player character, sheets) */
+.form-row { display: flex; flex-direction: column; gap: 4px; }
+.form-row input, .form-row textarea, .form-row select { width: 100%; box-sizing: border-box; }
+.form-row .hint { font-size: 12px; color: var(--muted); }
+.chip.pc.missing { border-style: dashed; color: var(--accent); }
+
+/* ---- Help panel (docs/10 §11.1) ---- */
+.help-btn { font-weight: 700; min-width: 30px; }
+.help-link { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 12px; font-weight: 700; line-height: 1; color: var(--accent); background: transparent; border: 1px solid var(--border); vertical-align: middle; flex: 0 0 auto; }
+.help-link:hover { border-color: var(--accent); }
+.help-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 30; display: flex; justify-content: flex-end; }
+.help-panel { width: min(440px, 100%); height: 100%; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; box-sizing: border-box; overflow-y: auto; }
+.help-head { display: flex; justify-content: space-between; align-items: center; }
+.help-search { width: 100%; box-sizing: border-box; }
+.help-group { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.help-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--panel-2); scroll-margin-top: 8px; }
+.help-entry.focus { border-color: var(--accent); }
+.help-title { font-weight: 600; margin-bottom: 4px; }
+.help-body { font-size: 14px; line-height: 1.45; }
+.help-example { display: block; margin-top: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+.first-run { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 16px; font-size: 13px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+
+/* ---- Minds: input preview, cast bar, cards ---- */
+.input-preview { display: flex; gap: 8px; align-items: center; padding: 4px 12px; font-size: 13px; border-top: 1px solid var(--border); background: var(--panel); }
+.input-preview .lanes { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.input-preview > .sub { flex: 1; }
+.input-preview .lane { overflow-wrap: anywhere; }
+.input-preview .lane.do { color: var(--muted); }
+.input-preview .lane.ooc { font-style: italic; color: var(--muted); }
+.npc-chips { flex: 1 1 auto; align-items: center; }
+.npc-chips .spacer { flex: 1; }
+.chip.forced { border-color: #e0c060; }
+.chip.adv { color: var(--muted); }
+.chip.adv.on { color: var(--accent); border-color: var(--accent); }
+.modal.wide { max-width: 640px; }
+.modal-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.modal-head h3 { margin: 0; }
+.card-sub { font-size: 12px; color: var(--muted); }
+.card-actions { gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+table.vars { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.vars td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.vars.edit input:not([type=checkbox]), table.vars.edit select { width: 100%; box-sizing: border-box; }
+table.vars.log tr.rejected td, table.vars.log tr.overridden td { opacity: .6; }
+td.vis { font-size: 11px; color: var(--muted); }
+td.vis.hidden { color: #ff8a8a; }
+.thought { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.thought .thought-text { flex: 1; }
+.thought.revoked .thought-text { text-decoration: line-through; opacity: .55; }
+.thought-actions { display: flex; gap: 4px; }
+.thought-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
+.thought-add input[type=text] { flex: 1 1 160px; }
+
+/* ---- Scenario editor ---- */
+.def-list { display: flex; flex-direction: column; gap: 6px; }
+.def-card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.def-card.open { border-color: var(--accent); }
+.def-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; padding: 8px 10px; cursor: pointer; }
+.def-head .sub { flex: 1; min-width: 0; }
+.def-tools { display: flex; gap: 2px; margin-left: auto; }
+.def-form { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 10px; }
+.form-grid { gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.form-grid > .form-row { flex: 1 1 120px; }
+.def-preview pre { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+
+/* ---- POV ---- */
+.msg.pov { margin: 6px 0; }
+.msg.pov.pending { border-left: 3px dashed var(--border); padding-left: 8px; }
+.mem-card.world .mem-head { cursor: default; }
+
+/* The top bar scrolls sideways on narrow screens instead of crushing its buttons. */
+@media (max-width: 640px) {
+  .topbar { overflow-x: auto; gap: 6px; padding: 10px 12px; }
+  .topbar > * { flex-shrink: 0; }
+}
+.modal .form-row { margin: 2px 0 0; }
+.def-form label.sub, .thought-add label.sub, .card-actions label { display: inline-flex; gap: 4px; align-items: center; margin: 0 8px 0 0; }

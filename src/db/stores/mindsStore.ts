@@ -15,6 +15,8 @@ export interface CharacterSheet {
   isPlayer: boolean;
   description: string;
   appearance: string;
+  /** Public: how others refer to them ("she/her"). */
+  pronouns: string;
   state: string;
   tierId: string | null;
   seeded: boolean;
@@ -28,6 +30,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   isPlayer: !!(r.is_player as number),
   description: r.description as string,
   appearance: r.appearance as string,
+  pronouns: (r.pronouns as string) ?? '',
   state: r.state as string,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
@@ -35,7 +38,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'state' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -56,18 +59,19 @@ export function createSheetStore(db: Db) {
         isPlayer: patch.isPlayer ?? prev?.isPlayer ?? false,
         description: patch.description ?? prev?.description ?? '',
         appearance: patch.appearance ?? prev?.appearance ?? '',
+        pronouns: patch.pronouns ?? prev?.pronouns ?? '',
         state: patch.state ?? prev?.state ?? '',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, state, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
-           appearance = excluded.appearance, state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded,
-           updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           appearance = excluded.appearance, pronouns = excluded.pronouns, state = excluded.state, tier_id = excluded.tier_id,
+           seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 
@@ -229,6 +233,7 @@ function rowToThought(r: Row, tags: string[]): Thought {
     status: r.status as Thought['status'],
     source: r.source as Thought['source'],
     createdTurnId: (r.created_turn_id as string) ?? null,
+    createdClockMin: r.created_clock_min == null ? null : Number(r.created_clock_min),
     revokedTurnId: (r.revoked_turn_id as string) ?? null,
     lastRecalledTurnId: (r.last_recalled_turn_id as string) ?? null,
     recallCount: r.recall_count as number,
@@ -262,15 +267,15 @@ export function createThoughtStore(db: Db) {
       return db.prepare(`SELECT count(*) AS n FROM thoughts WHERE story_id = ? AND owner = ? AND status = 'active'`).get<{ n: number }>(storyId, owner)!.n;
     },
 
-    insert(storyId: string, owner: string, t: { text: string; tags: string[]; pinned: boolean; source: Thought['source'] }, turnId: string | null): Thought {
+    insert(storyId: string, owner: string, t: { text: string; tags: string[]; pinned: boolean; source: Thought['source']; clockMin?: number | null }, turnId: string | null): Thought {
       const now = Date.now();
       const tid = id();
       const seq = (db.prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM thoughts WHERE story_id = ? AND owner = ?`).get<{ m: number }>(storyId, owner)!.m ?? 0) + 1;
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, now, now);
+          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
+        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, now, now);
         for (const tag of t.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tid, tag);
       });
       return store.get(tid)!;

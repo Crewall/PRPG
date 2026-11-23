@@ -18,6 +18,7 @@ export const SeedReply = z.unknown().transform((raw) => {
   return {
     description: str(r.description),
     appearance: str(r.appearance),
+    pronouns: str(r.pronouns).slice(0, 40),
     state: str(r.state),
     values: r.values && typeof r.values === 'object' && !Array.isArray(r.values) ? (r.values as Record<string, unknown>) : {},
     thoughts: thoughts

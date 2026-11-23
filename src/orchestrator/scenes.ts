@@ -22,7 +22,8 @@ export function breakScene(deps: SceneDeps, storyId: string, opts: { title?: str
   const closingSceneId = story.currentSceneId;
   if (closingSceneId) {
     deps.stories.closeScene(closingSceneId);
-    deps.jobs.enqueue('scribe_story', { storyId, payload: { mode: 'digest', sceneId: closingSceneId } });
+    // The Minds engine keeps its memory in its threads; the classic digest would be an unused call.
+    if (story.settings.engine !== 'minds') deps.jobs.enqueue('scribe_story', { storyId, payload: { mode: 'digest', sceneId: closingSceneId } });
   }
 
   const scene = deps.stories.openScene(storyId, { title: opts.title, activeNpcIds: opts.carryNpcs ?? [] });

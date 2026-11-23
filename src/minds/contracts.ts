@@ -150,7 +150,7 @@ const RoundBlockShape = {
   notes: z.object({ remember: listOf(Remember), forget: listOf(Forget) }).default({}),
   cast: z
     .object({
-      enter: listOf(z.object({ name: z.string().min(1), appearance: Str.default('') })),
+      enter: listOf(z.object({ name: z.string().min(1), appearance: Str.default(''), pronouns: Str.default('') })),
       exit: z.array(Str).default([]),
     })
     .default({}),
@@ -164,6 +164,8 @@ const RoundBlockShape = {
     })
     .default({}),
   time: z.number().min(0).max(7 * 24 * 60).optional(),
+  /** The player character, created or completed by the narrator (docs/11 §2.1): fills only empty fields. */
+  player: z.object({ name: Str.optional(), pronouns: Str.optional(), appearance: Str.optional() }).optional(),
 };
 export type RoundBlock = z.infer<z.ZodObject<typeof RoundBlockShape>>;
 

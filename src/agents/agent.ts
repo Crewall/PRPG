@@ -78,6 +78,15 @@ export abstract class Agent {
   }
 
   /**
+   * A call that failed (provider error, timeout, cancel, unusable JSON) still
+   * gets its response row, so the Threads view shows why instead of a request
+   * that seems to hang forever.
+   */
+  protected logFailure(err: unknown, durationMs: number, turnId?: string, raw = '', usage: Usage = { inputTokens: 0, outputTokens: 0 }): void {
+    this.logResponse(raw, { durationMs, usage, turnId, extra: { error: (err as Error)?.message ?? String(err) } });
+  }
+
+  /**
    * Free-text call with streaming (storyteller, NPC dialogue). An empty reply
    * is treated as a failed attempt and retried (an empty reply never emitted a
    * delta, so a retry cannot duplicate streamed text); after the retries are
@@ -87,7 +96,13 @@ export abstract class Agent {
     for (let attempt = 0; ; attempt++) {
       this.logRequest(ctx, opts.turnId);
       const t0 = Date.now();
-      const res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id }, onDelta);
+      let res;
+      try {
+        res = await this.bound.chat({ system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id }, onDelta);
+      } catch (err) {
+        this.logFailure(err, Date.now() - t0, opts.turnId);
+        throw err;
+      }
       const empty = res.text.trim().length === 0;
       this.logResponse(res.text, {
         durationMs: Date.now() - t0,
@@ -123,12 +138,18 @@ export abstract class Agent {
     const jsonCtx: JsonCallContext = { system: ctx.system, messages: ctx.messages, signal: opts.signal, sessionKey: this.session.id };
     let lastRaw = '';
     let usage: Usage = { inputTokens: 0, outputTokens: 0 };
-    const result = await callJson(this.bound, jsonCtx, schema, {
-      onRaw: (raw) => (lastRaw = raw),
-      onUsage: (u) => (usage = addUsage(usage, u)),
-      maxTokens: opts.maxTokens,
-      jsonSchema: opts.jsonSchema,
-    });
+    let result: z.infer<S>;
+    try {
+      result = await callJson(this.bound, jsonCtx, schema, {
+        onRaw: (raw) => (lastRaw = raw),
+        onUsage: (u) => (usage = addUsage(usage, u)),
+        maxTokens: opts.maxTokens,
+        jsonSchema: opts.jsonSchema,
+      });
+    } catch (err) {
+      this.logFailure(err, Date.now() - t0, opts.turnId, lastRaw, usage);
+      throw err;
+    }
     // Usage summed over every attempt (repairs/escalations are real calls);
     // estimate output from text only when the provider reported nothing.
     if (!usage.outputTokens) usage = { ...usage, outputTokens: estimateTokens(lastRaw) };

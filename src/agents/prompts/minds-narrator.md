@@ -37,14 +37,20 @@ the story with new information.
   "tags": ["topics", "places", "#handles that matter in this moment"],
   "evoke": { "#handle": ["topics this character should recall"] },
   "notes": { "remember": [{ "text": "a private note to yourself", "tags": ["topic"] }], "forget": ["t3"] },
-  "cast": { "enter": [{ "name": "New Character", "appearance": "one line anyone would see" }], "exit": ["#handle"] },
-  "objects": [{ "name": "new item or place", "type": "item", "line": "one line" }],
+  "cast": { "enter": [{ "name": "New Character", "pronouns": "she/her", "appearance": "one line anyone would see" }], "exit": ["#handle"] },
+  "objects": [{ "name": "new or existing item or place", "type": "item", "line": "one public line, including whose it is" }],
   "scene": { "break": false, "title": null, "location": "#handle", "items": ["#handles of things in view"] },
-  "time": 10
+  "time": 10,
+  "player": { "name": "…", "pronouns": "…", "appearance": "…" }
 }
 ```
 - Give a brief to every present character who perceived anything. Don't quote what was said aloud; the app
   delivers spoken words verbatim.
+- **Name people by #handle in briefs**, the player's character too ("#kael climbs the stairs to #room-2"), never
+  by a bare he/she or a description that could fit someone else. Each character only knows what you tell it.
+- "objects" creates places and things, or updates the public line of existing ones. Say whose they are when it
+  matters ("Kael's rented room"): characters see these lines.
+- "player" only when your round message asks for it (the player character is missing or incomplete).
 - In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. Change a variable only when its rules
   allow you to, and follow its guidance.
 - "time" is the number of in-story minutes this round took.

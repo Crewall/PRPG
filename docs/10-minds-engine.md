@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M6 are built: a Minds story is playable (engine selector in Story options), with dialogue mode and thread compaction. M7–M8 are not.** Companion docs:
+**Status: M1–M7 are built: a Minds story is playable (engine selector in Story options), with dialogue mode, thread compaction, the public profile and the full UI (character cards, advanced mode, sheet and scenario editors, POV, help panel). M8 (cleanup) is not.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -453,35 +453,44 @@ Each POV has two buttons:
 - **Next prompt:** a preview built by the **same builder function** the round will use, so preview and reality
   cannot diverge. A test pins this.
 
-## 11. API and UI sketch
+## 11. API and UI (as built in M7)
 
 ```
-GET   /api/stories/:id/minds                      → sheets of all characters + player (filtered by mode)
-PATCH /api/stories/:id/minds/:oid                 { description?, appearance?, state?, tierId? }   (advanced)
-GET   /api/stories/:id/variables                  → definitions + values (filtered by mode)
-PUT   /api/stories/:id/variables/defs             [definitions]  (scenario editor)
-PATCH /api/stories/:id/variables/values           [{ holder, key, value }]   (advanced; logged by:user)
-GET   /api/stories/:id/thoughts?owner=…           → thoughts incl. revoked (advanced)
+GET   /api/stories/:id/minds[?advanced=1]         → sheets of all characters + the world's values (filtered by mode)
+POST  /api/stories/:id/minds                      { name, isPlayer?, pronouns?, appearance?, description?, state? }
+PATCH /api/stories/:id/minds/:oid                 { name?, pronouns?, description?, appearance?, state?, tierId? }
+GET   /api/stories/:id/variables/defs             → definitions
+PUT   /api/stories/:id/variables/defs             { defs: [...] }   (scenario editor; validated, ordered)
+POST  /api/stories/:id/variables/preview          { defs: [...] } → how a character and the narrator read them (not saved)
+PATCH /api/stories/:id/variables/values           { changes: [{ holder, key, op?, value }] }   (advanced; logged by:user)
+GET   /api/stories/:id/variables/changes          → the change log, with holder names
+GET   /api/stories/:id/thoughts?owner=…&includeRevoked=1 → thoughts + tag vocabulary
 POST  /api/stories/:id/thoughts                   { owner, text, tags, pin }   (advanced)
-PATCH /api/thoughts/:tid                          { revoked?, pin? }   (advanced)
-GET   /api/stories/:id/pov/:oid?turn=…            → rendered POV transcript for one character / narrator
+PATCH /api/thoughts/:tid                          { revoked?, pinned? }   (advanced)
+GET   /api/stories/:id/pov/:oid                   → one mind's thread: recap, log, what waits for its next round
 GET   /api/stories/:id/pov/:oid/prompt?which=last|next → exact prompt (advanced)
-POST  /api/stories/:id/dialogue                   { partner } → enter dialogue mode
-POST  /api/stories/:id/dialogue/say               { text } → one exchange (reply also sent as a `dialogue.reply` WS event)
-POST  /api/stories/:id/dialogue/end               → wrap-up
+GET   /api/stories/:id/calls                      → the Threads view: one row per agent call
 ```
 
-WebSocket gains `round.stage` (characters / narrator), `dialogue.reply`, `minds.updated`,
-`variables.updated`, `thoughts.updated`.
+Dialogue mode needs no endpoints of its own: `turn.submit` carries `dialogue: { partner }` for an exchange and
+`force: [ids]` for "act next round" (settled in M5). The WebSocket's existing `turn.status`, `turn.final` and
+`minds.updated` cover the UI's needs.
 
-UI pieces:
+UI pieces (`client/dist/minds.js`, `help.js`, wired in `app.js`):
 
-- **Scenario** tab in Story options: variable definitions editor with templates (doc 11 §4.8).
-- **Sheet** panel for the player character (always) and others (advanced).
-- **Cast bar** chips: tap → sheet; long-press → Talk (dialogue), Force act.
-- **Input preview** line for say / do / OOC.
-- **Advanced** toggle and the **POV** selector.
-- **Help** (**?**) button in the header (§11.1).
+- **Present bar:** tap a character → their **card** (what you perceive; everything in advanced mode) with
+  **Talk**, **Act next round** (⚡ on the chip until the next round) and **Edit**; 🎭 is your own sheet, or the
+  player-character form while there is none. 🔍 toggles **advanced mode** (per story, remembered in the browser).
+- **Input preview** under the chat (Minds): how the message will be read (🗣 said · 🤚 tried · 📝 note), or the
+  syntax when the box is empty.
+- **Drawer tabs (Minds):** **Cast** (every sheet; in advanced mode also absent characters, the narrator's notes
+  and the change log), **POV** (advanced: a mind's thread, its next and last prompt), Memory, and with Debug on
+  Summaries and **Threads**.
+- **Sheet editor** (advanced, and your own sheet always): name, pronouns, appearance, description, state, tier
+  override, every value by type, thoughts (pin, forget, add).
+- **Scenario editor** (Story options → Minds engine, or the Cast tab): templates, add / edit / reorder / delete,
+  each field by type, and a live preview of what the AIs will read.
+- **Help** (**?**) in every top bar (§11.1).
 
 ### 11.1 Help panel
 
@@ -538,7 +547,7 @@ Each milestone is committed on its own and keeps the existing engines working.
 | M4 ✅ | **Normal round** (built): parse input, gate, character calls, narrator + block, validation, distributor fallback, commit, distribution. | Replay-driver pipeline tests: briefs land in the right threads only; a hidden variable never appears in its holder's prompt; a failed character call degrades gracefully; a broken block falls back. |
 | M5 ✅ | **Dialogue mode** (manual) + wrap-up (built). | Tests: exchanges call only the partner; `act` ends the dialogue into a round; bystanders get briefs at wrap-up. |
 | M6 ✅ | **Compaction** for character and narrator threads (built). | Tests: threshold triggers; recap replaces folded messages; rewind undoes it. |
-| M7 | **UI**: scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
+| M7 ✅ | **UI** (built): scenario editor, sheets, input preview, dialogue view, advanced mode, POV selector, prompt viewer, **help panel** with an entry for every feature above. | Manual smoke on desktop and phone width; http tests for every new endpoint; every feature has a help entry. |
 | M8 | **Docs and cleanup**: update docs/README, ARCHITECTURE, README status; remove the old engines from the active line (the backup keeps them). **Keep the dice/adjudication code.** | — |
 
 ## 14. TODO (explicitly later)

@@ -51,9 +51,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   follows its tier), role mapping and each role's prompt. All persisted in the DB; `config.json` is just the
   initial seed.
 - **Minds engine** (docs 10–12): M1 (providers + tiers), M2 (character sheets, scenario variables, thoughts),
-  M3 (thread builders), M4 (the round), M5 (dialogue mode: tap a character in the Present bar to talk with them
-  directly) and M6 (thread compaction) ✅ built — **playable**: Story options → Engine → Minds. The
-  sheets/scenario UI, advanced mode and the help panel come next (doc 10 §13, M7).
+  M3 (thread builders), M4 (the round), M5 (dialogue mode), M6 (thread compaction) and M7 (the UI: character
+  cards with Talk and Act next round, your own character, advanced mode with sheet editing and a POV view, the
+  scenario variable editor, the **?** help panel) ✅ built — **playable**: Story options → Engine → Minds.
 
 ## Running it
 
