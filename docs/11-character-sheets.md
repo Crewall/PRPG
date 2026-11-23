@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4 and M6 of doc 10)**, seeding and recaps after compaction included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -225,7 +225,7 @@ mode shows it as a per-holder timeline. Rewind deletes the rows written after th
 
 ### 4.8 Scenario editor and templates
 
-**Story options → Scenario:** a list of definitions with add / edit / reorder / delete. Deleting a definition
+**Story options → Minds engine → Scenario variables** (also on the Cast tab): a list of definitions with add / edit / reorder / delete. Deleting a definition
 that has values asks first. The editor shows a live preview of how a character and the narrator will see it
 (§4.5). Templates are only starting points that fill the list, and the user edits from there. Examples, not final:
 

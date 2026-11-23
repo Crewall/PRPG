@@ -35,13 +35,15 @@ is right.
     `src/minds/dialogue.ts`);
   - **M6: thread compaction** (a `minds_compact` job folds a thread's oldest half into a recap;
     `src/minds/compaction.ts`);
-  - 208 passing tests.
-- **Designed, not built** (Minds engine, docs 10–12):
-  - the UI for scenario variables and sheets, advanced mode with the POV filter, the help panel (M7);
-  - automatic dialogue mode, referee + dice for special cases, and the rest of doc 10 §14.
+  - the **public profile** (pronouns, visible values, place lines) and a guaranteed player character (doc 11 §2);
+  - **M7: the UI** (character cards, advanced mode, sheet and scenario editors, POV and prompt viewer, the help
+    panel; `client/dist/minds.js`, `help.js`, `help.json`);
+  - 219 passing tests.
+- **Designed, not built** (Minds engine, docs 10–12): automatic dialogue mode, referee + dice for special cases,
+  "known as" names, relation variables and the rest of doc 10 §14.
 
-  Build order: doc 10 §13. M1–M6 are done. Next: M7 (the UI: scenario editor, sheets, advanced mode, POV
-  selector, prompt viewer, help panel), then M8 (docs and cleanup).
+  Build order: doc 10 §13. M1–M7 are done. Next: M8 (docs and cleanup: the old engines leave the active line;
+  the dice code stays).
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on
   current Claude models (see ARCHITECTURE §9) and gets fixed later.
 
@@ -86,5 +88,6 @@ Node ≥ 22 is required (`node:sqlite`; `.ts` files run directly with type strip
 - **Cache-friendly threads (Minds):** stored messages are byte-exact and append-only; nothing volatile goes
   before the log. See doc 10 §8.
 - **Minimal dependencies.** No native modules (Termux). Imports use explicit `.ts` extensions (ESM, NodeNext).
-- **User-facing features get a help entry** in the in-app help panel (doc 10 §11.1) once it exists.
+- **User-facing features get a help entry** in `client/dist/help.json` (the in-app help panel, doc 10 §11.1),
+  and a `helpLink(id)` next to the feature where it helps.
 - Never put API keys in code, tests, logs or commits; keys live in `config.json` (gitignored) or the settings DB.

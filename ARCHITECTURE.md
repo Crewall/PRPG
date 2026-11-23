@@ -61,7 +61,7 @@ src/
     settingsService.ts  runtime settings in the DB: connections, models, tiers, role → tier map, prompts, style,
                         performance; migration from the old per-role shape
   db/
-    db.ts, migrations/001–009.sql, stores/*.ts (one store per table group)
+    db.ts, migrations/001–010.sql, stores/*.ts (one store per table group)
     stores/mindsStore.ts   Minds: character sheets, variables (defs, values, change log), thoughts
     stores/threadStore.ts  Minds: append-only threads on agent_messages (log, pending, recap, compaction flags)
   minds/                Minds engine (docs/10–11)
@@ -81,7 +81,9 @@ src/
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
   util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases
   data/story-seeds.txt  premise randomizer seed phrases
-client/dist/            index.html, style.css, app.js (whole UI in one file)
+client/dist/            index.html, style.css and ES modules (no build): app.js (home, play view, settings),
+                        ui.js (shared DOM/API helpers), minds.js (Minds cards, sheet and scenario editors, Cast and
+                        POV tabs), help.js + help.json (the help panel's entries)
 test/                   Vitest; fake/replay LLM drivers in test/fixtures/drivers.ts — no API key needed
 scripts/                smoke.ts (live provider check), migrate.ts, termux-install.sh
 ```
@@ -233,12 +235,14 @@ Jobs retry 3 times, survive restarts (stuck `running` jobs are requeued on boot)
 - **Stories:** CRUD, randomize premise, turns (list, edit, delete), rewind, new scene, summaries, failed jobs.
 - **Memory:** objects and facts CRUD, merge, knowledge links, maintenance, rescan, suggestions, "look at".
 - **Characters:** promote, demote, enter by name, rebuild mind, NPC profiles, NPC knowledge, player interview.
-- **Minds** (`src/api/mindsRoutes.ts`): scenario variable definitions and templates, character sheets (normal or
-  `?advanced=1` view), values, change log, thoughts, and POV: a mind's thread and its exact next/last prompt.
+- **Minds** (`src/api/mindsRoutes.ts`): scenario variable definitions, templates and a preview of how the AIs read
+  them, character sheets (normal or `?advanced=1` view, pronouns included), values, change log, thoughts, and
+  POV: a mind's thread and its exact next/last prompt.
 - **Settings:** config (masked keys) for connections / models / tiers / roles, per-connection test, model listing
   (with caps from OpenRouter metadata), OpenRouter credits and free-model limits, requests today, prompts, seeds,
   style.
-- **Debug:** thread log per story/turn, agent sessions.
+- **Debug:** thread log per story/turn, the Threads view (`/calls`: one row per agent call, request and response
+  paired, whose mind, turn and game time, cache, errors; `src/api/callsView.ts`), agent sessions.
 
 WebSocket in: `turn.submit` (Minds options: `force`, character ids that must act; `dialogue: { partner }`, one
 dialogue exchange), `turn.cancel`.
@@ -249,7 +253,7 @@ WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updat
 
 ```bash
 npm install
-npm test            # Vitest, 208 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 219 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -264,8 +268,8 @@ in that style.
 - The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both
   (fix planned as M1b, low priority).
 - Classic and NPC Story Mode rebuild prompts every turn, so provider caches rarely hit (Minds threads fix this).
-- Minds: the sheets / scenario / advanced-mode UI and the help panel (M7) are not built; scenario variables and
-  sheets are edited through the API for now. Dialogue is manual only (automatic mode is a TODO).
+- Minds: dialogue is manual only (automatic mode is a TODO); "known as" names per observer and relation variables
+  are not built (doc 10 §14). The old engines are still on the active line until M8.
 - NPC Story Mode: the storyteller sees present characters only by name (their one-liner reads memory facts,
   which that mode never writes).
 - Classic and NPC Story Mode never set a scene's location (the Minds narrator does).
