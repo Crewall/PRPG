@@ -12,8 +12,11 @@ import { renderObjectView } from '../memory/model.ts';
 import type { ContextPlan } from '../agents/contextPlanner.ts';
 import type { Story } from '../domain.ts';
 
-// Placeholder marker used when the player submits an empty turn (auto-open).
+// Placeholder markers for an empty player turn: the story's first turn opens it
+// (auto-open); any later empty turn means "go on" — never "begin again", which
+// made the storyteller rewrite the opening mid-story.
 export const BEGIN_MARKER = '(Begin the story from the premise. BRIEFLY set the opening scene — a few short paragraphs at most — and end by inviting the player to act.)';
+export const CONTINUE_MARKER = '(The player waits and lets the moment continue. Move the story forward from where it stands: what happens next.)';
 
 // Storyteller reply-length instruction per verbosity step (settings.verbosity).
 // Exported as the built-in default; a per-installation override can be set in
@@ -345,11 +348,12 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       const messages: ChatMessage[] = [];
       const completed = stories.recentTurns(story.id, b.recentTurns + 2).filter((t) => t.status === 'complete');
       const recent = summaryDriven ? completed.slice(-1) : completed.slice(-b.recentTurns);
+      const openingIndex = stories.firstCompleteTurnIndex(story.id);
       for (const t of recent) {
-        messages.push({ role: 'user', content: t.playerInput || BEGIN_MARKER });
+        messages.push({ role: 'user', content: t.playerInput || (t.index === openingIndex ? BEGIN_MARKER : CONTINUE_MARKER) });
         if (t.narration) messages.push({ role: 'assistant', content: t.narration });
       }
-      messages.push({ role: 'user', content: playerInput.trim() || BEGIN_MARKER });
+      messages.push({ role: 'user', content: playerInput.trim() || (openingIndex === undefined ? BEGIN_MARKER : CONTINUE_MARKER) });
 
       // Headroom assertion — with compression this should always hold; if it
       // fails, budgets are misconfigured for the model's window.

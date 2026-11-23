@@ -99,6 +99,11 @@ export function createSnapshotStore(db: Db) {
       });
     },
 
+    /** Forget a turn's snapshot (its turn was deleted another way). */
+    drop(turnId: string): void {
+      db.prepare(`DELETE FROM turn_snapshots WHERE turn_id = ?`).run(turnId);
+    },
+
     has(turnId: string): boolean {
       return !!db.prepare(`SELECT turn_id FROM turn_snapshots WHERE turn_id = ?`).get(turnId);
     },

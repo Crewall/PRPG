@@ -192,6 +192,12 @@ export function createStoryStore(db: Db) {
         .map(rowToTurn);
     },
 
+    /** The index of the story's first completed turn (its opening), if any. */
+    firstCompleteTurnIndex(storyId: string): number | undefined {
+      const r = db.prepare(`SELECT MIN(idx) AS m FROM turns WHERE story_id = ? AND status = 'complete'`).get<{ m: number | null }>(storyId);
+      return r?.m ?? undefined;
+    },
+
     lastTurn(storyId: string): Turn | undefined {
       const r = db.prepare(`SELECT * FROM turns WHERE story_id = ? ORDER BY idx DESC LIMIT 1`).get<Row>(storyId);
       return r ? rowToTurn(r) : undefined;

@@ -9,6 +9,7 @@ import type { KnowledgeScope } from '../memory/model.ts';
 import { promoteNpc, demoteNpc, enterOrCreateNpc, rebuildNpcMind } from '../orchestrator/npc.ts';
 import { mergeMemoryObjects, enqueueMemoryRescan } from '../orchestrator/memoryHandlers.ts';
 import { runPlayerInterview } from '../orchestrator/playerIntake.ts';
+import { StaleTurnError } from '../orchestrator/turnPipeline.ts';
 import { EDITABLE_PROMPTS, ModelEntry, TierCfg } from '../config/settingsService.ts';
 import { PRESETS, ProviderKind, ProviderPreset, capsFromListing } from '../config/config.ts';
 import { utcDay } from '../db/stores/usageStore.ts';
@@ -184,14 +185,26 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
   // and restore the pre-message state; returns the prompt for editing.
   server.post('/api/stories/:id/rewind', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const body = z.object({ turnId: z.string().optional() }).safeParse(req.body ?? {});
     try {
-      const result = await pipeline.rewind(id);
+      const result = await pipeline.rewind(id, { expectTurnId: body.success ? body.data.turnId : undefined });
       return { ok: true, ...result };
     } catch (err) {
-      reply.code(400);
-      return { error: (err as Error).message };
+      reply.code(err instanceof StaleTurnError ? 409 : 400);
+      return { error: (err as Error).message, ...(err instanceof StaleTurnError ? { stale: true } : {}) };
     }
   });
+
+  /**
+   * Drop a turn from the transcript. Classic engines also drop its transcript messages. A Minds story keeps its
+   * threads: they are the characters' memory, and cutting rounds out of their middle would rewrite what everyone
+   * remembers (undoing a turn completely is Edit/Retry on the last turn, which restores its snapshot).
+   */
+  const dropTurn = (storyId: string, turnId: string) => {
+    stories.deleteTurn(turnId);
+    app.snapshots.drop(turnId);
+    if (stories.getStory(storyId)?.settings.engine !== 'minds') app.agents.deleteMessagesForTurn(turnId);
+  };
 
   // Edit any past message: rewrite a turn's player input and/or narration text
   // (the transcript ✎ control). Memory is left as-is; if both sides end up
@@ -206,8 +219,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     }
     const updated = stories.setTurnText(turnId, body)!;
     if (!updated.playerInput.trim() && !updated.narration.trim()) {
-      stories.deleteTurn(turnId);
-      app.agents.deleteMessagesForTurn(turnId);
+      dropTurn(id, turnId);
       return { ok: true, deleted: true };
     }
     return { ok: true, turn: updated };
@@ -222,8 +234,7 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       reply.code(404);
       return { error: 'turn not found' };
     }
-    stories.deleteTurn(turnId);
-    app.agents.deleteMessagesForTurn(turnId);
+    dropTurn(id, turnId);
     return { ok: true, deleted: true };
   });
 

@@ -771,7 +771,7 @@ async function renderPlay(storyId) {
   // narration). Memory is left untouched server-side; later story flow may shift
   // (accepted). A bubble whose sibling is also emptied drops the whole turn.
   function messageBubble(cls, text, turnId, field) {
-    const b = h('div', { class: `bubble ${cls}` });
+    const b = h('div', { class: `bubble ${cls}`, 'data-turn': turnId });
     const textEl = h('span', { class: 'msg-text' }, text);
     const copyBtn = h('button', { class: 'link', title: 'copy this message' }, '⧉');
     copyBtn.addEventListener('click', async () => {
@@ -809,9 +809,67 @@ async function renderPlay(storyId) {
     });
   }
   async function deleteMessage(bubble, turnId, field) {
-    if (!confirm('Delete this message? Memory is unaffected; later story flow may shift.')) return;
+    const msg = story.settings?.engine === 'minds'
+      ? 'Remove this message from the transcript?\n\nThe characters still remember it. To undo the last turn completely, use Edit or ↻ Retry.'
+      : 'Delete this message? Memory is unaffected; later story flow may shift.';
+    if (!confirm(msg)) return;
     try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); }
     catch (e) { alert('delete failed: ' + e.message); }
+  }
+
+  // The story's last turn as this page knows it: Edit and Retry name it, so the
+  // server can refuse when the story has moved on (never undo an earlier turn by mistake).
+  let lastTurn = null; // { id, status, playerInput }
+
+  /** A failed or stopped attempt: say so, and offer to try again or drop it. */
+  function failedNotice(turnId, text) {
+    const retryB = h('button', { class: 'small primary', onclick: () => retryLast(turnId) }, '↻ Retry');
+    const discardB = h('button', { class: 'small ghost', title: 'Drop this attempt; your message goes back in the box', onclick: () => discardAttempt(turnId) }, 'Discard');
+    const b = h('div', { class: 'bubble error', 'data-turn': turnId }, h('div', {}, text), h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, retryB, discardB));
+    transcript.append(b);
+    scrollDown();
+    return b;
+  }
+
+  /** ↻ on the latest reply: write it again (the current one is replaced; branching is a later feature). */
+  function markLastReply() {
+    transcript.querySelectorAll('.retry-tool').forEach((el) => el.remove());
+    if (!lastTurn || lastTurn.status !== 'complete') return;
+    const bubble = [...transcript.querySelectorAll(`.bubble.narration[data-turn="${lastTurn.id}"]`)].at(-1);
+    const tools = bubble?.querySelector('.msg-tools');
+    if (!tools) return;
+    tools.append(h('button', { class: 'link retry-tool', title: 'Write this reply again (the current one is replaced)', onclick: () => {
+      if (confirm('Write this reply again?\n\nThe current reply is replaced by a new one (it is not kept).')) retryLast(lastTurn.id);
+    } }, '↻'));
+  }
+
+  /** Retry the last turn: the server undoes it and runs it again with the same message. */
+  function retryLast(turnId) {
+    if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
+    if (!wsOpen()) { addStatus('(not connected — tap the status dot for details)'); return; }
+    const text = lastTurn?.id === turnId ? lastTurn.playerInput : '';
+    transcript.querySelectorAll(`[data-turn="${turnId}"]`).forEach((el) => el.remove());
+    clearStage();
+    if (text && input.value.trim() === text.trim()) { input.value = ''; input.style.height = 'auto'; updateInputPreview(); }
+    currentTurnId = null;
+    pendingPlayerBubble = text ? addBubble('player', text) : null;
+    pendingPlayerText = text;
+    lastInput = text;
+    setBusy(true);
+    resetAgentStatus();
+    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId }));
+  }
+
+  /** Drop a failed attempt (its message goes back in the box). */
+  async function discardAttempt(turnId) {
+    try {
+      const r = await api.post(`/api/stories/${storyId}/rewind`, { turnId });
+      await redrawTranscript();
+      if (r.playerInput && !input.value.trim()) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
+    } catch (e) {
+      addStatus(`(${e.message})`);
+      await redrawTranscript();
+    }
   }
 
   // Load (or reload, after a rewind) the transcript from the server.
@@ -823,9 +881,18 @@ async function renderPlay(storyId) {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
       turnCount = turns.length;
       for (const t of turns) {
-        if (t.playerInput) { transcript.append(messageBubble('player', t.playerInput, t.id, 'playerInput')); }
-        if (t.narration) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
+        const failed = t.status !== 'complete';
+        if (t.playerInput) {
+          const b = messageBubble('player', t.playerInput, t.id, 'playerInput');
+          if (failed) b.classList.add('failed');
+          transcript.append(b);
+        }
+        if (t.narration && !failed) { transcript.append(messageBubble('narration', t.narration, t.id, 'narration')); }
       }
+      const tail = turns.at(-1);
+      lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
+      if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
+      markLastReply();
       const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
         let name = 'them';
@@ -860,10 +927,13 @@ async function renderPlay(storyId) {
   let rewinding = false;
   rewindBtn.addEventListener('click', async () => {
     if (rewinding) return;
-    if (!confirm('Delete the last story message? This removes the storyteller’s latest response and restores memory & summaries to before it.')) return;
+    const failedLast = lastTurn && lastTurn.status !== 'complete';
+    if (!confirm(failedLast
+      ? 'Discard the failed attempt? Your message goes back in the box.'
+      : 'Delete the last exchange? This removes the latest response (and your message before it, which goes back in the box) and restores everything to before it.')) return;
     rewinding = true; rewindBtn.disabled = true;
     try {
-      const r = await api.post(`/api/stories/${storyId}/rewind`);
+      const r = await api.post(`/api/stories/${storyId}/rewind`, lastTurn ? { turnId: lastTurn.id } : {});
       current = null; setBusy(false);
       await redrawTranscript();
       if (r.playerInput) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
@@ -1300,9 +1370,15 @@ async function renderPlay(storyId) {
   function onWsMessage(ev) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
-      case 'turn.accepted': currentTurnId = m.turnId; current = addBubble('narration cursor', ''); showReplyStart(current); break;
+      case 'turn.accepted':
+        currentTurnId = m.turnId;
+        // The server dropped any failed attempt before this turn; drop it here too.
+        if (lastTurn && lastTurn.status !== 'complete' && lastTurn.id !== m.turnId) transcript.querySelectorAll(`[data-turn="${lastTurn.id}"]`).forEach((el) => el.remove());
+        if (pendingPlayerBubble) pendingPlayerBubble.dataset.turn = m.turnId;
+        lastTurn = { id: m.turnId, status: 'streaming', playerInput: pendingPlayerText || '' };
+        current = addBubble('narration cursor', ''); current.dataset.turn = m.turnId; showReplyStart(current); break;
       case 'turn.status': showStage(m.text); break;
-      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
+      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); if (currentTurnId) current.dataset.turn = currentTurnId; showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
       case 'turn.final':
         clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
@@ -1313,20 +1389,34 @@ async function renderPlay(storyId) {
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
         current = null; setBusy(false); scrollDown();
+        lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
+        markLastReply();
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
           setDialogue(null);
           setTimeout(() => submitText('', false), 300);
         } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
         break;
-      case 'turn.rejected': clearStage(); if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
-      case 'turn.error':
+      case 'turn.rejected':
+      case 'turn.error': {
         clearStage();
         if (current) current.remove();
-        addBubble('error', `The turn failed — ${m.message}`);
+        const tid = m.turnId || currentTurnId;
+        // The attempt didn't happen: its message is marked as not delivered, with Retry / Discard.
+        if (pendingPlayerBubble) { pendingPlayerBubble.classList.add('failed'); if (tid) pendingPlayerBubble.dataset.turn = tid; }
+        if (tid) {
+          lastTurn = { id: tid, status: m.t === 'turn.rejected' ? 'rejected' : 'error', playerInput: pendingPlayerText || lastInput || '' };
+          failedNotice(tid, m.t === 'turn.rejected' ? 'Stopped.' : `The turn failed — ${m.message}`);
+        } else {
+          // Nothing ran (e.g. the story changed under a Retry): show the server's truth again.
+          redrawTranscript().then(() => addStatus(`(${m.message})`));
+        }
         // Don't lose the message: put it back in the box for another try.
-        if (!input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
-        current = null; pendingPlayerBubble = null; setBusy(false); break;
+        if (m.t === 'turn.error' && !input.value.trim() && lastInput) { input.value = lastInput; input.dispatchEvent(new Event('input')); }
+        current = null; pendingPlayerBubble = null; setBusy(false);
+        markLastReply();
+        break;
+      }
       case 'summary.updated': if (activeTab === 'summaries') renderDrawer(); break;
       case 'memory.updated': if (activeTab === 'memory') renderDrawer(); refreshDossierIfOpen(m.objectIds); break;
       case 'npc.profile.updated': if (m.storyId === storyId) { if (activeTab === 'minds') renderDrawer(); refreshDossierIfOpen(m.objectIds); } break;
@@ -1369,8 +1459,9 @@ async function renderPlay(storyId) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return false; }
     if (!wsOpen()) { addStatus('(not connected — your message is kept; tap the status dot for details)'); return false; }
     currentTurnId = null;
-    if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); pendingPlayerText = text; scrollDown(true); }
+    if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); scrollDown(true); }
     else pendingPlayerBubble = null;
+    pendingPlayerText = text;
     lastInput = text;
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity

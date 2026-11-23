@@ -362,3 +362,8 @@ td.vis.hidden { color: #ff8a8a; }
 }
 .modal .form-row { margin: 2px 0 0; }
 .def-form label.sub, .thought-add label.sub, .card-actions label { display: inline-flex; gap: 4px; align-items: center; margin: 0 8px 0 0; }
+
+/* A message whose turn failed: shown, but marked as never delivered. */
+.bubble.player.failed { opacity: .6; border-style: dashed; }
+.bubble.player.failed::after { content: 'not delivered'; display: block; font-size: 11px; color: #ff8a8a; margin-top: 4px; }
+.retry-tool { font-size: 15px; }
