@@ -72,6 +72,8 @@ const VarEntry = z
   .object({
     key: z.string().min(1),
     who: z.string().optional(),
+    /** Relation variables (docs/11 §4.9): toward whom. */
+    to: z.string().optional(),
     set: z.unknown().optional(),
     delta: z.unknown().optional(),
     add: z.unknown().optional(),
@@ -128,6 +130,7 @@ export const CharacterReplyWire = z.object({
     .array(
       z.object({
         key: z.string(),
+        to: z.string().optional(),
         set: z.union([z.string(), z.number(), z.boolean()]).optional(),
         delta: z.number().optional(),
         add: z.string().optional(),

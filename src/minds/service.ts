@@ -1,8 +1,8 @@
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import { handleBaseFor, knowsName, namesOn } from './names.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
-import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore, TieStore } from '../db/stores/mindsStore.ts';
-import { STATE_KEY, appliesTo, canSee, defaultValue, renderValue, runPipeline, splitFinalId } from './variables.ts';
+import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore, TieStore, MetStore } from '../db/stores/mindsStore.ts';
+import { REL, STATE_KEY, appliesTo, canSee, defaultValue, relationHolder, renderValue, runPipeline, splitFinalId } from './variables.ts';
 import type { ChangeOutcome, HolderInfo, Proposal, VariableDef, VariableValue, Viewer } from './variables.ts';
 import {
   MAX_AGENDA,
@@ -34,15 +34,49 @@ export interface MindsDeps {
   names?: NameStore;
   /** How characters relate (docs/11 §2.6). */
   ties?: TieStore;
+  /** Who has met whom: pairs for relation variables (docs/11 §4.9). */
+  met?: MetStore;
 }
 
-/** Every variable holder in the story: each character with a sheet, plus 'world'. */
+/**
+ * Every variable holder in the story: each character with a sheet, 'world', and for relation variables each
+ * ordered pair of characters who have met or are tied ("<from>><to>", docs/11 §4.9).
+ */
 export function holdersFor(deps: MindsDeps, storyId: string): Map<string, HolderInfo> {
   const out = new Map<string, HolderInfo>([['world', { id: 'world', isPlayer: false }]]);
   for (const s of deps.sheets.listForStory(storyId)) {
     out.set(s.objectId, { id: s.objectId, isPlayer: s.isPlayer, handle: deps.memory.ensureHandle(s.objectId) });
   }
+  for (const [a, b] of metPairs(deps, storyId)) {
+    const x = out.get(a);
+    const y = out.get(b);
+    if (!x || !y) continue;
+    const side = (h: HolderInfo) => ({ id: h.id, isPlayer: h.isPlayer, ...(h.handle ? { handle: h.handle } : {}) });
+    out.set(`${a}${REL}${b}`, { id: `${a}${REL}${b}`, isPlayer: false, relation: { from: side(x), to: side(y) } });
+    out.set(`${b}${REL}${a}`, { id: `${b}${REL}${a}`, isPlayer: false, relation: { from: side(y), to: side(x) } });
+  }
   return out;
+}
+
+/** Pairs of characters who have met (present in the same round) or are tied, each once (docs/11 §4.9). */
+export function metPairs(deps: MindsDeps, storyId: string): [string, string][] {
+  const seen = new Set<string>();
+  const out: [string, string][] = [];
+  const add = (x: string, y: string) => {
+    if (x === y) return;
+    const [a, b] = x < y ? [x, y] : [y, x];
+    if (seen.has(`${a}${REL}${b}`)) return;
+    seen.add(`${a}${REL}${b}`);
+    out.push([a, b]);
+  };
+  for (const [a, b] of deps.met?.pairs(storyId) ?? []) add(a, b);
+  for (const t of deps.ties?.listForStory(storyId) ?? []) add(t.holder, t.other);
+  return out;
+}
+
+/** Whom `oid` has met (or is tied to). */
+export function metWith(deps: MindsDeps, storyId: string, oid: string): string[] {
+  return metPairs(deps, storyId).flatMap(([a, b]) => (a === oid ? [b] : b === oid ? [a] : []));
 }
 
 /** A holder's current value of a variable (stored, else the default). */
@@ -304,9 +338,18 @@ export interface CharacterView {
   state?: string;
   /** How they are related to others, from their side (docs/11 §2.6): own sheet only, or advanced. */
   ties?: TieView[];
+  /** Relation variables toward each person they have met (docs/11 §4.9), as far as the viewer may see them. */
+  relations?: RelationView[];
   tierId?: string | null;
   seeded: boolean;
   variables: VariableView[];
+}
+
+export interface RelationView {
+  other: string;
+  handle: string;
+  name: string;
+  values: (VariableView & { holder: string })[];
 }
 
 export interface TieView {
@@ -334,6 +377,27 @@ function variableViews(deps: MindsDeps, storyId: string, defs: VariableDef[], ho
     });
 }
 
+/** One character's relation values toward everyone it has met, as `viewer` may see them. */
+function relationViews(deps: MindsDeps, storyId: string, defs: VariableDef[], holders: Map<string, HolderInfo>, oid: string, viewer: Viewer): RelationView[] {
+  const rels = defs.filter((d) => d.scope === 'relation');
+  if (!rels.length) return [];
+  const out: RelationView[] = [];
+  for (const other of metWith(deps, storyId, oid)) {
+    const obj = deps.memory.getObject(other);
+    if (!obj) continue;
+    const values: RelationView['values'] = [];
+    for (const d of rels) {
+      const hid = relationHolder(d, oid, other);
+      const holder = holders.get(hid);
+      if (!holder || !appliesTo(d, holder) || !canSee(d, hid, viewer)) continue;
+      const value = valueOf(deps, storyId, d, hid);
+      values.push({ holder: hid, key: d.key, label: d.label, type: d.type, visibility: d.visibility, value, display: renderValue(d, value) });
+    }
+    if (values.length) out.push({ other, handle: obj.handle ?? '', name: viewer.kind === 'player' && !knowsName(deps, storyId, viewer.playerId, other) ? deps.sheets.get(other)?.knownAs || 'someone' : obj.name, values });
+  }
+  return out;
+}
+
 /** Sheets and variables as `viewer` may see them (the API's normal vs advanced mode). */
 export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { characters: CharacterView[]; world: VariableView[] } {
   const defs = deps.variables.listDefs(storyId);
@@ -359,6 +423,7 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
       nameKnown: viewer.kind === 'player' ? known : true,
       ...(viewer.kind === 'advanced' ? { realName: obj.name, playerKnowsName: known } : {}),
       ...(own ? { description: sheet.description, concept: sheet.concept, state: sheet.state, ties: tieViews(deps, sheet.objectId) } : {}),
+      ...(own ? { relations: relationViews(deps, storyId, defs, holders, sheet.objectId, viewer) } : {}),
       ...(viewer.kind === 'advanced' ? { tierId: sheet.tierId } : {}),
       seeded: sheet.seeded,
       variables: variableViews(deps, storyId, defs, holder, viewer),

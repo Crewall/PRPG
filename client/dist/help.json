@@ -109,6 +109,13 @@
     "body": "Numbers, short texts, choices, yes/no flags or lists, defined for the story (Story options → Scenario). Each has a visibility: public (everyone present sees it), self (only its holder and the narrator) or hidden (only the narrator, not even its holder). Each says who may change it: the narrator, the holder, or both. Out-of-range changes are clamped, forbidden ones refused and logged. In advanced mode you can change any value."
   },
   {
+    "id": "relations",
+    "group": "Sheets",
+    "title": "Between characters (relation variables)",
+    "body": "A relation variable holds a value per pair of characters who have met (been in the same scene) or are tied: Mira's trust in Agnes, Agnes's debt to Rin. One-way by default (her trust in him isn't his in her); a mutual one is shared by the pair (a rivalry). Visibility works as for other variables: self means the one who holds it sees their own value toward each person. Characters see their values toward the people present, the narrator sees everyone's, and either may change them by the variable's rules. In advanced mode a character's Sheet has a \"Toward others\" table to edit them.",
+    "example": "trust → #agnes 2/10, #rin 9/10"
+  },
+  {
     "id": "thoughts",
     "group": "Sheets",
     "title": "Thoughts: agenda, opinions, feelings, notes",

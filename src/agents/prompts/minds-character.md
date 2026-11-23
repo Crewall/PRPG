@@ -52,7 +52,8 @@ what turned out wrong or no longer matters. Your memory is private: no one else 
   "revise": [{ "id": "t7", "text": "the thought as it stands now", "importance": 5 }],
   "forget": ["t7"]
 }
-For a number you may also use "delta" instead of "set"; for a list, "add" or "remove" with one item. Leave out
+For a number you may also use "delta" instead of "set"; for a list, "add" or "remove" with one item. A variable you
+hold toward someone also needs "to": their #handle. Leave out
 "vars", "remember", "revise" and "forget" when you have nothing for them. "state" is only how your body and mood
 are: plans go to your agenda, what you think of people to opinions, facts to notes.
 

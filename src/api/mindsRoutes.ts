@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { App } from '../app.ts';
-import { VariableDef, STATE_KEY, VarOpKind, normalizeAppliesTo, validateDefs } from '../minds/variables.ts';
+import { VariableDef, STATE_KEY, VarOpKind, normalizeAppliesTo, relationParts, validateDefs } from '../minds/variables.ts';
 import type { Viewer } from '../minds/variables.ts';
 import { SCENARIO_TEMPLATES } from '../minds/templates.ts';
 import { applyChanges, applyThoughtOps, createCharacter, editThought, mindsView, thoughtLens, updateSheet } from '../minds/service.ts';
@@ -20,7 +20,7 @@ const APPEARANCE_MAX_WORDS = 40;
 const CONCEPT_MAX_WORDS = 80;
 
 export async function registerMindsRoutes(server: FastifyInstance, app: App): Promise<void> {
-  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names, ties: app.ties };
+  const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names, ties: app.ties, met: app.met };
 
   const storyOr404 = (id: string, reply: { code(n: number): unknown }) => {
     const story = app.stories.getStory(id);
@@ -244,7 +244,11 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     const q = req.query as { holder?: string; limit?: string };
     return app.variables
       .listChanges(id, { holder: q.holder, limit: q.limit ? Math.min(1000, Number(q.limit)) : undefined })
-      .map((r) => ({ ...r, holderName: r.holder === 'world' ? 'the world' : (app.memory.getObject(r.holder)?.name ?? r.holder) }));
+      .map((r) => {
+        const pair = relationParts(r.holder);
+        const nameOf = (id: string) => app.memory.getObject(id)?.name ?? id;
+        return { ...r, holderName: r.holder === 'world' ? 'the world' : pair ? `${nameOf(pair.from)} → ${nameOf(pair.to)}` : nameOf(r.holder) };
+      });
   });
 
   // ---- Thoughts (advanced mode) ----

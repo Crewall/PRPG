@@ -7,7 +7,7 @@ import { renderPrompt } from '../agents/prompts.ts';
 import { formatGameClock } from '../util/gameClock.ts';
 import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
-import { STATE_KEY, appliesTo, canSee, renderRange, renderValue } from './variables.ts';
+import { STATE_KEY, appliesTo, canSee, holdsRelation, relationHolder, relationParts, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
 import { NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
@@ -180,6 +180,29 @@ function valueLine(deps: ThreadDeps, storyId: string, defs: VariableDef[], holde
   return shown.join(' · ');
 }
 
+/**
+ * Relation values (docs/11 §4.9) of `from` toward each of `others`, as `viewer` may see them:
+ * "trust → #agnes 2/10, #rin 9/10 · affection → #agnes 5/10". Only pairs who have met.
+ */
+function relationLine(deps: ThreadDeps, storyId: string, defs: VariableDef[], holders: Map<string, HolderInfo>, from: string, others: string[], viewer: Viewer): string {
+  const parts: string[] = [];
+  const handleOf = (oid: string) => deps.memory.getObject(oid)?.handle ?? '';
+  const sorted = [...new Set(others)].sort((a, b) => handleOf(a).localeCompare(handleOf(b)));
+  for (const d of defs) {
+    if (d.scope !== 'relation') continue;
+    const vals: string[] = [];
+    for (const other of sorted) {
+      if (other === from) continue;
+      const hid = relationHolder(d, from, other);
+      const holder = holders.get(hid);
+      if (!holder || !appliesTo(d, holder) || !canSee(d, hid, viewer)) continue;
+      vals.push(`${h(deps.memory.getObject(other)?.handle)} ${renderValue(d, valueOf(deps, storyId, d, hid))}`);
+    }
+    if (vals.length) parts.push(`${d.key} → ${vals.join(', ')}`);
+  }
+  return parts.join(' · ');
+}
+
 // ---- Character threads ----
 
 function characterSession(deps: ThreadDeps, storyId: string, objectId: string): string {
@@ -206,6 +229,15 @@ export function characterVariableLines(defs: VariableDef[], holder: HolderInfo):
   const viewer: Viewer = { kind: 'character', id: holder.id };
   const lines: string[] = [];
   for (const d of defs) {
+    if (d.scope === 'relation') {
+      // Toward each person they have met (docs/11 §4.9): their own side, when they may see it.
+      if (!holdsRelation(d, holder) || d.visibility === 'hidden') continue;
+      const mayChange = d.changedBy.includes('self');
+      const step = mayChange && d.type === 'number' && d.maxStep ? `, by at most ${d.maxStep} per round` : '';
+      const who = mayChange ? `YOU may change your own${step} (with "to": their #handle).` : d.changedBy.includes('narrator') ? 'The narrator changes it; you cannot.' : 'It does not change.';
+      lines.push(`- ${d.key} (${renderRange(d)}), ${d.mutual ? 'shared between you and each person you have met' : 'yours toward each person you have met'}: ${sentence(d.description || d.label)} ${who}${mayChange && d.changeGuide ? ` ${d.changeGuide}` : ''}`.trim());
+      continue;
+    }
     const mine = d.scope === 'character' && appliesTo(d, holder) && canSee(d, holder.id, viewer);
     const world = d.scope === 'world' && canSee(d, 'world', viewer);
     if (!mine && !world) continue;
@@ -215,14 +247,15 @@ export function characterVariableLines(defs: VariableDef[], holder: HolderInfo):
     const guide = d.changeGuide ? ` ${d.changeGuide}` : '';
     lines.push(`- ${world ? '(the world) ' : ''}${d.key} (${renderRange(d)}): ${sentence(d.description || d.label)} ${who}${mayChange ? guide : ''}`.trim());
   }
-  lines.push(`- state (one sentence): how you feel or are right now. YOU may update it; the narrator records what happens to you.`);
+  lines.push(`- state (one sentence): your body and mood right now (physical and emotional condition only). YOU may update it; the narrator records what happens to you.`);
   return lines;
 }
 
 /** The variables section of the narrator's system prompt: every definition with its rules. */
 export function narratorVariableLines(defs: VariableDef[]): string[] {
   return defs.map((d) => {
-    const scope = d.scope === 'world' ? 'world' : d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
+    const holders = d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
+    const scope = d.scope === 'world' ? 'world' : d.scope === 'relation' ? (d.mutual ? `one shared value per pair who have met (${holders}); set with "who" and "to"` : `${holders}, one value toward each person they have met; set with "who" and "to"`) : holders;
     const vis = d.visibility === 'hidden' ? 'hidden from its holder' : d.visibility === 'public' ? 'visible to everyone present' : 'visible to its holder';
     const who = [d.changedBy.includes('narrator') ? 'you' : '', d.changedBy.includes('self') ? 'the holder' : ''].filter(Boolean).join(' and ') || 'nobody';
     const step = d.type === 'number' && d.maxStep ? `, at most ${d.maxStep} per round` : '';
@@ -247,7 +280,8 @@ function whoYouAre(deps: ThreadDeps, storyId: string, objectId: string): string 
 function proposalNotes(deps: ThreadDeps, storyId: string, objectId: string, lastReply: ThreadMessage | undefined): string[] {
   if (!lastReply?.turnId) return [];
   return deps.variables
-    .listChanges(storyId, { holder: objectId, turnId: lastReply.turnId })
+    .listChanges(storyId, { turnId: lastReply.turnId })
+    .filter((c) => c.holder === objectId || relationParts(c.holder)?.from === objectId || relationParts(c.holder)?.to === objectId)
     .filter((c) => c.by === 'self' && c.result !== 'applied')
     .reverse()
     .map((c) => {
@@ -313,7 +347,8 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (notes.length) parts.push(notes.join('\n'));
   const own = valueLine(deps, storyId, defs, holder, { kind: 'character', id: objectId }, false);
   const world = valueLine(deps, storyId, defs, holders.get('world')!, { kind: 'character', id: objectId }, false);
-  parts.push(`You now: ${sheet?.state ? `"${sheet.state}"` : '(no state noted yet)'}${own ? ` · ${own}` : ''}${world ? `\nThe world: ${world}` : ''}`);
+  const toward = relationLine(deps, storyId, defs, holders, objectId, [...presentIds], { kind: 'character', id: objectId });
+  parts.push(`You now: ${sheet?.state ? `"${sheet.state}"` : '(no state noted yet)'}${own ? ` · ${own}` : ''}${toward ? `\nToward others: ${toward}` : ''}${world ? `\nThe world: ${world}` : ''}`);
   const agenda = chosen.pinnedNew.filter((t) => t.kind === 'agenda');
   const always = chosen.pinnedNew.filter((t) => t.kind !== 'agenda');
   if (agenda.length) parts.push(`Your agenda:\n${agenda.map(chosen.render).join('\n')}`);
@@ -388,7 +423,7 @@ export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string 
   });
 }
 
-function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, full: boolean): string[] {
+function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, full: boolean, others: string[] = []): string[] {
   const obj = deps.memory.getObject(holder.id);
   const sheet = deps.sheets.get(holder.id);
   const lines = [`${h(holder.handle)} (${obj?.name ?? '?'}${sheet?.pronouns ? `, ${sheet.pronouns}` : ''})${sheet?.appearance ? ` — ${sheet.appearance}` : ''}`];
@@ -421,6 +456,8 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);
+  const toward = relationLine(deps, storyId, defs, holdersFor(deps, storyId), holder.id, others, { kind: 'narrator' });
+  if (toward) lines.push(`  Toward others: ${toward}`);
   return lines;
 }
 
@@ -444,13 +481,14 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   const said = [p.say?.trim() ? `says "${p.say.trim()}"${p.to ? ` to ${p.to}` : ''}` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
   const playerLine = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}: ${said || 'waits.'}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
   parts.push(playerLine);
-  if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false).join('\n'));
+  const everyone = [...input.presentIds, ...(player ? [player.objectId] : [])];
+  if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false, everyone).join('\n'));
 
   const byId = new Map(input.declarations.map((d) => [d.objectId, d]));
   const present = input.presentIds.filter((id) => id !== player?.objectId && holders.has(id));
   if (present.length) {
     const blocks = present.map((oid) => {
-      const lines = sheetBlock(deps, storyId, defs, holders.get(oid)!, true);
+      const lines = sheetBlock(deps, storyId, defs, holders.get(oid)!, true, everyone);
       const d = byId.get(oid);
       if (!d || d.status === 'idle') lines.push('  This round: not acting.');
       else if (d.status === 'unavailable') lines.push('  This round: unavailable (voice them briefly yourself, in character).');

@@ -446,3 +446,32 @@ export function createTieStore(db: Db) {
   };
 }
 export type TieStore = ReturnType<typeof createTieStore>;
+
+// ---- Who has met whom (docs/11 §4.9) ----
+
+export function createMetStore(db: Db) {
+  const order = (x: string, y: string) => (x < y ? [x, y] : [y, x]);
+  return {
+    /** Record that everyone in `ids` has met everyone else (pairs already known are kept). */
+    meetAll(storyId: string, ids: string[], turnId: string | null): number {
+      const uniq = [...new Set(ids)];
+      let n = 0;
+      for (let i = 0; i < uniq.length; i++) {
+        for (let j = i + 1; j < uniq.length; j++) {
+          const [a, b] = order(uniq[i], uniq[j]);
+          const r = db.prepare(`INSERT OR IGNORE INTO character_met (story_id, a, b, first_turn_id, created_at) VALUES (?, ?, ?, ?, ?)`).run(storyId, a, b, turnId, Date.now());
+          n += Number(r.changes);
+        }
+      }
+      return n;
+    },
+    met(x: string, y: string): boolean {
+      const [a, b] = order(x, y);
+      return !!db.prepare(`SELECT 1 FROM character_met WHERE a = ? AND b = ?`).get(a, b);
+    },
+    pairs(storyId: string): [string, string][] {
+      return db.prepare(`SELECT a, b FROM character_met WHERE story_id = ? ORDER BY created_at`).all<Row>(storyId).map((r) => [r.a as string, r.b as string]);
+    },
+  };
+}
+export type MetStore = ReturnType<typeof createMetStore>;

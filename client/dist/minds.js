@@ -71,6 +71,8 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
     c.state ? h('p', {}, h('span', { class: 'sub' }, 'State: '), `"${c.state}"`) : null,
     c.description || c.concept ? h('details', { open: c.isPlayer ? null : true }, h('summary', { class: 'sub' }, c.isPlayer ? 'Who you are' : 'Who they are (private)'), h('p', { class: 'prose' }, c.description || c.concept)) : null,
     c.ties?.length ? h('p', {}, h('span', { class: 'sub' }, c.isPlayer ? 'Your people: ' : 'Their people: '), c.ties.map((t) => `${t.name} (${t.label})`).join(', '), ' ', helpLink('ties')) : null,
+    c.relations?.length ? h('p', {}, h('span', { class: 'sub' }, 'Toward others: '),
+      [...new Set(c.relations.flatMap((r) => r.values.map((v) => v.label)))].map((label) => `${label}: ${c.relations.flatMap((r) => r.values.filter((v) => v.label === label).map((v) => `${r.name} ${v.display}`)).join(', ')}`).join(' · '), ' ', helpLink('relations')) : null,
     vars.length
       ? h('table', { class: 'vars' }, ...vars.map((v) => h('tr', {}, h('td', { class: 'sub' }, v.label), h('td', {}, v.display), adv ? h('td', { class: `vis ${v.visibility}` }, v.visibility) : null)))
       : null,
@@ -182,12 +184,49 @@ export async function openSheetEditor(ctx, objectId) {
         } }, 'Save values')), valuesErr)
     : null;
 
+  // Toward others: relation variables, one row per person met (docs/11 §4.9).
+  const rels = (c.relations ?? []).filter((r) => r.values.length);
+  let relationsBox = null;
+  if (adv && rels.length) {
+    const cols = [...new Map(rels.flatMap((r) => r.values.map((v) => [v.key, v.label]))).entries()];
+    const cells = [];
+    const editor = (v) => {
+      const d = byKey.get(v.key);
+      let el;
+      if (v.type === 'number') el = h('input', { type: 'number', value: String(v.value ?? ''), step: String(d?.step ?? 1), style: 'width:5em', ...(d?.min != null ? { min: String(d.min) } : {}), ...(d?.max != null ? { max: String(d.max) } : {}) });
+      else if (v.type === 'flag') { el = h('input', { type: 'checkbox' }); el.checked = !!v.value; }
+      else if (v.type === 'choice') el = select((d?.options ?? []).map((o) => [o, o]), v.value);
+      else if (v.type === 'list') el = input(Array.isArray(v.value) ? v.value.join(', ') : '', { placeholder: 'a, b' });
+      else el = input(v.value, { style: 'width:8em' });
+      const read = () => (v.type === 'number' ? Number(el.value) : v.type === 'flag' ? el.checked : v.type === 'list' ? el.value.split(',').map((x) => x.trim()).filter(Boolean) : el.value);
+      cells.push({ v, read });
+      return el;
+    };
+    const relErr = errLine();
+    relationsBox = h('details', { open: true, class: 'sheet-section' }, h('summary', {}, 'Toward others ', helpLink('relations')),
+      h('div', { class: 'table-scroll' }, h('table', { class: 'vars edit rel' },
+        h('tr', {}, h('th', {}, ''), ...cols.map(([, label]) => h('th', { class: 'sub' }, label))),
+        ...rels.map((r) => h('tr', {}, h('td', {}, h('b', {}, r.name), h('span', { class: 'sub' }, ` #${r.handle}`)),
+          ...cols.map(([key]) => { const v = r.values.find((x) => x.key === key); return h('td', {}, v ? editor(v) : h('span', { class: 'sub' }, '—')); }))))),
+      h('div', { class: 'row' }, h('button', { onclick: async () => {
+        relErr.textContent = '';
+        const changes = cells.filter(({ v, read }) => JSON.stringify(read()) !== JSON.stringify(v.value)).map(({ v, read }) => ({ holder: v.holder, key: v.key, op: 'set', value: read() }));
+        if (!changes.length) { relErr.textContent = 'Nothing changed.'; return; }
+        try {
+          const out = await api.patch(`/api/stories/${ctx.storyId}/variables/values`, { changes });
+          const bad = out.filter((o) => o.result !== 'applied');
+          relErr.textContent = bad.length ? bad.map((o) => `${o.key}: ${o.result}${o.reason ? ` (${o.reason})` : ''}`).join(' · ') : 'Saved.';
+          ctx.refresh();
+        } catch (e) { relErr.textContent = e.message; }
+      } }, 'Save')), relErr);
+  }
+
   // The mind: agenda, opinions and feelings by person, notes, faded (docs/11 §5.10). The player character has none.
   const mindBox = adv && !c.isPlayer ? h('details', { open: true, class: 'sheet-section' }, h('summary', {}, 'Mind: agenda, opinions, feelings, notes ', helpLink('thoughts')), mindSheet(ctx, c.objectId, view.characters)) : null;
   const profileBox = h('details', { open: !adv || c.isPlayer ? true : null, class: 'sheet-section' }, h('summary', {}, 'Profile'), ...sections);
   if (valuesBox) valuesBox.classList.add('sheet-section');
 
-  modal(`${c.isPlayer ? 'Your character' : `${c.name}'s sheet`}`, profileBox, valuesBox, mindBox);
+  modal(`${c.isPlayer ? 'Your character' : `${c.name}'s sheet`}`, profileBox, valuesBox, relationsBox, mindBox);
 }
 
 const KINDS = [['agenda', 'Agenda'], ['opinion', 'Opinion'], ['feeling', 'Feeling'], ['note', 'Note']];

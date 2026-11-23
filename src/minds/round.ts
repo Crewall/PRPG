@@ -17,7 +17,7 @@ import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.
 import { chooseCallers } from './gate.ts';
 import type { GateCandidate } from './gate.ts';
 import { applyChanges, applyThoughtOps, createCharacter, fadeThoughts, updateSheet } from './service.ts';
-import { STATE_KEY, renderRange } from './variables.ts';
+import { STATE_KEY, relationHolder, relationParts, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { clampWords, isPlaceholder, isRealName, realValue, slugify } from './text.ts';
 import { setTie } from './ties.ts';
@@ -440,20 +440,34 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (items.some((x) => goneHandles.has(x))) deps.stories.setSceneItems(current().id, items.filter((x) => !goneHandles.has(x)));
     }
 
+    // Everyone in the scene now has met everyone else: relation variables exist for them (docs/11 §4.9).
+    deps.met?.meetAll(storyId, [...current().activeNpcIds, ...(playerId ? [playerId] : [])].filter((oid) => deps.sheets.get(oid)), turn.id);
+
     // 5c. Variables and states: characters' proposals first, then the narrator's (it wins on the same key).
+    const defsByKey = new Map(deps.variables.listDefs(storyId).map((d) => [d.key, d]));
+    /** The holder an entry changes: the character, or for a relation variable the pair toward `to`. */
+    const holderOf = (holder: string, v: (typeof block.vars)[number]): string | undefined => {
+      const def = defsByKey.get(v.key);
+      if (def?.scope !== 'relation') return holder;
+      const to = v.to ? resolveKey(deps, storyId, v.to, playerId) : undefined;
+      return holder !== 'world' && to && to !== 'world' && to !== holder ? relationHolder(def, holder, to) : undefined;
+    };
     const proposals: Proposal[] = [];
     for (const r of results) {
       if (!r.reply) continue;
       for (const v of r.reply.vars) {
-        const op = entryToOp(v, r.objectId);
+        const h = holderOf(r.objectId, v);
+        const op = h ? entryToOp(v, h) : undefined;
         if (op) proposals.push({ change: op, by: 'self', proposer: r.objectId });
       }
       if (r.reply.state) proposals.push({ change: { holder: r.objectId, key: STATE_KEY, op: 'set', value: r.reply.state }, by: 'self', proposer: r.objectId });
     }
     for (const v of block.vars) {
-      const holder = v.who ? resolveKey(deps, storyId, v.who, playerId) : undefined;
+      const who = v.who ? resolveKey(deps, storyId, v.who, playerId) : undefined;
+      const holder = who ? holderOf(who, v) : undefined;
       const op = holder ? entryToOp(v, holder) : undefined;
       if (op) proposals.push({ change: op, by: 'narrator' });
+      else if (who && defsByKey.get(v.key)?.scope === 'relation') blockProblems.push(`vars: '${v.key}' needs "to": whom ${v.who} feels it toward`);
       else blockProblems.push(`vars: no holder '${v.who ?? '?'}' for '${v.key}'`);
     }
     for (const [key, text] of Object.entries(block.state)) {
@@ -461,7 +475,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (holder && holder !== 'world') proposals.push({ change: { holder, key: STATE_KEY, op: 'set', value: text }, by: 'narrator' });
     }
     outcomes = applyChanges(deps, storyId, proposals, turn.id);
-    for (const o of outcomes) if (o.proposal.change.holder !== 'world') changedIds.add(o.proposal.change.holder);
+    for (const o of outcomes) {
+      const hid = o.proposal.change.holder;
+      const pair = relationParts(hid);
+      if (pair) [pair.from, pair.to].forEach((x) => changedIds.add(x));
+      else if (hid !== 'world') changedIds.add(hid);
+    }
 
     // 5c''. Ties set or changed by the narrator (docs/11 §2.6); "" removes one.
     for (const [holderKey, others] of Object.entries(block.ties)) {

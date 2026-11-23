@@ -30,6 +30,7 @@ interface SnapshotPayload {
   thoughts?: Row[];
   names?: Row[];
   ties?: Row[];
+  met?: Row[];
   thoughtTags?: Row[];
   varChangeRowidWatermark?: number;
   /** Thread rows whose kind/compacted flag can change in place (pending → delivered, compaction). */
@@ -82,6 +83,7 @@ export function createSnapshotStore(db: Db) {
           thoughts: db.prepare(`SELECT * FROM thoughts WHERE story_id = ?`).all<Row>(storyId),
           names: db.prepare(`SELECT * FROM name_knowledge WHERE story_id = ?`).all<Row>(storyId),
           ties: db.prepare(`SELECT * FROM character_ties WHERE story_id = ?`).all<Row>(storyId),
+          met: db.prepare(`SELECT * FROM character_met WHERE story_id = ?`).all<Row>(storyId),
           thoughtTags: db
             .prepare(`SELECT tt.* FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ?`)
             .all<Row>(storyId),
@@ -238,6 +240,12 @@ export function createSnapshotStore(db: Db) {
             db.prepare(`INSERT OR IGNORE INTO character_ties (story_id, holder, other, label, created_turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
               t.story_id, t.holder, t.other, t.label, t.created_turn_id ?? null, t.created_at,
             );
+          }
+        }
+        if (p.met) {
+          db.prepare(`DELETE FROM character_met WHERE story_id = ?`).run(storyId);
+          for (const m of p.met) {
+            db.prepare(`INSERT OR IGNORE INTO character_met (story_id, a, b, first_turn_id, created_at) VALUES (?, ?, ?, ?, ?)`).run(m.story_id, m.a, m.b, m.first_turn_id ?? null, m.created_at);
           }
         }
         if (p.varChangeRowidWatermark !== undefined) {

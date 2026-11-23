@@ -33,7 +33,7 @@ the story with new information.
   "briefs": { "#handle": "Second person, at most {{briefMaxWords}} words: what this character saw, felt and suffered, and the outcomes that touch them. Only what they could perceive." },
   "spotlight": ["#handle of anyone who should react next round"],
   "state": { "#handle": "one sentence: their physical and emotional condition now (only for those whose state changed)" },
-  "vars": [{ "who": "#handle or world", "key": "variable", "set": "value", "why": "short reason" }],
+  "vars": [{ "who": "#handle or world", "key": "variable", "set": "value", "why": "short reason" }, { "who": "#handle", "to": "#handle", "key": "a variable held toward someone", "delta": -1 }],
   "tags": ["topics", "places", "#handles that matter in this moment"],
   "evoke": { "#handle": ["topics this character should recall"] },
   "notes": { "remember": [{ "text": "a private note to yourself", "tags": ["topic"] }], "forget": ["t3"] },
@@ -69,7 +69,8 @@ Text in <angle brackets> stands for what you write there: never copy it.
   When a thing is destroyed, taken away for good or used up, mark it { "name": "#handle", "gone": true }; never
   rename it.
 - "player" only when your round message asks for it (the player character is missing or incomplete).{{namesRule}}
-- In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. Change a variable only when its rules
+- In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. A variable held toward another person
+  (trust, affection…) also needs "to": { "who": "#a", "to": "#b", "key": "trust", "delta": -1 } is #a's trust in #b. Change a variable only when its rules
   allow you to, and follow its guidance.
 - "time" is the number of in-story minutes this round took.
 - Leave out any field you don't need. Never mention the block, variables or numbers in the prose.

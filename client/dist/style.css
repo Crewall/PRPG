@@ -422,3 +422,6 @@ td.vis.hidden { color: #ff8a8a; }
   .thought.v2 .imp { grid-column: 2; grid-row: 1; }
   .thought.v2 .thought-text { grid-column: 1 / -1; }
 }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+table.vars.rel th { text-align: left; font-weight: 500; padding: 2px 6px; }
+table.vars.rel td { padding: 2px 6px; white-space: nowrap; }
