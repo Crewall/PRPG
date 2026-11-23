@@ -99,8 +99,8 @@
     "id": "state",
     "group": "Sheets",
     "title": "State",
-    "body": "One sentence: how a character feels or is right now. The character updates it itself; the narrator records what happens to it. Others never read it directly; they notice what shows.",
-    "example": "Bruised ribs, adrenaline still high, suspicious of everyone."
+    "body": "One sentence: how a character's body and mood are right now (hurt, exhausted, shaking, elated). Nothing else: plans go to their agenda, what they think of people to opinions, facts to notes. The character updates it itself; the narrator records what happens to it. Others never read it directly; they notice what shows.",
+    "example": "Bruised ribs, adrenaline still high, scared."
   },
   {
     "id": "variables",
@@ -111,15 +111,15 @@
   {
     "id": "thoughts",
     "group": "Sheets",
-    "title": "Thoughts and tags",
-    "body": "Characters keep their own memory as short thoughts they write and can later forget. Each carries tags (topics, #people, #places) and the in-story time it was written. Tagged thoughts come back when something related happens; pinned (or untagged) ones are always with them. Thoughts are private: nobody else reads them, the narrator included unless you allow it.",
-    "example": "t12 · Day 2, 19:40 [#marta, ledger] Marta keeps the ledger under the counter."
+    "title": "Thoughts: agenda, opinions, feelings, notes",
+    "body": "Characters keep their own memory as short thoughts they write themselves, only when something matters to them. Each has a kind: agenda (what they are after; at most 3, always on their mind), opinion (what they think of someone), feeling (love, fear, guilt, a grudge) or note (a fact, a promise, a secret). Each has an importance from 1 to 10: unimportant ones fade as story time passes without them coming up (Story options → Minds engine sets how fast); 8–10 never fade, 9–10 are always on their mind. A character can revise a thought (the old one is kept) or hold mixed opinions of the same person. The narrator sees each present character's agenda and opinions or feelings of 7+; everything else is private. In advanced mode, a character's Sheet shows them all, grouped by person, and lets you edit, add, forget or restore any.",
+    "example": "t12 · Day 2, 19:40 · opinion of #agnes, 7/10 [file] She reads the file, not me."
   },
   {
     "id": "advanced",
     "group": "Modes",
     "title": "Advanced mode",
-    "body": "Shows everything (descriptions, states, hidden variables, every character's thoughts) and lets you edit it: sheets, values, thoughts. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
+    "body": "Shows everything (descriptions, states, hidden variables, every character's mind) and lets you edit it. A character's card then has 📋 Sheet: profile, variables, and their mind (agenda, opinions and feelings by person, notes, faded thoughts), all editable. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
   },
   {
     "id": "pov",

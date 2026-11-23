@@ -219,7 +219,13 @@ export function editThought(
 ): void {
   const about =
     patch.about === undefined ? undefined : patch.about === null || !patch.about.trim() ? null : (deps.sheets.get(patch.about) ? patch.about : deps.memory.findByHandle(storyId, patch.about)?.id ?? null);
-  const tags = patch.tags?.map((x) => normalizeTag(x)).filter(Boolean);
+  // The subject is a tag too, so the thought comes back when they are around (docs/11 §5.9).
+  const subject = about === undefined ? t.about : about;
+  const subjectTag = subject ? `#${deps.memory.getObject(subject)?.handle ?? ''}` : '';
+  const oldSubjectTag = t.about ? `#${deps.memory.getObject(t.about)?.handle ?? ''}` : '';
+  let tags = patch.tags?.map((x) => normalizeTag(x)).filter(Boolean);
+  if (about !== undefined && !tags) tags = t.tags.filter((g) => g !== oldSubjectTag);
+  if (tags && subjectTag.length > 1 && !tags.includes(subjectTag)) tags = [subjectTag, ...tags];
   deps.thoughts.update(t.id, {
     ...(patch.text?.trim() ? { text: patch.text.trim() } : {}),
     ...(patch.kind !== undefined ? { kind: normalizeKind(patch.kind) } : {}),
