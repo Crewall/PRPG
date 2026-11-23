@@ -9,6 +9,12 @@ import type { VarOp, VarOpKind } from './variables.ts';
 
 // ---- Player input (docs/10 §6) ----
 
+/** One step of a declaration, in the order it was written (docs/10 §6): a line spoken, or an action tried. */
+export interface Beat {
+  kind: 'say' | 'do';
+  text: string;
+}
+
 export interface PlayerDeclaration {
   /** Spoken words: text inside "…" (or “…”). Heard by the characters present. */
   say: string;
@@ -16,7 +22,49 @@ export interface PlayerDeclaration {
   do: string;
   /** Text inside ((…)): an out-of-character note to the narrator. */
   ooc: string;
+  /** The same words and actions in the order they were typed (absent on older turns). */
+  beats?: Beat[];
 }
+
+/** An action fragment as a beat: whitespace collapsed, stray punctuation at its edges dropped. */
+const cleanDo = (x: string) => x.replace(/\s+/g, ' ').replace(/^[\s…,.;:!?-]+|[\s…,;:-]+$/g, '').trim();
+
+/** The text split into ordered beats: quoted parts are lines spoken, the rest actions. */
+export function beatsOf(text: string): Beat[] {
+  const beats: Beat[] = [];
+  const re = /["“]([^"”]*)["”]/g;
+  let at = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const before = cleanDo(text.slice(at, m.index));
+    if (before) beats.push({ kind: 'do', text: before });
+    if (m[1].trim()) beats.push({ kind: 'say', text: m[1].trim() });
+    at = m.index + m[0].length;
+  }
+  const after = cleanDo(text.slice(at));
+  if (after) beats.push({ kind: 'do', text: after });
+  return beats;
+}
+
+/**
+ * The spoken lines in order, each quoted, with "…" where something happened between them:
+ * `"A room, please." … "And a meal."`. Falls back to the joined speech for declarations without beats.
+ */
+export function spokenLines(beats: Beat[] | undefined, say: string): string {
+  if (!beats?.length) return say.trim() ? `"${say.trim()}"` : '';
+  const out: string[] = [];
+  let gap = false;
+  for (const b of beats) {
+    if (b.kind === 'do') gap = out.length > 0;
+    else {
+      out.push(`${gap ? '… ' : ''}"${b.text}"`);
+      gap = false;
+    }
+  }
+  return out.join(' ');
+}
+
+/** Do the beats mix words and actions (so their order matters)? */
+export const mixedBeats = (beats: Beat[] | undefined) => !!beats && beats.some((b) => b.kind === 'say') && beats.some((b) => b.kind === 'do');
 
 export function parsePlayerInput(text: string): PlayerDeclaration {
   const ooc: string[] = [];
@@ -24,6 +72,7 @@ export function parsePlayerInput(text: string): PlayerDeclaration {
     ooc.push(inner.trim());
     return ' ';
   });
+  const beats = beatsOf(rest);
   const say: string[] = [];
   rest = rest.replace(/["“]([^"”]*)["”]/g, (_m, inner: string) => {
     if (inner.trim()) say.push(inner.trim());
@@ -34,7 +83,7 @@ export function parsePlayerInput(text: string): PlayerDeclaration {
     .replace(/\s+/g, ' ')
     .replace(/^[\s…,.;:]+|[\s…,;:]+$/g, '')
     .trim();
-  return { say: say.join(' '), do: doText, ooc: ooc.filter(Boolean).join(' ') };
+  return { say: say.join(' '), do: doText, ooc: ooc.filter(Boolean).join(' '), beats };
 }
 
 // ---- Lenient parsing helpers ----
@@ -72,6 +121,8 @@ const VarEntry = z
   .object({
     key: z.string().min(1),
     who: z.string().optional(),
+    /** Relation variables (docs/11 §4.9): toward whom. */
+    to: z.string().optional(),
     set: z.unknown().optional(),
     delta: z.unknown().optional(),
     add: z.unknown().optional(),
@@ -87,32 +138,69 @@ const listOf = <S extends z.ZodTypeAny>(item: S) =>
     .array(z.unknown())
     .default([])
     .transform((xs) => xs.map((x) => item.safeParse(x)).filter((r) => r.success).map((r) => (r as z.SafeParseSuccess<z.infer<S>>).data));
-const Remember = z.object({ text: z.string().min(1), tags: z.array(z.string()).default([]), pin: z.boolean().default(false) });
+const Remember = z.object({
+  text: z.string().min(1),
+  tags: z.array(z.string()).default([]),
+  pin: z.boolean().default(false),
+  kind: z.string().optional(),
+  about: z.string().optional(),
+  importance: z.union([z.number(), z.string()]).optional(),
+});
+const Revise = z.object({
+  id: z.union([z.string(), z.number()]).transform(String),
+  text: z.string().optional(),
+  importance: z.union([z.number(), z.string()]).optional(),
+  kind: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
 const Forget = z.union([z.string(), z.number()]).transform(String);
 
 // ---- The character's reply (docs/10 §9.1) ----
+
+const BeatEntry = z.object({ say: z.unknown().optional(), do: z.unknown().optional() }).passthrough();
+
+/** A reply's `beats` ([{ "do": … }, { "say": … }]) as ordered beats; an entry with both keeps their written order. */
+export function beatsFromEntries(entries: Record<string, unknown>[]): Beat[] {
+  const out: Beat[] = [];
+  for (const e of entries) {
+    for (const k of Object.keys(e)) {
+      const v = e[k];
+      if ((k === 'say' || k === 'do') && typeof v === 'string' && v.trim()) out.push({ kind: k, text: v.trim() });
+    }
+  }
+  return out;
+}
+
+/** The most a reply may say and try in one round (the sole-focus tier at the highest verbosity, docs/10 §5.1e). */
+export const REPLY_MAX_SAY = 480;
+export const REPLY_MAX_INTENT = 100;
 
 const CharacterReplyShape = {
   say: Str.default(''),
   to: Str.optional(),
   intent: Str.default(''),
+  /** Words and actions in order, when the order matters (docs/10 §6, §9.1). */
+  beats: listOf(BeatEntry),
   state: Str.optional(),
   vars: listOf(VarEntry),
   remember: listOf(Remember),
+  revise: listOf(Revise),
   forget: listOf(Forget),
 };
-export type CharacterReply = z.infer<z.ZodObject<typeof CharacterReplyShape>>;
+export type CharacterReply = Omit<z.infer<z.ZodObject<typeof CharacterReplyShape>>, 'beats'> & { beats: Beat[] };
 
 /** The reply's shape as sent to providers that enforce structured outputs (parsing stays lenient). */
 export const CharacterReplyWire = z.object({
   say: z.string(),
   to: z.string().optional(),
   intent: z.string(),
+  beats: z.array(z.object({ say: z.string().optional(), do: z.string().optional() })).optional(),
   state: z.string().optional(),
   vars: z
     .array(
       z.object({
         key: z.string(),
+        to: z.string().optional(),
         set: z.union([z.string(), z.number(), z.boolean()]).optional(),
         delta: z.number().optional(),
         add: z.string().optional(),
@@ -121,21 +209,49 @@ export const CharacterReplyWire = z.object({
       }),
     )
     .optional(),
-  remember: z.array(z.object({ text: z.string(), tags: z.array(z.string()), pin: z.boolean().optional() })).optional(),
+  remember: z
+    .array(
+      z.object({
+        kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(),
+        about: z.string().optional(),
+        importance: z.number().optional(),
+        text: z.string(),
+        tags: z.array(z.string()),
+      }),
+    )
+    .optional(),
+  revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
 });
 
 /** Accepts anything JSON: AI replies are salvaged, never rejected wholesale. */
 export const CharacterReplySchema = z.unknown().transform((raw) => parseCharacterReply(raw));
 
-/** Parse + clamp a character's reply (say ≤ 80 words, intent and state ≤ 25). */
+/** A character's reply as stored in its thread (raw text), parsed again (replaying a round, docs/10 §10a). */
+export function readCharacterReply(raw: string): CharacterReply & { problems: string[] } {
+  try {
+    return parseCharacterReply(JSON.parse(extractJson(raw)));
+  } catch {
+    return parseCharacterReply({});
+  }
+}
+
+/**
+ * Parse + clamp a character's reply (state ≤ 25 words; say and intent to the widest limits here, the round holds
+ * them to the character's focus tier, docs/10 §5.1e). `beats`, when given, fill an empty `say` / `intent`.
+ */
 export function parseCharacterReply(raw: unknown): CharacterReply & { problems: string[] } {
   const { value, problems } = parseFields(CharacterReplyShape, raw);
-  const say = clampWords(value.say, 80).text;
-  const intent = clampWords(value.intent, 25).text;
+  const beats = beatsFromEntries(value.beats as Record<string, unknown>[]);
+  let say = value.say;
+  let intent = value.intent;
+  if (beats.length && !say.trim()) say = beats.filter((b) => b.kind === 'say').map((b) => b.text).join(' ');
+  if (beats.length && !intent.trim()) intent = beats.filter((b) => b.kind === 'do').map((b) => b.text).join('; then ');
+  say = clampWords(say, REPLY_MAX_SAY).text;
+  intent = clampWords(intent, REPLY_MAX_INTENT).text;
   const state = value.state ? clampWords(value.state, 25).text : undefined;
   const to = value.to?.trim() ? (value.to.trim().startsWith('#') ? value.to.trim() : `#${value.to.trim()}`) : undefined;
-  return { ...value, say, intent, state, to, problems };
+  return { ...value, beats, say, intent, state, to, problems };
 }
 
 // ---- The narrator's round block (docs/10 §9.3) ----
@@ -167,7 +283,7 @@ const RoundBlockShape = {
       exit: z.array(Str).default([]),
     })
     .default({}),
-  objects: listOf(z.object({ name: z.string().min(1), type: Str.default('item'), line: Str.default('') })),
+  objects: listOf(z.object({ name: z.string().min(1), type: Str.default('item'), line: Str.default(''), gone: z.boolean().optional() })),
   scene: z
     .object({
       break: z.boolean().default(false),
@@ -243,6 +359,7 @@ const DialogueReplyShape = {
   gesture: Str.default(''),
   state: Str.optional(),
   remember: listOf(Remember),
+  revise: listOf(Revise),
   forget: listOf(Forget),
   act: Str.optional(),
 };
@@ -254,7 +371,7 @@ export function parseDialogueReply(raw: unknown): DialogueReply & { problems: st
   const act = value.act?.trim() ? clampWords(value.act, 25).text : undefined;
   return {
     ...value,
-    say: clampWords(value.say, 80).text,
+    say: clampWords(value.say, REPLY_MAX_SAY).text,
     gesture: clampWords(value.gesture, 15).text,
     state: value.state?.trim() ? clampWords(value.state, 25).text : undefined,
     act,
@@ -267,7 +384,10 @@ export const DialogueReplyWire = z.object({
   say: z.string(),
   gesture: z.string().optional(),
   state: z.string().optional(),
-  remember: z.array(z.object({ text: z.string(), tags: z.array(z.string()), pin: z.boolean().optional() })).optional(),
+  remember: z
+    .array(z.object({ kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(), about: z.string().optional(), importance: z.number().optional(), text: z.string(), tags: z.array(z.string()) }))
+    .optional(),
+  revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
   act: z.string().optional(),
 });

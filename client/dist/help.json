@@ -3,7 +3,7 @@
     "id": "input-syntax",
     "group": "Playing",
     "title": "What you type",
-    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story, the small ? in the corner of the message box shows how your message will be read.",
+    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. The order counts: words and actions happen in the order you write them. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story, the small ? in the corner of the message box shows how your message will be read.",
     "example": "\"A room, please.\" I set a coin on the counter and watch her hands. ((make the inn feel dangerous))"
   },
   {
@@ -33,8 +33,8 @@
   {
     "id": "edit-rewind",
     "group": "Playing",
-    "title": "Retry, edit and undo",
-    "body": "↻ on any reply writes it again. For an earlier reply, every turn after it is removed too and the story continues from the new reply; nothing replaced is kept (only recent replies can be redone). When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt and puts your message back in the box; sending something else drops it too. Edit undoes the last exchange completely and puts your message back in the box. ⧉ copies a message, ✎ edits its text, × removes it from the transcript (in a Minds story the characters still remember it)."
+    "title": "Retry, edit, undo and Revert",
+    "body": "↻ on any reply writes it again (for an earlier reply, every turn after it goes too). Edit (below Send) takes back the last exchange and puts your message back in the box. × on the last exchange removes it completely, as if it never happened; ✎ on your last message edits and resends it; ✎ on the last reply changes the story itself: the characters are told what your edited text says. After any of these, ↶ Revert (above the box) brings back exactly what was there before, memories and all — once; a new message ends the chance. Older messages: × and ✎ change only the transcript (the characters remember what happened), and Revert can bring them back too. When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt. ⧉ copies a message."
   },
   {
     "id": "cast-bar",
@@ -59,8 +59,15 @@
   {
     "id": "force-act",
     "group": "Characters",
-    "title": "Making a character act",
-    "body": "A round calls only the characters who matter (spoken to, spotlighted by the narrator, new, or active last round), up to a cap. \"Act next round\" on a character's card makes sure they are called next round. ⚡ marks them in the Present bar until then."
+    "title": "Making a character act, or giving them the floor",
+    "body": "A round calls only the characters who matter (spoken to, spotlighted by the narrator, new, or active last round), up to a cap. On a character's card, ⚡ cycles: Act next round (⚡: they are called, and answer fully) → Give them the floor (⚡⚡: they may say and do much more) → off. The marks show in the Present bar until then."
+  },
+  {
+    "id": "focus",
+    "group": "Characters",
+    "title": "How much a character says",
+    "body": "Each round, every character who acts has a focus, and says and does about that much: the floor (the only one you speak to, your conversation partner, or ⚡⚡): up to ~240 words of speech; the centre (spoken to with others, ⚡, or spotlighted by the narrator): ~120; part of it (you spoke to everyone, mentioned them, or they just arrived): a sentence or two; the background: a few words or nothing. These are ceilings: a quiet character stays quiet. Story options → Minds engine → character verbosity (1–5) scales them all.",
+    "example": "\"Marta, tell me everything.\" — Marta has the floor."
   },
   {
     "id": "player-character",
@@ -89,11 +96,18 @@
     "example": "Mira — Rin: older brother. Rin — Mira: younger sister."
   },
   {
+    "id": "places",
+    "group": "Sheets",
+    "title": "Places and things",
+    "body": "The story keeps one public line for each place and thing, known by its #handle (\"#ledger — Marta's book of debts\"). Characters read these lines when the thing is around; the narrator is shown the list so it reuses them instead of naming them afresh. In the Places & things tab: tap one to edit its line, merge a duplicate into it (the thoughts that mention it follow), mark it gone, or delete it. Gone things drop out of view and out of the narrator's list.",
+    "example": "#rabbit (Agnes's stuffed rabbit, also: Bun) — worn grey plush, one ear stitched back on"
+  },
+  {
     "id": "state",
     "group": "Sheets",
     "title": "State",
-    "body": "One sentence: how a character feels or is right now. The character updates it itself; the narrator records what happens to it. Others never read it directly; they notice what shows.",
-    "example": "Bruised ribs, adrenaline still high, suspicious of everyone."
+    "body": "One sentence: how a character's body and mood are right now (hurt, exhausted, shaking, elated). Nothing else: plans go to their agenda, what they think of people to opinions, facts to notes. The character updates it itself; the narrator records what happens to it. Others never read it directly; they notice what shows.",
+    "example": "Bruised ribs, adrenaline still high, scared."
   },
   {
     "id": "variables",
@@ -102,17 +116,24 @@
     "body": "Numbers, short texts, choices, yes/no flags or lists, defined for the story (Story options → Scenario). Each has a visibility: public (everyone present sees it), self (only its holder and the narrator) or hidden (only the narrator, not even its holder). Each says who may change it: the narrator, the holder, or both. Out-of-range changes are clamped, forbidden ones refused and logged. In advanced mode you can change any value."
   },
   {
+    "id": "relations",
+    "group": "Sheets",
+    "title": "Between characters (relation variables)",
+    "body": "A relation variable holds a value per pair of characters who have met (been in the same scene) or are tied: Mira's trust in Agnes, Agnes's debt to Rin. One-way by default (her trust in him isn't his in her); a mutual one is shared by the pair (a rivalry). Visibility works as for other variables: self means the one who holds it sees their own value toward each person. Characters see their values toward the people present, the narrator sees everyone's, and either may change them by the variable's rules. In advanced mode a character's Sheet has a \"Toward others\" table to edit them.",
+    "example": "trust → #agnes 2/10, #rin 9/10"
+  },
+  {
     "id": "thoughts",
     "group": "Sheets",
-    "title": "Thoughts and tags",
-    "body": "Characters keep their own memory as short thoughts they write and can later forget. Each carries tags (topics, #people, #places) and the in-story time it was written. Tagged thoughts come back when something related happens; pinned (or untagged) ones are always with them. Thoughts are private: nobody else reads them, the narrator included unless you allow it.",
-    "example": "t12 · Day 2, 19:40 [#marta, ledger] Marta keeps the ledger under the counter."
+    "title": "Thoughts: agenda, opinions, feelings, notes",
+    "body": "Characters keep their own memory as short thoughts they write themselves, only when something matters to them. Each has a kind: agenda (what they are after; at most 3, always on their mind), opinion (what they think of someone), feeling (love, fear, guilt, a grudge) or note (a fact, a promise, a secret). Each has an importance from 1 to 10: unimportant ones fade as story time passes without them coming up (Story options → Minds engine sets how fast); 8–10 never fade, 9–10 are always on their mind. A character can revise a thought (the old one is kept) or hold mixed opinions of the same person. The narrator sees each present character's agenda and opinions or feelings of 7+; everything else is private. In advanced mode, a character's Sheet shows them all, grouped by person, and lets you edit, add, forget or restore any.",
+    "example": "t12 · Day 2, 19:40 · opinion of #agnes, 7/10 [file] She reads the file, not me."
   },
   {
     "id": "advanced",
     "group": "Modes",
     "title": "Advanced mode",
-    "body": "Shows everything (descriptions, states, hidden variables, every character's thoughts) and lets you edit it: sheets, values, thoughts. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
+    "body": "Shows everything (descriptions, states, hidden variables, every character's mind) and lets you edit it. A character's card then has 📋 Sheet: profile, variables, and their mind (agenda, opinions and feelings by person, notes, faded thoughts), all editable. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
   },
   {
     "id": "pov",
@@ -135,8 +156,8 @@
   {
     "id": "scenario",
     "group": "Story setup",
-    "title": "Scenario variables and templates",
-    "body": "Story options → Scenario: the variables this story tracks. Start from a template or from scratch, then add, edit, reorder or delete. For each: type and range, who holds it (every character, the player, the others, or the world), visibility, who may change it, and guidance for the AIs on when and how. The preview shows exactly how a character and the narrator will read it."
+    "title": "Scenario variables",
+    "body": "Story options → Scenario (or ⚙ on the Cast tab): what the story keeps track of, in three groups. The world: one value for the story (weather, the day). Each character: everyone, your character, the others, or chosen characters have their own (health, mood, money). Between characters: one value per pair who have met (trust, affection, a debt); shared ones (a rivalry) are one value per pair. Tap a quick preset or + Your own, then answer in plain words: the name, what kind of value, who has it, who can see it, who changes it, and what it means and when it changes (the AIs read these). Each card sums a variable up in a sentence; problems show on the card. A template fills the list (add to yours, or replace). The preview shows exactly how a character and the narrator will read it."
   },
   {
     "id": "engine",

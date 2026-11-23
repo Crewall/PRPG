@@ -7,14 +7,17 @@ import { renderPrompt } from '../agents/prompts.ts';
 import { formatGameClock } from '../util/gameClock.ts';
 import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
-import { STATE_KEY, appliesTo, canSee, renderRange, renderValue } from './variables.ts';
+import { STATE_KEY, appliesTo, canSee, holdsRelation, relationHolder, relationParts, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
-import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
+import { NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
+import { placesAndThings } from './places.ts';
 import type { Thought } from './thoughts.ts';
-import { holdersFor, valueOf } from './service.ts';
+import type { Beat } from './contracts.ts';
+import { mixedBeats } from './contracts.ts';
+import { holdersFor, thoughtLens, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
 
 // Thread builders for the Minds engine (docs/10 §8). Every thread is
@@ -51,6 +54,8 @@ export interface CharacterCallInput {
   now?: string;
   /** Dialogue mode (docs/10 §7): who the character is talking with — switches the ask to the conversation format. */
   conversationWith?: string;
+  /** How much to say this round (docs/10 §5.1e), the round message's last line before the ask. */
+  focusLine?: string;
 }
 
 export interface PreparedCall {
@@ -71,12 +76,16 @@ export interface Declaration {
   to?: string;
   intent?: string;
   state?: string;
+  /** Words and actions in order, when the reply gave them so (docs/10 §6). */
+  beats?: Beat[];
+  /** Its focus this round (docs/10 §5.1e). */
+  focus?: string;
 }
 
 export interface NarratorCallInput {
   storyId: string;
-  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". */
-  player: { say?: string; do?: string; ooc?: string; to?: string };
+  /** `to`: whom the player's words are meant for (docs/10 §5.1b): "#a, #b" or "everyone". `beats`: the order (§6). */
+  player: { say?: string; do?: string; ooc?: string; to?: string; beats?: Beat[] };
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
@@ -150,15 +159,20 @@ function visibleInThread(deps: ThreadDeps, t: Thought, w: ThreadWindow): boolean
  * visible in the thread, plus the tagged thoughts the active tags evoke. The
  * active set gets the owner's own tags found in `perceived` text added first.
  */
-function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number) {
+function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number, present?: Set<string>) {
+  const lens = thoughtLens(deps, storyId);
   const all = deps.thoughts.list(storyId, owner);
   const vocabulary = deps.thoughts.vocabulary(storyId, owner).map((v) => v.tag);
   for (const t of tagsMentioned(perceived, vocabulary)) active.add(t);
   const shown = new Set(all.filter((t) => visibleInThread(deps, t, window)).map((t) => t.id));
-  const pinnedNew = all.filter((t) => t.pinned && !shown.has(t.id));
-  const recalled = selectRecall(all, active, shown, budget);
-  const pinnedTokens = all.filter((t) => t.pinned).reduce((n, t) => n + estimateTokens(renderThought(t)), 0);
-  return { pinnedNew, recalled, pinnedTokens, vocabulary };
+  // Always on their mind (docs/11 §5.9): the agenda first, then pinned and 9–10 thoughts; each once per window.
+  const always = all.filter(alwaysOn).sort((a, b) => Number(b.kind === 'agenda') - Number(a.kind === 'agenda') || a.seq - b.seq);
+  const pinnedNew = always.filter((t) => !shown.has(t.id));
+  const recalled = selectRecall(all, active, shown, budget, { current: lens.current, present });
+  // Already in the thread and relevant again this round: it came up again, so it is renewed (docs/11 §5.7).
+  const cameUp = all.filter((t) => shown.has(t.id) && !alwaysOn(t) && (t.tags.some((g) => active.has(g)) || (!!t.about && !!present?.has(t.about))));
+  const pinnedTokens = always.filter((t) => t.kind !== 'agenda').reduce((n, t) => n + estimateTokens(lens.render(t)), 0);
+  return { pinnedNew, recalled, cameUp, pinnedTokens, vocabulary, render: lens.render };
 }
 
 /** "health 7/10 (fine) · mood "wary"" for one holder, filtered for a viewer. */
@@ -172,6 +186,29 @@ function valueLine(deps: ThreadDeps, storyId: string, defs: VariableDef[], holde
   }
   if (hidden.length) shown.push(`hidden: ${hidden.join(' · ')}`);
   return shown.join(' · ');
+}
+
+/**
+ * Relation values (docs/11 §4.9) of `from` toward each of `others`, as `viewer` may see them:
+ * "trust → #agnes 2/10, #rin 9/10 · affection → #agnes 5/10". Only pairs who have met.
+ */
+function relationLine(deps: ThreadDeps, storyId: string, defs: VariableDef[], holders: Map<string, HolderInfo>, from: string, others: string[], viewer: Viewer): string {
+  const parts: string[] = [];
+  const handleOf = (oid: string) => deps.memory.getObject(oid)?.handle ?? '';
+  const sorted = [...new Set(others)].sort((a, b) => handleOf(a).localeCompare(handleOf(b)));
+  for (const d of defs) {
+    if (d.scope !== 'relation') continue;
+    const vals: string[] = [];
+    for (const other of sorted) {
+      if (other === from) continue;
+      const hid = relationHolder(d, from, other);
+      const holder = holders.get(hid);
+      if (!holder || !appliesTo(d, holder) || !canSee(d, hid, viewer)) continue;
+      vals.push(`${h(deps.memory.getObject(other)?.handle)} ${renderValue(d, valueOf(deps, storyId, d, hid))}`);
+    }
+    if (vals.length) parts.push(`${d.key} → ${vals.join(', ')}`);
+  }
+  return parts.join(' · ');
 }
 
 // ---- Character threads ----
@@ -200,6 +237,15 @@ export function characterVariableLines(defs: VariableDef[], holder: HolderInfo):
   const viewer: Viewer = { kind: 'character', id: holder.id };
   const lines: string[] = [];
   for (const d of defs) {
+    if (d.scope === 'relation') {
+      // Toward each person they have met (docs/11 §4.9): their own side, when they may see it.
+      if (!holdsRelation(d, holder) || d.visibility === 'hidden') continue;
+      const mayChange = d.changedBy.includes('self');
+      const step = mayChange && d.type === 'number' && d.maxStep ? `, by at most ${d.maxStep} per round` : '';
+      const who = mayChange ? `YOU may change your own${step} (with "to": their #handle).` : d.changedBy.includes('narrator') ? 'The narrator changes it; you cannot.' : 'It does not change.';
+      lines.push(`- ${d.key} (${renderRange(d)}), ${d.mutual ? 'shared between you and each person you have met' : 'yours toward each person you have met'}: ${sentence(d.description || d.label)} ${who}${mayChange && d.changeGuide ? ` ${d.changeGuide}` : ''}`.trim());
+      continue;
+    }
     const mine = d.scope === 'character' && appliesTo(d, holder) && canSee(d, holder.id, viewer);
     const world = d.scope === 'world' && canSee(d, 'world', viewer);
     if (!mine && !world) continue;
@@ -209,14 +255,15 @@ export function characterVariableLines(defs: VariableDef[], holder: HolderInfo):
     const guide = d.changeGuide ? ` ${d.changeGuide}` : '';
     lines.push(`- ${world ? '(the world) ' : ''}${d.key} (${renderRange(d)}): ${sentence(d.description || d.label)} ${who}${mayChange ? guide : ''}`.trim());
   }
-  lines.push(`- state (one sentence): how you feel or are right now. YOU may update it; the narrator records what happens to you.`);
+  lines.push(`- state (one sentence): your body and mood right now (physical and emotional condition only). YOU may update it; the narrator records what happens to you.`);
   return lines;
 }
 
 /** The variables section of the narrator's system prompt: every definition with its rules. */
 export function narratorVariableLines(defs: VariableDef[]): string[] {
   return defs.map((d) => {
-    const scope = d.scope === 'world' ? 'world' : d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
+    const holders = d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
+    const scope = d.scope === 'world' ? 'world' : d.scope === 'relation' ? (d.mutual ? `one shared value per pair who have met (${holders}); set with "who" and "to"` : `${holders}, one value toward each person they have met; set with "who" and "to"`) : holders;
     const vis = d.visibility === 'hidden' ? 'hidden from its holder' : d.visibility === 'public' ? 'visible to everyone present' : 'visible to its holder';
     const who = [d.changedBy.includes('narrator') ? 'you' : '', d.changedBy.includes('self') ? 'the holder' : ''].filter(Boolean).join(' and ') || 'nobody';
     const step = d.type === 'number' && d.maxStep ? `, at most ${d.maxStep} per round` : '';
@@ -241,7 +288,8 @@ function whoYouAre(deps: ThreadDeps, storyId: string, objectId: string): string 
 function proposalNotes(deps: ThreadDeps, storyId: string, objectId: string, lastReply: ThreadMessage | undefined): string[] {
   if (!lastReply?.turnId) return [];
   return deps.variables
-    .listChanges(storyId, { holder: objectId, turnId: lastReply.turnId })
+    .listChanges(storyId, { turnId: lastReply.turnId })
+    .filter((c) => c.holder === objectId || relationParts(c.holder)?.from === objectId || relationParts(c.holder)?.to === objectId)
     .filter((c) => c.by === 'self' && c.result !== 'applied')
     .reverse()
     .map((c) => {
@@ -295,7 +343,8 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   for (const i of here.items) active.add(`#${i.handle}`);
   if (here.location) active.add(`#${here.location.handle}`);
   const perceived = [...pending.map((p) => p.content), input.now ?? ''].join('\n');
-  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300);
+  const presentIds = new Set(here.present.map((p) => deps.memory.findByHandle(storyId, p.handle)?.id).filter((x): x is string => !!x));
+  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300, presentIds);
   const recalled = chosen.recalled;
 
   const parts: string[] = [];
@@ -306,10 +355,15 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (notes.length) parts.push(notes.join('\n'));
   const own = valueLine(deps, storyId, defs, holder, { kind: 'character', id: objectId }, false);
   const world = valueLine(deps, storyId, defs, holders.get('world')!, { kind: 'character', id: objectId }, false);
-  parts.push(`You now: ${sheet?.state ? `"${sheet.state}"` : '(no state noted yet)'}${own ? ` · ${own}` : ''}${world ? `\nThe world: ${world}` : ''}`);
-  if (chosen.pinnedNew.length) parts.push(`Always on your mind:\n${chosen.pinnedNew.map(renderThought).join('\n')}`);
-  if (recalled.length) parts.push(`You recall:\n${recalled.map(renderThought).join('\n')}`);
+  const toward = relationLine(deps, storyId, defs, holders, objectId, [...presentIds], { kind: 'character', id: objectId });
+  parts.push(`You now: ${sheet?.state ? `"${sheet.state}"` : '(no state noted yet)'}${own ? ` · ${own}` : ''}${toward ? `\nToward others: ${toward}` : ''}${world ? `\nThe world: ${world}` : ''}`);
+  const agenda = chosen.pinnedNew.filter((t) => t.kind === 'agenda');
+  const always = chosen.pinnedNew.filter((t) => t.kind !== 'agenda');
+  if (agenda.length) parts.push(`Your agenda:\n${agenda.map(chosen.render).join('\n')}`);
+  if (always.length) parts.push(`Always on your mind:\n${always.map(chosen.render).join('\n')}`);
+  if (recalled.length) parts.push(`You recall:\n${recalled.map(chosen.render).join('\n')}`);
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
+  if (input.focusLine) parts.push(input.focusLine);
   parts.push(
     input.conversationWith
       ? `You are in a direct conversation with ${input.conversationWith}. Reply as JSON in the conversation format.`
@@ -322,7 +376,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
     ctx: assemble(characterSystemPrompt(deps, storyId, objectId), recap, log, roundMessage),
     roundMessage,
     pendingIds: pending.map((p) => p.id),
-    recalledIds: [...chosen.pinnedNew, ...recalled].map((t) => t.id),
+    recalledIds: [...chosen.pinnedNew, ...recalled, ...chosen.cameUp].map((t) => t.id),
   };
 }
 
@@ -378,7 +432,7 @@ export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string 
   });
 }
 
-function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, full: boolean): string[] {
+function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, full: boolean, others: string[] = []): string[] {
   const obj = deps.memory.getObject(holder.id);
   const sheet = deps.sheets.get(holder.id);
   const lines = [`${h(holder.handle)} (${obj?.name ?? '?'}${sheet?.pronouns ? `, ${sheet.pronouns}` : ''})${sheet?.appearance ? ` — ${sheet.appearance}` : ''}`];
@@ -392,9 +446,27 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
   if (full && who) lines.push(`  Who: ${who.replace(/\s+/g, ' ')}`);
   const ties = tieSummary(deps, holder.id);
   if (ties.length) lines.push(`  Ties: ${ties.join(', ')}`);
+  if (full && !holder.isPlayer) {
+    // Their agenda and strongest opinions and feelings (docs/11 §5.9, settled with the owner).
+    const lens = thoughtLens(deps, storyId);
+    const mine = deps.thoughts.list(storyId, holder.id);
+    const agenda = mine.filter((t) => t.kind === 'agenda');
+    if (agenda.length) lines.push(`  Agenda: ${agenda.map((t) => t.text).join(' · ')}`);
+    const strong = mine
+      .filter((t) => (t.kind === 'opinion' || t.kind === 'feeling') && lens.current(t) >= NARRATOR_SEES)
+      .sort((a, b) => lens.current(b) - lens.current(a) || b.seq - a.seq)
+      .slice(0, 5)
+      .map((t) => {
+        const about = lens.aboutHandle(t);
+        return `(${t.kind}${about ? ` ${t.kind === 'opinion' ? 'of' : 'about'} #${about}` : ''}, ${lens.current(t)}/10) ${t.text}`;
+      });
+    if (strong.length) lines.push(`  Strongly: ${strong.join(' · ')}`);
+  }
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);
+  const toward = relationLine(deps, storyId, defs, holdersFor(deps, storyId), holder.id, others, { kind: 'narrator' });
+  if (toward) lines.push(`  Toward others: ${toward}`);
   return lines;
 }
 
@@ -416,19 +488,29 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
 
   const p = input.player;
   const said = [p.say?.trim() ? `says "${p.say.trim()}"${p.to ? ` to ${p.to}` : ''}` : '', p.do?.trim() ? `tries: ${p.do.trim()}` : ''].filter(Boolean).join(' · ');
-  const playerLine = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}: ${said || 'waits.'}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
+  const who = `The player${player ? ` (${h(holders.get(player.objectId)?.handle)})` : ''}`;
+  // Words and actions in the order they were typed (docs/10 §6).
+  const ordered = mixedBeats(p.beats)
+    ? `${who}, in this order${p.to ? ` (speaking to ${p.to})` : ''}:\n${p.beats!.map((b, i) => `${i + 1}. ${b.kind === 'say' ? `says "${b.text}"` : `tries: ${b.text}`}`).join('\n')}`
+    : `${who}: ${said || 'waits.'}`;
+  const playerLine = `${ordered}${p.ooc?.trim() ? `\nNote to you from the player (out of character): ${p.ooc.trim()}` : ''}`;
   parts.push(playerLine);
-  if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false).join('\n'));
+  const everyone = [...input.presentIds, ...(player ? [player.objectId] : [])];
+  if (player) parts.push(sheetBlock(deps, storyId, defs, holders.get(player.objectId)!, false, everyone).join('\n'));
 
   const byId = new Map(input.declarations.map((d) => [d.objectId, d]));
   const present = input.presentIds.filter((id) => id !== player?.objectId && holders.has(id));
   if (present.length) {
     const blocks = present.map((oid) => {
-      const lines = sheetBlock(deps, storyId, defs, holders.get(oid)!, true);
+      const lines = sheetBlock(deps, storyId, defs, holders.get(oid)!, true, everyone);
       const d = byId.get(oid);
       if (!d || d.status === 'idle') lines.push('  This round: not acting.');
       else if (d.status === 'unavailable') lines.push('  This round: unavailable (voice them briefly yourself, in character).');
-      else {
+      else if (d.beats?.length) {
+        // In the order the character gave (docs/10 §6).
+        const seq = d.beats.map((b) => (b.kind === 'say' ? `says "${b.text}"` : `tries: ${b.text}`)).join(' → ');
+        lines.push(`  This round, in this order${d.to ? ` (speaking to ${d.to})` : ''}: ${seq}${d.state?.trim() ? ` · feels: "${d.state.trim()}"` : ''}`);
+      } else {
         const bits = [
           d.say?.trim() ? `says "${d.say.trim()}"${d.to ? ` to ${d.to}` : ''}` : 'says nothing',
           d.intent?.trim() ? `tries: ${d.intent.trim()}` : '',
@@ -441,6 +523,10 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
     parts.push(`Characters present:\n${blocks.join('\n')}`);
   }
 
+  // Places and things with their #handles, so the block reuses them instead of naming them afresh (docs/10 §5.1d).
+  const scene = story.currentSceneId ? deps.stories.getScene(story.currentSceneId) : undefined;
+  const things = placesAndThings(deps, storyId, scene);
+  if (things) parts.push(things);
   const world = valueLine(deps, storyId, defs, holders.get('world')!, { kind: 'narrator' }, true);
   if (world) parts.push(`The world: ${world}`);
   parts.push(`Time: ${formatGameClock(story.clockMin)}`);
@@ -451,7 +537,7 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
   const declared = [p.say ?? '', p.do ?? '', ...input.declarations.flatMap((d) => [d.say ?? '', d.intent ?? ''])].join('\n');
   const chosen = chooseThoughts(deps, storyId, NARRATOR_OWNER, threadWindow(deps, recap, log), active, declared, story.settings.minds.thoughtRecallTokens);
   const notes = [...chosen.pinnedNew, ...chosen.recalled];
-  if (notes.length) parts.push(`Your notes in mind:\n${notes.map(renderThought).join('\n')}`);
+  if (notes.length) parts.push(`Your notes in mind:\n${notes.map(chosen.render).join('\n')}`);
 
   const tagsInUse = new Set<string>();
   for (const oid of present) for (const v of deps.thoughts.vocabulary(storyId, oid)) tagsInUse.add(v.tag);

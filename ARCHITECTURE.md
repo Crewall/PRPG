@@ -75,7 +75,9 @@ src/
     seed.ts             minds_seed job: a mind for a newly introduced character (seedContext: what it reads)
     ties.ts             how characters are related (holder → other), shown in prompts and sheets
     variables.ts        variable definitions, validation, visibility, the change pipeline, rendering
-    thoughts.ts         remember/forget preparation, recall selection, tag mentions
+    thoughts.ts         kinds and importance, remember/revise preparation, fading, recall selection, tag mentions
+    places.ts           places and things: matching the narrator's names to what exists, the narrator's list
+    focus.ts            how much each character says: focus tiers, limits, holding a reply to them
     text.ts             handles, tag normalization, word limits
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
@@ -210,7 +212,9 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `rules` | unused (the overseer was never built) |
 | `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
-| `thoughts` / `thought_tags` | Minds: self-written memories with tags, pinned / active / revoked |
+| `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded |
+| `character_met` | Minds: pairs of characters who have met (relation variables exist for them) |
+| `undo_slots` | one Revert step per story: the full state saved before a regenerate, Edit, remove or edit |
 | `name_knowledge` | Minds: who knows whose name (viewer → subject) |
 | `character_ties` | Minds: how one character relates to another, from the holder's side ("older sister") |
 
@@ -282,7 +286,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 253 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 288 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
@@ -297,8 +301,7 @@ in that style.
 - The Anthropic driver always sends `temperature` and prefills `{` for JSON; current Claude models reject both
   (fix planned as M1b, low priority).
 - Classic and NPC Story Mode rebuild prompts every turn, so provider caches rarely hit (Minds threads fix this).
-- Minds: dialogue is manual only (automatic mode is a TODO); "known as" names per observer and relation variables
-  are not built; Retry replaces the last reply (no branching yet); switching a legacy story to Minds keeps the
+- Minds: dialogue is manual only (automatic mode is a TODO); Retry replaces the last reply (no branching yet); switching a legacy story to Minds keeps the
   transcript but the minds start fresh (doc 10 §14).
 - The legacy engines' code (classic pipeline, NPC Story Mode, scribes, memory maintenance, overseer, planner) is
   still in the tree until M9.

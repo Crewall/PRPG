@@ -8,9 +8,9 @@ import { estimateTokens } from '../util/tokens.ts';
 import { NARRATOR_OWNER } from './builders.ts';
 import { splitNarratorReply } from './contracts.ts';
 import { clampWords } from './text.ts';
-import { renderThought } from './thoughts.ts';
+import { alwaysOn } from './thoughts.ts';
 import type { Thought } from './thoughts.ts';
-import { applyThoughtOps } from './service.ts';
+import { applyThoughtOps, thoughtLens } from './service.ts';
 import type { RoundDeps } from './round.ts';
 
 // Thread compaction (docs/10 §8.4). When a thread's live log grows past its
@@ -115,11 +115,12 @@ function renderFolded(plan: CompactionPlan): string {
  * characters, their tag vocabulary; for the narrator, the roster.
  */
 function renderRecap(deps: RoundDeps, storyId: string, plan: CompactionPlan, text: string, pinned: Thought[]): string {
+  const { render } = thoughtLens(deps, storyId);
   const owner = plan.kind === 'character' ? plan.objectId! : NARRATOR_OWNER;
   const parts: string[] = [];
   if (plan.kind === 'character') {
     parts.push(`What you remember from earlier (your older rounds, in your own words):\n${text}`);
-    if (pinned.length) parts.push(`Always on your mind:\n${pinned.map(renderThought).join('\n')}`);
+    if (pinned.length) parts.push(`Always on your mind:\n${pinned.map(render).join('\n')}`);
     const vocab = deps.thoughts.vocabulary(storyId, owner).map((v) => v.tag);
     if (vocab.length) parts.push(`Your tags so far: ${[...vocab].sort().join(', ')}`);
   } else {
@@ -134,7 +135,7 @@ function renderRecap(deps: RoundDeps, storyId: string, plan: CompactionPlan, tex
         return `- ${handleOf(deps, s.objectId)} ${name}${s.objectId === player?.objectId ? ' (the player character)' : ''}${look}`;
       });
     if (roster.length) parts.push(`Characters so far:\n${roster.join('\n')}`);
-    if (pinned.length) parts.push(`Your pinned notes:\n${pinned.map(renderThought).join('\n')}`);
+    if (pinned.length) parts.push(`Your pinned notes:\n${pinned.map(render).join('\n')}`);
   }
   return parts.join('\n\n');
 }
@@ -179,8 +180,11 @@ export function createMindsCompactHandler(deps: RoundDeps): JobHandler {
       const live = deps.threads.log(sessionId);
       const same = plan.fold.every((m, i) => live[i]?.id === m.id) && deps.threads.recap(sessionId)?.id === priorRecap?.id;
       if (!same) return;
+      // The turn that asked for it was undone while the compactor wrote (docs/10 §10a): nothing to do.
+      if (job.turnId && deps.stories.getTurn(job.turnId)?.status !== 'complete') return;
       const owner = plan.kind === 'character' ? plan.objectId! : NARRATOR_OWNER;
-      const pinned = deps.thoughts.list(storyId, owner).filter((t) => t.pinned);
+      // Always on their mind (docs/11 §5.9): the agenda, pinned and 9–10 thoughts.
+      const pinned = deps.thoughts.list(storyId, owner).filter(alwaysOn).sort((a, b) => Number(b.kind === 'agenda') - Number(a.kind === 'agenda') || a.seq - b.seq);
       deps.threads.replaceRecap(sessionId, renderRecap(deps, storyId, plan, text, pinned), job.turnId ?? null);
       deps.threads.markCompacted(plan.fold.map((m) => m.id));
       // The recap restates them, so the builders count them as shown (docs/10 §8: never repeat what the thread holds).

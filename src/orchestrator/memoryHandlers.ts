@@ -352,6 +352,18 @@ export function mergeMemoryObjects(deps: HandlerDeps, keepId: string, mergeId: s
       deps.db.prepare(`UPDATE scenes SET active_npc_ids = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(next), now, r.id);
     }
 
+    // 4b. Places and things (Minds): a scene's location and the things in view follow the merge.
+    deps.db.prepare(`UPDATE scenes SET location_object_id = ?, updated_at = ? WHERE story_id = ? AND location_object_id = ?`).run(keepId, now, storyId, mergeId);
+    if (merge.handle) {
+      const keepH = deps.memory.ensureHandle(keepId);
+      for (const r of deps.db.prepare(`SELECT id, items_json FROM scenes WHERE story_id = ?`).all<Row>(storyId)) {
+        const items = JSON.parse((r.items_json as string) || '[]') as string[];
+        if (!items.includes(merge.handle)) continue;
+        const next = Array.from(new Set(items.map((x) => (x === merge.handle ? keepH ?? x : x))));
+        deps.db.prepare(`UPDATE scenes SET items_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(next), now, r.id);
+      }
+    }
+
     // 5. NPC agent sessions: follow the merge unless the kept object already
     // has one (then the merged object's session is dropped — thread_log keeps
     // its history).

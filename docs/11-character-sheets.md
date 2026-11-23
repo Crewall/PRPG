@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -191,8 +191,10 @@ that needs them instead of living only in the prose.
 
 ## 3. State
 
-- **One sentence**, ≤ 25 words: the character's current emotional and/or physical condition. Example:
-  "Bruised ribs, adrenaline still high, suspicious of everyone."
+- **One sentence**, ≤ 25 words: the character's current **physical and emotional condition, nothing else**.
+  Example: "Bruised ribs, adrenaline still high, scared." (Settled after a play test where plans, opinions of
+  people and facts piled up in the state.) Plans go to the agenda, views of people to opinions, facts to notes
+  (§5.6); the character, narrator and seeder prompts say so.
 - **Written by:** the holder (a proposal in its reply, usually emotional) and the narrator (in the round block,
   final, usually physical consequences). In the same round, the narrator's version wins. The user can change it
   in advanced mode (normal mode: own character only).
@@ -234,13 +236,14 @@ it, who sees it and who may change it, plus guidance for the AIs on when and how
 | `flag` | — | true / false | has_met_player, is_disguised |
 | `list` | `maxItems`, `itemMaxWords` | list of short strings | inventory, conditions, known passwords |
 
-Later: relation variables (a value per holder × target) and derived variables or triggers (doc 10 §14).
+Relation variables (a value per pair of characters) are §4.9. Later: derived variables or triggers (doc 10 §14).
 
 ### 4.3 Scope
 
 - `character` values exist for every holder `appliesTo` selects; a holder created later gets the default (or a
   seeded value).
 - `world` values exist once (holder `world`), e.g. alarm level, weather, day count, faction standing.
+- `relation` values exist per pair of characters who have met (§4.9), e.g. Mira's trust in Agnes.
 
 ### 4.4 Visibility and changers
 
@@ -316,9 +319,30 @@ mode shows it as a per-holder timeline. Rewind deletes the rows written after th
 
 ### 4.8 Scenario editor and templates
 
-**Story options → Minds engine → Scenario variables** (also on the Cast tab): a list of definitions with add / edit / reorder / delete. Deleting a definition
-that has values asks first. The editor shows a live preview of how a character and the narrator will see it
-(§4.5). Templates are only starting points that fill the list, and the user edits from there. Examples, not final:
+**Story options → Minds engine → Scenario variables** (also on the Cast tab). Rebuilt after a play test asked for a
+"fluent" editor; the first version was a technical form (key, type, a free-text "all, player, npcs, or #handles"
+field).
+
+- **Three groups,** each with its own "+ Add": **The world** (one value for the story), **Each character** (every
+  character, or the player, or the others, or chosen characters), **Between characters** (§4.9).
+- **Quick start presets** per group, one tap each, then editable: world: weather, day, alarm, supplies; each
+  character: health, stamina, mood, carrying, money, suspicion of the player; between characters: trust,
+  affection, respect, fear, debt.
+- **Each variable is a card** with a plain sentence instead of codes: "**Health**: a number 0–10, starts at 10.
+  Every character has one. They see it; the narrator changes it." Tap to edit in place; ↑ ↓ to reorder; × to
+  delete.
+- **The form asks in plain words**, in this order: *Name* (the key is made from it; editable under "More");
+  *What kind of value* (buttons: Number · Words · One of a list · Yes / no · A list of things) with only that
+  kind's fields; *Who has it* (buttons, and for chosen characters a checklist of the cast by name); *Who can see
+  it* (three cards: Everyone present · Only them (and the narrator) · Only the narrator); *Who changes it*
+  (the narrator, they themselves); *What it means* and *When it changes* (for the AIs, with example
+  placeholders). "More" holds the key, unit, largest change per round and labelled ranges.
+- Problems show on the card they belong to as you type (the server's validation, through the preview call).
+- The live preview of how a character and the narrator read it stays at the bottom (§4.5).
+- **Values** are edited where they live: each character's sheet (§5.10), the world card on the Cast tab
+  (advanced mode).
+
+Templates are only starting points that fill the list, and the user edits from there. Examples, not final:
 
 | Template | Variables |
 |---|---|
@@ -327,6 +351,31 @@ that has values asks first. The editor shows a live preview of how a character a
 | Survival | supplies number ≥ 0 (world, public) · weather choice (world, public) · day number (world, public) · exhaustion 0–10 (self, narrator) |
 
 Saving your own scenarios as templates is a TODO (doc 10 §14).
+
+### 4.9 Relation variables
+
+A **relation variable** holds one value per pair of characters: Mira's trust in Agnes, Agnes's debt to Rin.
+Settled with the owner: pairs exist **for characters who have met**.
+
+- **Definition:** `scope: "relation"`, plus `mutual` (default false). One-way: Mira → Agnes and Agnes → Mira are
+  two values (her trust in her ≠ hers in her). Mutual: one shared value per pair ("rivalry"). `appliesTo`
+  selects the *holder* side (all · player · npcs · chosen); the other side is any character.
+- **Pairs:** two characters have met once they were present in the same round (both in the scene, the player
+  character included) or are tied (§2.6). Recorded in `character_met` (covered by rewind). A pair that never
+  changed reads the default.
+- **Storage:** `variable_values` with the holder `<from id>><to id>` (mutual: the two ids in sorted order); the
+  change log uses the same holder.
+- **Visibility:** `self` = the holder side sees its own value toward each person (mutual: both sides);
+  `public` = anyone present sees it ("visibly: trust #mira → #agnes 2/10"); `hidden` = narrator only.
+  `changedBy: self` means the holder side may change its own value.
+- **The AIs see:** a character, in its round message, its values toward the people present ("Toward others:
+  trust #agnes 2/10 · #rin 9/10"), with the definitions in its system prompt; the narrator, on each present
+  character's sheet, their values toward the others present ("Toward others: trust → #agnes 2/10").
+- **Changing:** the round block's `vars` entry takes `"to"`: `{ "who": "#mira", "to": "#agnes", "key": "trust",
+  "delta": -2 }`; a character proposes `{ "key": "trust", "to": "#agnes", "delta": -1 }` for its own side. The same
+  rules apply (§4.6): known key, the pair has met, changer allowed, type and range.
+- **The sheet** (§5.10) has a "Toward others" table: one row per person met, one column per relation variable,
+  editable in advanced mode.
 
 ## 5. Thoughts (self-written memory)
 
@@ -349,9 +398,14 @@ app can bring the right ones back at the right time.
 | `owner` | The character's object id, or `narrator`. |
 | `seq` → handle `t<seq>` | Short per-owner id the model uses (`t12`). |
 | `text` | One statement, ≤ 40 words, first person or factual: "Marta keeps the ledger under the counter." |
+| `kind` | `agenda` · `opinion` · `feeling` · `note` (§5.6). Older thoughts are notes. |
+| `importance` | 1–10 as written (§5.6); the current importance fades (§5.7). Older thoughts are 5. |
+| `about` | For opinions and feelings: the object id it is about. |
+| `renewed_clock_min` | When it was written, revised or last came up (§5.7). |
+| `revises` | The thought this one replaced (§5.8). |
 | `tags` | 0–6 tags (§5.3). |
 | `pinned` | Always delivered (see §5.4). Untagged thoughts are pinned automatically, since nothing could recall them. |
-| `status` | `active` · `revoked` (soft; history kept). |
+| `status` | `active` · `revoked` (forgotten) · `revised` (replaced, §5.8) · `faded` (§5.7). History kept. |
 | `source` | `self` · `seed` · `compactor` (proposal) · `user`. |
 | `created_clock_min` | The in-story time it was written. Shown with the thought (`t12 · Day 2, 19:40 [tags] text`) so a character keeps events in order. Empty for thoughts written before it existed. |
 | bookkeeping | `created_turn_id`, `revoked_turn_id`, `last_recalled_turn_id`, `recall_count`. |
@@ -417,6 +471,86 @@ tagged ones come back when something related happens. Forget thoughts that turne
 or no longer matter. Your memory is private — no one else reads it.
 ```
 
+### 5.6 Kinds, importance and what is worth noting (settled with the owner)
+
+Thoughts are a character's **memory of what matters**, not a log. After a play test the owner asked for marked,
+rated thoughts: deep feelings, impressions of the people that matter, the character's own goals, written briefly
+each round when something important happened, fading when old.
+
+**Kinds** (`kind`):
+
+| Kind | What it holds | `about` | Fades |
+|---|---|---|---|
+| `agenda` | What they are after and how: a goal or a plan. At most 3 active per character. | — | never; dropped or revised when done |
+| `opinion` | What they think of someone (or something): an impression, a judgement. | required (#handle) | by importance |
+| `feeling` | A deep feeling: love, fear, guilt, a grudge, a longing. | optional | by importance |
+| `note` | A fact or event worth keeping: something learned, a promise, a secret. | optional | by importance |
+
+**Importance** (`importance`, 1–10, set by the writer, editable by the user):
+
+- 1–3 a passing detail · 4–6 matters for now · 7–8 strong: it shapes how they act · 9–10 defining: a vow, a
+  life-changing event, love or hatred.
+- **8–10 never fade.** **9–10 and the agenda are always on their mind** (like pinned).
+
+**What is worth noting.** The character prompt asks for a note only when something happened that matters to
+them, at most 3 per reply, a few words to one sentence each; trivia is skipped. Conflicting opinions about the
+same person may stand side by side: that is ambivalence, and the sheet shows them together.
+
+### 5.7 Fading (settled with the owner: fade by importance)
+
+- Each thought has `renewed_clock_min`: when it was written, last revised, or last came up: recalled into a round
+  message, restated, or already in the owner's thread and relevant again (its tags are active or its subject is
+  present) in a round the owner acts.
+- Its **current importance** = importance − one point per `minds.fadeHours` in-story hours since it was renewed
+  (default 8 hours, Story options → Minds engine). Agenda items, pinned thoughts and importance 8–10 don't fade.
+- At 0 the thought **fades**: status `faded`. It is no longer recalled or shown to its owner; it stays in the sheet
+  under "Faded", where the user can restore it (renewed now). Fading runs at the end of every round, in the same
+  transaction as the rest, so rewind restores it.
+- The narrator's notes don't fade.
+
+### 5.8 Revising
+
+`revise: [{ "id": "t7", "text": "…", "importance": 6 }]` (at most 3 per reply) replaces a thought: the old one
+becomes `revised` (kept as history: the sheet shows "was: …"), a new one takes its place with the same kind,
+`about` and tags unless given, and `revises` pointing at the old one. `forget` stays for dropping a thought.
+
+### 5.9 How thoughts reach the minds
+
+- **Rendering:** `t12 · Day 2, 19:40 · opinion of #agnes, 7/10 [caseworker] She says what the file says, not
+  what she sees.` Agenda: `t3 · agenda · Keep Agnes out of the foster system.` A note: `t9 · Day 1, 08:10 · 5/10
+  [kettle] Rin promised the copper kettle.`
+- **The character's round message:** "Your agenda:" and "Always on your mind:" (agenda, pinned and 9–10, each
+  shown once per thread window as pinned thoughts are, §5.4), then "You recall:".
+- **Recall score** = 2 × matching tags + 2 if its `about` is present + current importance ÷ 2 + recency; the
+  `about` person counts as a tag. Taking the best within `thoughtRecallTokens`, as before. Recalled thoughts are
+  renewed.
+- **The narrator** (settled with the owner) sees, on each present character's sheet in its round message, their
+  agenda and their opinions and feelings of current importance 7+: `Agenda: …` / `Strongly: (opinion of #agnes,
+  8) …`. Everything else stays private, unless `narratorSeesThoughts` is on.
+- **The seeder** writes the first thoughts with kinds and importance: one or two agenda items, opinions of the
+  people present and tied, deep feelings the story or the hand-over implies, and key notes.
+- **The compactor's** recap keeps what the high-importance thoughts point to; the recap lists the always-on
+  thoughts (agenda, pinned, 9–10) in full.
+
+### 5.10 The character sheet (advanced mode; settled with the owner)
+
+Advanced mode → a character's card → **Sheet**: everything about one mind on one page, each part editable in
+place.
+
+- **Profile:** name, pronouns, known-as, appearance, "In short", description, state, model tier.
+- **Variables:** every variable they hold, with inline editors (number field, text, choice, yes/no, list);
+  hidden ones marked.
+- **Toward others:** relation variables, one row per person met (§4.9).
+- **Agenda:** up to 3 goals, editable, with add.
+- **Opinions and feelings, by person:** grouped under each person (as the character knows them), with
+  importance shown as a 1–10 bar; mixed opinions sit together.
+- **Notes:** the other thoughts, highest current importance first.
+- **Faded / revised / forgotten:** collapsed; faded ones can be restored.
+- Each thought: kind, about, importance (current and written), text, tags, pin, forget; all editable. New
+  thoughts can be added with kind, about and importance.
+
+Normal mode keeps the public card for others and your own character's sheet.
+
 ## 6. Roster and handles
 
 - Every roster object (`memory_objects`) gets a **handle**, unique within the story: `#` + a slug of the name
@@ -430,7 +564,10 @@ or no longer matter. Your memory is private — no one else reads it.
 ## 7. Data model (migration `007-minds-sheets.sql`)
 
 As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
-(`id, story_id, key, sort, def_json`), because the shape differs per type. Handles are stored without the `#`
+(`id, story_id, key, sort, def_json`), because the shape differs per type. Later migrations: `013-minds-ties.sql`
+(`character_sheets.concept`, `character_ties`), `014-minds-thoughts-v2.sql` (`thoughts.kind`, `importance`,
+`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`); relation values
+use `variable_values.holder = "<from>><to>"`. Handles are stored without the `#`
 (`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 
 ```sql

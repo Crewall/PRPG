@@ -6,7 +6,7 @@ import { renderPrompt } from '../agents/prompts.ts';
 import { renderRecentStory } from '../orchestrator/handlers.ts';
 import { formatGameClock } from '../util/gameClock.ts';
 import { applyChanges, applyThoughtOps, holdersFor } from './service.ts';
-import { STATE_KEY, appliesTo, renderRange } from './variables.ts';
+import { STATE_KEY, appliesTo, holdsRelation, relationHolder, renderRange } from './variables.ts';
 import { knowsName, namesOn } from './names.ts';
 import { hereFromScene, renderHere } from './builders.ts';
 import { setTie, tieSummary } from './ties.ts';
@@ -86,6 +86,9 @@ export function seedContext(deps: RoundDeps, storyId: string, objectId: string):
   const recap = deps.threads.recap(narratorSession)?.content.trim();
   const seen = perceived(deps, storyId, objectId);
   const variables = defs.map((d) => `- ${d.key} (${renderRange(d)}; ${VISIBILITY[d.visibility]}): ${d.description || d.label}`);
+  for (const d of deps.variables.listDefs(storyId).filter((x) => holdsRelation(x, holder))) {
+    variables.push(`- ${d.key} (${renderRange(d)}; toward each person they have met, as { "#handle": value }; ${VISIBILITY[d.visibility]}): ${d.description || d.label}`);
+  }
 
   return [
     `The premise: ${s.premise.trim() || '(none given)'}`,
@@ -113,11 +116,15 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     const obj = deps.memory.getObject(objectId);
     const sheet = deps.sheets.get(objectId);
     if (!story || !obj || !sheet) return; // deleted or rewound meanwhile
+    // Work from a turn that was undone does nothing (docs/10 §10a).
+    const turnGone = () => !!job.turnId && !deps.stories.getTurn(job.turnId);
+    if (turnGone()) return;
     if (sheet.seeded && !force) return;
 
     const handle = obj.handle ?? deps.memory.ensureHandle(objectId)!;
     const holder = holdersFor(deps, storyId).get(objectId) ?? { id: objectId, isPlayer: false };
-    const defs = deps.variables.listDefs(storyId).filter((d) => appliesTo(d, holder));
+    const allDefs = deps.variables.listDefs(storyId);
+    const defs = allDefs.filter((d) => appliesTo(d, holder));
     const maxWords = story.settings.minds.descriptionMaxWords;
     const bound = deps.registry.getForRole('seeder', story.settings.roles.seeder);
     const session = deps.agents.ensureSession(storyId, 'seeder', bound.name, objectId);
@@ -130,7 +137,7 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     );
 
     const now = deps.sheets.get(objectId);
-    if (!now || !deps.memory.getObject(objectId)) return; // removed while generating
+    if (!now || !deps.memory.getObject(objectId) || turnGone()) return; // removed or undone while generating
     const description = clampWordsKeepLines(unescapeText(reply.description), maxWords);
     const state = clampWords(unescapeText(reply.state).replace(/\s*\n\s*/g, ' '), 40).text;
     deps.db.transaction(() => {
@@ -143,7 +150,14 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
       const proposals: Proposal[] = [];
       if (state && (force || !now.state.trim())) proposals.push({ change: { holder: objectId, key: STATE_KEY, op: 'set', value: state }, by: 'seed' });
       for (const [key, value] of Object.entries(reply.values)) {
-        if (defs.some((d) => d.key === key)) proposals.push({ change: { holder: objectId, key, op: 'set', value }, by: 'seed' });
+        const def = allDefs.find((d) => d.key === key);
+        if (def?.scope === 'relation' && value && typeof value === 'object' && !Array.isArray(value)) {
+          // Toward each person: { "#handle": value } (docs/11 §4.9).
+          for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+            const other = deps.memory.findByHandle(storyId, k.replace(/^#/, ''));
+            if (other && other.id !== objectId) proposals.push({ change: { holder: relationHolder(def, objectId, other.id), key, op: 'set', value: v }, by: 'seed' });
+          }
+        } else if (defs.some((d) => d.key === key)) proposals.push({ change: { holder: objectId, key, op: 'set', value }, by: 'seed' });
       }
       if (proposals.length) applyChanges(deps, storyId, proposals, job.turnId ?? null);
       // Ties the story established but the narrator didn't record (docs/11 §2.6): added, never changed.

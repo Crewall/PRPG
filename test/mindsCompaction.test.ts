@@ -99,7 +99,7 @@ describe('thread compaction', () => {
     // The thread now: recap + the newest round; folded rows kept but flagged.
     const recap = h.app.threads.recap(marta)!;
     expect(recap.content).toMatch(/^What you remember from earlier \(your older rounds, in your own words\):\nA tall stranger, Kael/);
-    expect(recap.content).toContain('Always on your mind:\nt1 · Day 1, 08:15 Never show anyone the ledger.');
+    expect(recap.content).toContain('Always on your mind:\nt1 · Day 1, 08:15 · 5/10 Never show anyone the ledger.');
     expect(recap.content).toContain('Your tags so far: #kael');
     expect(h.app.threads.log(marta).map((m) => m.id)).toEqual(before.slice(2).map((m) => m.id));
     // The proposed pin is a new pinned thought, shown on the next turn so Marta can keep or forget it.
@@ -116,7 +116,7 @@ describe('thread compaction', () => {
     expect(next.messages[0].content).toBe(`${recap.content}\n\n${before[2].content}`);
     expect(next.messages[1].content).toBe(before[3].content);
     const roundMsg = next.messages[2].content;
-    expect(roundMsg).toMatch(/Always on your mind:\nt3 · Day 1, \d\d:\d\d \[#kael\] Kael is not who he says he is\./);
+    expect(roundMsg).toMatch(/Always on your mind:\nt3 · Day 1, \d\d:\d\d · 5\/10 \[#kael\] Kael is not who he says he is\./);
     expect(roundMsg).not.toContain('Never show anyone the ledger'); // restated in the recap, not repeated
   });
 
@@ -139,7 +139,7 @@ describe('thread compaction', () => {
     const first = h.app.threads.recap(narrator)!;
     expect(first.content).toContain('The story so far (the older rounds, summarised):\nKael arrived');
     expect(first.content).toContain('Characters so far:\n- #kael Kael (the player character) — Tall, rain-soaked.\n- #marta Marta — Stout, flour on her apron.\n- #tom Tom — Thin, nervous.');
-    expect(first.content).toContain('Your pinned notes:\nt1 · Day 1, 08:15 Marta owes the smugglers money.');
+    expect(first.content).toContain('Your pinned notes:\nt1 · Day 1, 08:15 · 5/10 Marta owes the smugglers money.');
 
     h.script.narrator.push(round('Tom coughs.', { briefs: {} }));
     await h.play('"Quiet night?"');

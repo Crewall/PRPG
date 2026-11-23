@@ -33,11 +33,13 @@ import { truncateToTokens } from './contextBuilder.ts';
 import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import type { Story, Turn } from '../domain.ts';
 import type { Db } from '../db/db.ts';
-import type { SheetStore, ThoughtStore, VariableStore, NameStore, TieStore } from '../db/stores/mindsStore.ts';
+import type { SheetStore, ThoughtStore, VariableStore, NameStore, TieStore, MetStore } from '../db/stores/mindsStore.ts';
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
 import { runDialogueExchange } from '../minds/dialogue.ts';
-import type { RoundDeps } from '../minds/round.ts';
+import type { ReplayInput, RoundDeps } from '../minds/round.ts';
+import { NO_DIRECTION } from '../minds/director.ts';
+import type { DirectionResult } from '../minds/director.ts';
 
 // What the pipeline emits as a turn progresses. The WS layer implements this to
 // forward events to the client; tests implement it to collect events.
@@ -71,6 +73,7 @@ export interface PipelineDeps {
   thoughts: ThoughtStore;
   names: NameStore;
   ties: TieStore;
+  met: MetStore;
   threads: ThreadStore;
   verbosityOverride?: () => Record<string, string>;
 }
@@ -78,11 +81,18 @@ export interface PipelineDeps {
 export interface RunOptions {
   /** Minds engine: characters the user forces to act this round. */
   force?: string[];
+  /** Minds engine: characters the user gives the floor this round (the sole focus, docs/10 §5.1e). */
+  floor?: string[];
+  /** Minds engine: replay the round with the narrator's prose edited (docs/10 §10a). Internal. */
+  replay?: ReplayInput;
   /** Minds engine, dialogue mode: talk directly with this character (one exchange, nobody else called). */
   dialogue?: { partner: string };
 }
 
 /** The turn the client meant to act on is no longer the story's last one. */
+/** An emitter that discards everything (a replayed round has no live listener). */
+const nullEmitter = (): TurnEmitter => ({ accepted: () => {}, status: () => {}, delta: () => {}, final: () => {}, rejected: () => {}, error: () => {} });
+
 export class StaleTurnError extends Error {
   constructor() {
     super('the story changed since this page showed it — reload to see its latest message');
@@ -134,16 +144,21 @@ export class TurnPipeline {
    * snapshot — summaries, memory, scenes, sessions, transcript — and deletes
    * the turn. Throws when the story has no turns.
    */
-  async rewind(storyId: string, opts: { expectTurnId?: string } = {}): Promise<RewindResult> {
+  async rewind(storyId: string, opts: { expectTurnId?: string; action?: 'rewind' | 'remove' } = {}): Promise<RewindResult> {
     this.cancel(storyId); // halt any ongoing response; its turn becomes the one we delete
     return this.locks.withStory(storyId, async () => {
-      const { stories, events } = this.deps;
+      const { stories, events, snapshots } = this.deps;
       if (!stories.getStory(storyId)) throw new Error(`story '${storyId}' not found`);
       const last = stories.lastTurn(storyId);
       if (!last) throw new Error('nothing to rewind — the story has no turns yet');
       // The client says which turn it means to remove. If the story moved on (or that turn is already gone),
       // refuse rather than silently undoing an earlier, good turn.
       if (opts.expectTurnId && last.id !== opts.expectTurnId) throw new StaleTurnError();
+      // A complete exchange can be brought back once (docs/10 §10a); a failed attempt has nothing worth keeping.
+      if (last.status === 'complete') {
+        const remove = opts.action === 'remove';
+        snapshots.saveUndo(storyId, { action: remove ? 'remove' : 'rewind', label: remove ? 'Restore the removed exchange' : 'Restore the exchange you took back', fromIndex: last.index });
+      }
       const restored = this.undoTurn(storyId, last.id);
       events.emit({ t: 'story.rewound', storyId, turnId: last.id, playerInput: last.playerInput });
       return { turnId: last.id, playerInput: last.playerInput, restored };
@@ -167,6 +182,12 @@ export class TurnPipeline {
       if (!target || target.storyId !== storyId) return void out.error('', 'that message is no longer in the story — reload'), undefined;
       if (target.id !== last.id && !snapshots.has(target.id)) {
         return void out.error('', 'that reply is too far back to write again (only recent ones can be redone)'), undefined;
+      }
+      // What is about to be replaced can be brought back once (docs/10 §10a).
+      const replaced = stories.recentTurns(storyId, 200).filter((t) => t.index >= target.index);
+      if (replaced.some((t) => t.status === 'complete')) {
+        const n = replaced.filter((t) => t.status === 'complete').length;
+        snapshots.saveUndo(storyId, { action: 'regenerate', label: n > 1 ? `Bring back the ${n} replaced replies` : 'Bring back the previous reply', fromIndex: target.index });
       }
       const req = (target.meta.request ?? {}) as RunOptions;
       // Older dialogue turns kept no request: their partner is in the meta.
@@ -205,13 +226,68 @@ export class TurnPipeline {
   }
 
   async run(storyId: string, playerInput: string, out: TurnEmitter, opts: RunOptions = {}): Promise<Turn | undefined> {
-    return this.locks.withStory(storyId, () => this.runLocked(storyId, playerInput, out, opts));
+    return this.locks.withStory(storyId, () => {
+      // A new message moves the story on: the last destructive action can no longer be reverted (docs/10 §10a).
+      this.deps.snapshots.clearUndo(storyId);
+      return this.runLocked(storyId, playerInput, out, opts);
+    });
+  }
+
+  /**
+   * ✎ on the last reply of a Minds story (docs/10 §10a): everyone learns the edited version. The turn is taken
+   * back to its start and committed again with the same player input and the characters' replies byte-exact; the
+   * narrator's reply becomes the edited prose with its round block revised to match. Revert brings back the
+   * original. Returns undefined when the turn can't be replayed (then the edit is transcript-only).
+   */
+  async editReply(storyId: string, turnId: string, narration: string): Promise<Turn | undefined> {
+    this.cancel(storyId);
+    return this.locks.withStory(storyId, async () => {
+      const { stories, snapshots, db } = this.deps;
+      const story = stories.getStory(storyId);
+      const last = stories.lastTurn(storyId);
+      if (!story || story.settings.engine !== 'minds' || !last || last.id !== turnId || last.status !== 'complete') return undefined;
+      if (last.meta.mode === 'dialogue' || !last.meta.block || !snapshots.has(last.id) || !narration.trim()) return undefined;
+      // What the first run produced, read before the turn is taken back.
+      const called = ((last.meta.gate as { called?: string[] } | undefined)?.called ?? []) as string[];
+      const characterReplies = new Map<string, string>();
+      for (const oid of called) {
+        const row = db
+          .prepare(
+            `SELECT m.content AS content FROM agent_messages m JOIN agent_sessions s ON s.id = m.session_id
+             WHERE s.story_id = ? AND s.role = 'character' AND s.npc_object_id = ? AND m.turn_id = ? AND m.role = 'assistant' ORDER BY m.rowid DESC LIMIT 1`,
+          )
+          .get<{ content: string }>(storyId, oid, last.id);
+        if (row) characterReplies.set(oid, row.content);
+      }
+      const request = (last.meta.request ?? {}) as RunOptions;
+      const replay: ReplayInput = {
+        direction: (last.meta.direction as DirectionResult | undefined) ?? NO_DIRECTION,
+        characterReplies,
+        editedProse: narration,
+        originalBlock: last.meta.block,
+      };
+      snapshots.saveUndo(storyId, { action: 'edit-reply', label: 'Undo the edit (bring back the original reply)', fromIndex: last.index });
+      this.undoTurn(storyId, last.id);
+      return this.runLocked(storyId, last.playerInput, nullEmitter(), { ...request, replay });
+    });
+  }
+
+  /** Revert the last destructive action (docs/10 §10a). Returns what was undone, or undefined when nothing was saved. */
+  async undo(storyId: string): Promise<{ action: string; label: string } | undefined> {
+    this.cancel(storyId);
+    return this.locks.withStory(storyId, async () => {
+      const { snapshots, events } = this.deps;
+      const info = snapshots.undoInfo(storyId);
+      if (!info || !snapshots.applyUndo(storyId)) return undefined;
+      events.emit({ t: 'story.undone', storyId, action: info.action });
+      return { action: info.action, label: info.label };
+    });
   }
 
   private roundDeps(): RoundDeps {
     const d = this.deps;
     return {
-      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names, ties: d.ties,
+      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names, ties: d.ties, met: d.met,
       agents: d.agents, threads: d.threads, registry: d.registry, threadLog: d.threadLog, jobs: d.jobs, events: d.events,
       verbosityOverride: d.verbosityOverride,
     };
@@ -231,7 +307,11 @@ export class TurnPipeline {
     const turn = stories.appendTurn({ storyId, playerInput, status: 'streaming' });
     this.deps.snapshots.capture(storyId, turn.id, turn.index);
     // What was asked, so Retry can ask it again.
-    if (opts.dialogue || opts.force?.length) stories.updateTurn(turn.id, { meta: { request: { ...(opts.dialogue ? { dialogue: opts.dialogue } : {}), ...(opts.force?.length ? { force: opts.force } : {}) } } });
+    if (opts.dialogue || opts.force?.length || opts.floor?.length) {
+      stories.updateTurn(turn.id, {
+        meta: { request: { ...(opts.dialogue ? { dialogue: opts.dialogue } : {}), ...(opts.force?.length ? { force: opts.force } : {}), ...(opts.floor?.length ? { floor: opts.floor } : {}) } },
+      });
+    }
     out.accepted(turn.id);
 
     const aborter = new AbortController();
@@ -249,6 +329,8 @@ export class TurnPipeline {
           : await runMindsRound(this.roundDeps(), story, turn, playerInput, out, {
               signal: aborter.signal,
               force: opts.force,
+              floor: opts.floor,
+              replay: opts.replay,
               setStage: (s) => (stage = s),
             });
         out.final(finalTurn);

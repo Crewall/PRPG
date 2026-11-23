@@ -91,4 +91,25 @@ export const SCENARIO_TEMPLATES: ScenarioTemplate[] = [
       changeGuide: 'Raise after hard effort or lost sleep, lower with rest.',
     },
   ]),
+  T('relationships', 'Relationships', 'How each character feels toward each person they have met: trust, affection, and a shared rivalry.', [
+    {
+      key: 'trust', label: 'Trust', type: 'number', min: 0, max: 10, default: 5, maxStep: 2, scope: 'relation',
+      bands: [{ upTo: 2, label: 'distrusts' }, { upTo: 6, label: 'unsure' }, { upTo: 10, label: 'trusts' }],
+      visibility: 'self', changedBy: ['narrator', 'self'],
+      description: 'How much they trust that person. 0 = expects betrayal, 10 = would trust them with their life.',
+      changeGuide: 'Raise when they keep their word or take a risk for them; lower on lies, betrayal or threats.',
+    },
+    {
+      key: 'affection', label: 'Affection', type: 'number', min: 0, max: 10, default: 3, maxStep: 2, scope: 'relation',
+      visibility: 'self', changedBy: ['narrator', 'self'],
+      description: 'How much they like that person. 0 = loathing, 10 = love.',
+      changeGuide: 'Change it slowly, as shared moments, kindness or cruelty add up.',
+    },
+    {
+      key: 'rivalry', label: 'Rivalry', type: 'number', min: 0, max: 10, default: 0, maxStep: 2, scope: 'relation', mutual: true,
+      visibility: 'public', changedBy: ['narrator'],
+      description: 'Open competition between the two. 0 = none, 10 = bitter rivals.',
+      changeGuide: 'Raise when they compete or clash in front of others; lower when they make peace.',
+    },
+  ]),
 ];

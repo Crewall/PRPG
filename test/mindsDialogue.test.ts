@@ -15,8 +15,8 @@ describe('dialogue contracts', () => {
   });
 
   it('parses replies leniently and clamps them', () => {
-    const r = parseDialogueReply({ say: 'word '.repeat(90), gesture: null, act: '  ', remember: [{ text: 'x', tags: ['a'] }], state: 7 });
-    expect(r.say.split(' ')).toHaveLength(80);
+    const r = parseDialogueReply({ say: 'word '.repeat(600), gesture: null, act: '  ', remember: [{ text: 'x', tags: ['a'] }], state: 7 });
+    expect(r.say.split(' ')).toHaveLength(480); // the exchange holds it to the floor's limit
     expect(r.gesture).toBe('');
     expect(r.act).toBeUndefined(); // blank = no act
     expect(r.state).toBeUndefined();

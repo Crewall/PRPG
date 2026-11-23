@@ -164,9 +164,9 @@ describe('Minds thread builders', () => {
     const t1 = turn();
     queueForCharacter(deps, storyId, marta, 'Someone mentions the old mill in passing.', t1.id);
     const r1 = buildCharacterCall(deps, { storyId, objectId: marta, here: here(marta) });
-    expect(r1.roundMessage).toContain('Always on your mind:\nt1 · Day 1, 08:00 I keep the smugglers’ ledger under the counter.');
-    expect(r1.roundMessage).toContain('t2 · Day 1, 08:00 [#tom, debt] Tom owes me three silver.'); // #tom is present
-    expect(r1.roundMessage).toContain('t3 · Day 1, 08:00 [old-mill] The old mill'); // mentioned in what she perceived
+    expect(r1.roundMessage).toContain('Always on your mind:\nt1 · Day 1, 08:00 · 5/10 I keep the smugglers’ ledger under the counter.');
+    expect(r1.roundMessage).toContain('t2 · Day 1, 08:00 · 5/10 [#tom, debt] Tom owes me three silver.'); // #tom is present
+    expect(r1.roundMessage).toContain('t3 · Day 1, 08:00 · 5/10 [old-mill] The old mill'); // mentioned in what she perceived
     commitCall(deps, r1, '{"say":"","remember":[{"text":"The stranger wants the ledger.","tags":["ledger"]}]}', t1.id);
     applyThoughtOps(deps, storyId, marta, { remember: [{ text: 'The stranger wants the ledger.', tags: ['ledger'], pin: false }] }, 'self', t1.id);
 

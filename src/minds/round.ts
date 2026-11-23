@@ -4,7 +4,6 @@ import type { JobStore } from '../db/stores/jobStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
 import type { EventBus } from '../util/events.ts';
 import type { Story, Turn } from '../domain.ts';
-import type { ObjectType } from '../memory/model.ts';
 import { Storyteller } from '../agents/storyteller.ts';
 import { MindAgent } from '../agents/mindAgent.ts';
 import { renderPrompt } from '../agents/prompts.ts';
@@ -13,15 +12,17 @@ import { logger } from '../util/logger.ts';
 import { breakScene } from '../orchestrator/scenes.ts';
 import { buildCharacterCall, buildNarratorCall, commitCall, hereFromScene, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from './builders.ts';
 import type { Declaration, PreparedCall, ThreadDeps } from './builders.ts';
-import { emptyBlock, entryToOp, parsePlayerInput, parseRoundBlock, readRoundBlock, splitNarratorReply } from './contracts.ts';
+import { emptyBlock, entryToOp, mixedBeats, parsePlayerInput, parseRoundBlock, readCharacterReply, readRoundBlock, spokenLines, splitNarratorReply } from './contracts.ts';
+import { focusFor, focusLine, holdToLimits, limitsFor } from './focus.ts';
 import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.ts';
 import { chooseCallers } from './gate.ts';
 import type { GateCandidate } from './gate.ts';
-import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
-import { STATE_KEY, renderRange } from './variables.ts';
+import { applyChanges, applyThoughtOps, createCharacter, fadeThoughts, updateSheet } from './service.ts';
+import { STATE_KEY, relationHolder, relationParts, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { clampWords, isPlaceholder, isRealName, realValue, slugify } from './text.ts';
 import { setTie } from './ties.ts';
+import { applyObjects, matchObject } from './places.ts';
 import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { NO_DIRECTION, resolveDirection } from './director.ts';
@@ -51,6 +52,13 @@ export interface RoundOptions {
   signal: AbortSignal;
   /** Characters the user forces to act this round. */
   force?: string[];
+  /** Characters the user gives the floor this round (docs/10 §5.1e): they act, with the sole focus. */
+  floor?: string[];
+  /**
+   * Replay a round with the narrator's prose edited by the user (docs/10 §10a): no director, character or narrator
+   * calls — their stored outputs are used — and the round block is revised to match the edited prose.
+   */
+  replay?: ReplayInput;
   /** Which part of the round is running (for error messages). */
   setStage?: (stage: string) => void;
 }
@@ -174,7 +182,6 @@ const label = (deps: RoundDeps, oid: string) => {
   return `#${obj?.handle ?? deps.memory.ensureHandle(oid)} ${obj?.name ?? '?'}`;
 };
 
-const OBJECT_TYPES: ObjectType[] = ['character', 'item', 'location', 'faction', 'event', 'lore'];
 
 export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn, playerInput: string, out: RoundEmitter, opts: RoundOptions): Promise<Turn> {
   const t0 = Date.now();
@@ -225,29 +232,37 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   stage('direction');
   const direction: DirectionResult = dialogue.length
     ? NO_DIRECTION
-    : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
+    : opts.replay
+      ? opts.replay.direction
+      : await resolveDirection(deps, story, turn, decl, { presentIds, playerId, lastRound: previous, signal });
   const directed = direction.all || direction.to.length > 0;
+  const floor = new Set(opts.floor ?? []);
+  const forcedSet = new Set([...(opts.force ?? []), ...floor]);
   const gate = dialogue.length
     ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
     : directed
-      ? directedGate(presentIds, direction, new Set(opts.force ?? []), spotlight, mset.maxCharactersPerRound)
+      ? directedGate(presentIds, direction, forcedSet, spotlight, mset.maxCharactersPerRound)
       : chooseCallers({
           present: candidates,
           playerText: `${decl.say}\n${decl.do}`,
           spotlight,
           neverActed,
           actedLastRound: actedLast,
-          forced: new Set(opts.force ?? []),
+          forced: forcedSet,
           cap: mset.maxCharactersPerRound,
         });
+  // How much each called character says this round (docs/10 §5.1e).
+  const focus = new Map(gate.called.map((oid) => [oid, focusFor(oid, { called: gate.called, reasons: gate.reasons, direction, floor })]));
   const handleOf = (oid: string) => `#${deps.memory.getObject(oid)?.handle ?? deps.memory.ensureHandle(oid)}`;
   const playerTo = direction.all ? 'everyone' : direction.to.map(handleOf).join(', ');
 
   // ---- 2. Characters declare, in parallel ----
   const playerLabel = playerId ? label(deps, playerId) : 'The player character';
   // The player's words, as each character hears them right now (their name only if that character knows it).
+  // Separate lines stay separate, in order (docs/10 §6): "A room, please." … "And a meal."
+  const playerSpoken = spokenLines(decl.beats, decl.say);
   const heardNowFor = (viewer: string) =>
-    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: "${decl.say}"${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
+    mset.playerSpeechHeardImmediately && decl.say ? `${playerId ? labelFor(deps, storyId, viewer, playerId) : 'The player character'}: ${playerSpoken}${playerTo ? ` (to ${playerTo})` : ''}` : undefined;
   const heardNow = heardNowFor(NARRATOR_OWNER);
   let results: CharacterResult[] = [];
   if (gate.called.length) {
@@ -260,10 +275,18 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
           const bound = deps.registry.getForRole('character', sheet?.tierId ? `tier:${sheet.tierId}` : story.settings.roles.character);
           const handle = deps.memory.getObject(oid)?.handle ?? '';
           const tags = [...lastBlock.tags, ...(lastBlock.evoke[`#${handle}`] ?? lastBlock.evoke[handle] ?? [])];
-          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid) });
+          const f = focus.get(oid) ?? 'background';
+          const limits = limitsFor(f, mset.characterVerbosity);
+          const call = buildCharacterCall(deps, { storyId, objectId: oid, here: hereFromScene(deps, storyId, oid), situationTags: tags, now: heardNowFor(oid), focusLine: focusLine(f, limits) });
+          if (opts.replay) {
+            // The reply this character gave the first time, byte-exact (docs/10 §10a).
+            const raw = opts.replay.characterReplies.get(oid);
+            if (raw === undefined) return { objectId: oid, error: 'no reply to replay' };
+            return { objectId: oid, call, reply: holdToLimits(readCharacterReply(raw), limits), raw };
+          }
           const agent = new MindAgent({ session: deps.agents.getSession(call.sessionId)!, bound, threadLog: deps.threadLog, storyId });
           const { reply, raw } = await agent.declare(call.ctx, { turnId: turn.id, signal });
-          return { objectId: oid, call, reply, raw };
+          return { objectId: oid, call, reply: holdToLimits(reply, limits), raw };
         } catch (err) {
           if (signal.aborted) throw err; // a user cancel must still cancel the turn
           logger.warn('character call failed', { storyId, objectId: oid, err: (err as Error).message });
@@ -278,7 +301,16 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     if (!r && oid === partnerId && partnerAct) return { objectId: oid, status: 'acted', intent: partnerAct };
     if (!r) return { objectId: oid, status: 'idle' };
     if (!r.reply) return { objectId: oid, status: 'unavailable' };
-    return { objectId: oid, status: 'acted', say: r.reply.say, to: r.reply.to, intent: r.reply.intent, state: r.reply.state };
+    return {
+      objectId: oid,
+      status: 'acted',
+      say: r.reply.say,
+      to: r.reply.to,
+      intent: r.reply.intent,
+      state: r.reply.state,
+      ...(mixedBeats(r.reply.beats) ? { beats: r.reply.beats } : {}),
+      ...(focus.get(oid) ? { focus: focus.get(oid) } : {}),
+    };
   });
 
   // ---- 3. The narrator writes (streamed; the block never reaches the player) ----
@@ -303,7 +335,9 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
   const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
-  const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
+  const narratorText = opts.replay
+    ? await replayNarration(deps, story, turn, nCall.roundMessage, opts.replay, signal)
+    : await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
   if (!prose) throw new Error('the narrator wrote no story text (only a block)');
 
@@ -341,7 +375,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const r of results) {
       if (!r.call || !r.reply || r.raw === undefined) continue;
       commitCall(deps, r.call, r.raw, turn.id);
-      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, forget: r.reply.forget }, 'self', turn.id);
+      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, revise: r.reply.revise, forget: r.reply.forget }, 'self', turn.id);
       if (ops.notes.length) memoryNotes.set(r.objectId, ops.notes);
       changedIds.add(r.objectId);
     }
@@ -355,20 +389,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         if (r.changed) changedIds.add(r.playerId);
       }
     }
-    for (const o of block.objects) {
-      if (isPlaceholder(o.name)) continue;
-      o.line = realValue(o.line);
-      const existing = deps.memory.findByName(storyId, o.name) ?? (o.name.trim().startsWith('#') ? deps.memory.findByHandle(storyId, o.name.trim()) : undefined);
-      if (existing) {
-        // The narrator keeps places' and things' public one-liners current (docs/11 §2.4).
-        const line = o.line.trim();
-        if (line && existing.type !== 'character' && existing.summary !== line) deps.memory.updateObject(existing.id, { summary: line });
-        continue;
-      }
-      const type = OBJECT_TYPES.includes(o.type as ObjectType) && o.type !== 'character' ? (o.type as ObjectType) : 'item';
-      const name = o.name.trim().startsWith('#') ? o.name.trim().replace(/^#/, '').replace(/[-_]+/g, ' ') : o.name.trim();
-      deps.memory.createObject({ storyId, type, name, aliases: [], summary: o.line.trim(), salience: 0.5, status: 'active' });
-    }
+    // Places and things (docs/10 §5.1d): existing ones are matched, not named afresh; gone ones are marked gone.
+    const { gone: goneIds } = applyObjects(deps, storyId, block.objects);
     const current = () => deps.stories.getScene(deps.stories.getStory(storyId)!.currentSceneId!)!;
     for (const key of block.cast.exit) {
       const oid = resolveKey(deps, storyId, key, playerId);
@@ -428,39 +450,59 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       breakScene(deps, storyId, { title: block.scene.title, carryNpcs: current().activeNpcIds });
     }
     if (block.scene.location) {
-      let loc = resolveKey(deps, storyId, block.scene.location, playerId);
-      if (!loc || loc === 'world') {
+      let loc: string | undefined = matchObject(deps, storyId, block.scene.location).obj?.id;
+      if (!loc) {
         const name = block.scene.location.replace(/^#/, '').replace(/[-_]+/g, ' ').trim();
-        loc = name ? deps.memory.createObject({ storyId, type: 'location', name, aliases: [], summary: '', salience: 0.5, status: 'active' }).id : undefined;
+        loc = name && !isPlaceholder(name) ? deps.memory.createObject({ storyId, type: 'location', name, aliases: [], summary: '', salience: 0.5, status: 'active' }).id : undefined;
       }
       if (loc) deps.stories.setSceneLocation(current().id, loc);
     }
     if (block.scene.items) {
       const handles = block.scene.items
         .map((k) => {
-          const oid = resolveKey(deps, storyId, k, playerId);
-          if (oid && oid !== 'world') return deps.memory.ensureHandle(oid);
-          const name = k.replace(/^#/, '').replace(/[-_]+/g, ' ').trim();
-          return name ? deps.memory.createObject({ storyId, type: 'item', name, aliases: [], summary: '', salience: 0.4, status: 'active' }).handle : undefined;
+          if (isPlaceholder(k)) return undefined;
+          const m = matchObject(deps, storyId, k);
+          if (m.obj) return m.obj.type === 'character' || m.obj.status === 'destroyed' || m.gone ? undefined : deps.memory.ensureHandle(m.obj.id);
+          const name = m.name.trim();
+          return name && !m.gone ? deps.memory.createObject({ storyId, type: 'item', name, aliases: m.alias ? [m.alias] : [], summary: '', salience: 0.4, status: 'active' }).handle : undefined;
         })
         .filter((x): x is string => !!x);
-      deps.stories.setSceneItems(current().id, handles);
+      deps.stories.setSceneItems(current().id, [...new Set(handles)]);
+    } else if (goneIds.length) {
+      // A thing that is gone is no longer in view.
+      const goneHandles = new Set(goneIds.map((oid) => deps.memory.getObject(oid)?.handle));
+      const items = current().itemHandles ?? [];
+      if (items.some((x) => goneHandles.has(x))) deps.stories.setSceneItems(current().id, items.filter((x) => !goneHandles.has(x)));
     }
 
+    // Everyone in the scene now has met everyone else: relation variables exist for them (docs/11 §4.9).
+    deps.met?.meetAll(storyId, [...current().activeNpcIds, ...(playerId ? [playerId] : [])].filter((oid) => deps.sheets.get(oid)), turn.id);
+
     // 5c. Variables and states: characters' proposals first, then the narrator's (it wins on the same key).
+    const defsByKey = new Map(deps.variables.listDefs(storyId).map((d) => [d.key, d]));
+    /** The holder an entry changes: the character, or for a relation variable the pair toward `to`. */
+    const holderOf = (holder: string, v: (typeof block.vars)[number]): string | undefined => {
+      const def = defsByKey.get(v.key);
+      if (def?.scope !== 'relation') return holder;
+      const to = v.to ? resolveKey(deps, storyId, v.to, playerId) : undefined;
+      return holder !== 'world' && to && to !== 'world' && to !== holder ? relationHolder(def, holder, to) : undefined;
+    };
     const proposals: Proposal[] = [];
     for (const r of results) {
       if (!r.reply) continue;
       for (const v of r.reply.vars) {
-        const op = entryToOp(v, r.objectId);
+        const h = holderOf(r.objectId, v);
+        const op = h ? entryToOp(v, h) : undefined;
         if (op) proposals.push({ change: op, by: 'self', proposer: r.objectId });
       }
       if (r.reply.state) proposals.push({ change: { holder: r.objectId, key: STATE_KEY, op: 'set', value: r.reply.state }, by: 'self', proposer: r.objectId });
     }
     for (const v of block.vars) {
-      const holder = v.who ? resolveKey(deps, storyId, v.who, playerId) : undefined;
+      const who = v.who ? resolveKey(deps, storyId, v.who, playerId) : undefined;
+      const holder = who ? holderOf(who, v) : undefined;
       const op = holder ? entryToOp(v, holder) : undefined;
       if (op) proposals.push({ change: op, by: 'narrator' });
+      else if (who && defsByKey.get(v.key)?.scope === 'relation') blockProblems.push(`vars: '${v.key}' needs "to": whom ${v.who} feels it toward`);
       else blockProblems.push(`vars: no holder '${v.who ?? '?'}' for '${v.key}'`);
     }
     for (const [key, text] of Object.entries(block.state)) {
@@ -468,7 +510,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (holder && holder !== 'world') proposals.push({ change: { holder, key: STATE_KEY, op: 'set', value: text }, by: 'narrator' });
     }
     outcomes = applyChanges(deps, storyId, proposals, turn.id);
-    for (const o of outcomes) if (o.proposal.change.holder !== 'world') changedIds.add(o.proposal.change.holder);
+    for (const o of outcomes) {
+      const hid = o.proposal.change.holder;
+      const pair = relationParts(hid);
+      if (pair) [pair.from, pair.to].forEach((x) => changedIds.add(x));
+      else if (hid !== 'world') changedIds.add(hid);
+    }
 
     // 5c''. Ties set or changed by the narrator (docs/11 §2.6); "" removes one.
     for (const [holderKey, others] of Object.entries(block.ties)) {
@@ -515,10 +562,11 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         queueForNarrator(deps, storyId, `Note: your briefs for ${vague.join(', ')} said he/she without naming anyone by #handle. Name people by #handle in briefs (the player too), so each character knows who is meant.`, turn.id);
       }
     }
-    const speeches: { from: string; to?: string; say: string }[] = [];
-    if (decl.say) speeches.push({ from: 'player', say: decl.say, ...(playerTo ? { to: playerTo } : {}) });
+    // What was said aloud, each speaker's lines kept apart and in order (docs/10 §6).
+    const speeches: { from: string; to?: string; say: string; line: string }[] = [];
+    if (decl.say) speeches.push({ from: 'player', say: decl.say, line: playerSpoken, ...(playerTo ? { to: playerTo } : {}) });
     for (const d of declarations) {
-      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim() });
+      if (d.status === 'acted' && d.say?.trim()) speeches.push({ from: d.objectId, to: d.to, say: d.say.trim(), line: spokenLines(d.beats, d.say) });
     }
     // Names (docs/11 §2.5): a name said aloud is learned by everyone who heard it; the player also learns the
     // names the prose shows. Learned before the briefs are written, so a brief may use a name just heard.
@@ -534,7 +582,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const oid of presentIds) {
       const heard = speeches
         .filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid)))
-        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: "${s.say}"`);
+        .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: ${s.line}`);
       const brief = briefs.get(oid);
       const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
@@ -551,6 +599,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     // 5f. The narrator's thread, the clock, the turn.
     commitCall(deps, nCall, narratorText, turn.id);
     const clockMin = deps.stories.advanceClock(storyId, block.time && block.time > 0 ? block.time : DEFAULT_TURN_MINUTES);
+    // Thoughts that went unrenewed for long enough fade (docs/11 §5.7).
+    fadeThoughts(deps, storyId, turn.id);
     // A mind not written yet (its seeding failed: an overloaded provider, an empty reply) is tried again each
     // round it is present, unless a seed for it is still waiting.
     for (const oid of presentIds) {
@@ -597,6 +647,42 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
 }
 
 /** The distributor (Light tier): a round block rebuilt from the prose when the narrator's is missing or broken. */
+export interface ReplayInput {
+  direction: DirectionResult;
+  /** Each called character's raw reply from the first time. */
+  characterReplies: Map<string, string>;
+  /** The narrator's prose as the user edited it. */
+  editedProse: string;
+  /** The round block the narrator wrote the first time. */
+  originalBlock: unknown;
+}
+
+/**
+ * The narrator's reply for a replayed round (docs/10 §10a): the edited prose, and the original round block
+ * revised by a light model to match it (briefs, states, variables, cast, places…). If the revision fails, the
+ * original block stands.
+ */
+async function replayNarration(deps: RoundDeps, story: Story, turn: Turn, roundMessage: string, replay: ReplayInput, signal: AbortSignal): Promise<string> {
+  const prose = replay.editedProse.trim();
+  let block: unknown = replay.originalBlock ?? {};
+  try {
+    const bound = deps.registry.getForRole('distributor', story.settings.roles.distributor);
+    const session = deps.agents.ensureSession(story.id, 'distributor', bound.name);
+    const user = [
+      `The narrator's round message (who is present, with #handles):\n${roundMessage}`,
+      `The original round block:\n${JSON.stringify(replay.originalBlock ?? {}, null, 1)}`,
+      `The prose as the player edited it:\n${prose}`,
+      'Reply with the revised round block as JSON.',
+    ].join('\n\n');
+    const agent = new MindAgent({ session, bound, threadLog: deps.threadLog, storyId: story.id });
+    block = await agent.distribute({ system: renderPrompt('minds-reviser', { briefMaxWords: String(story.settings.minds.briefMaxWords) }), messages: [{ role: 'user', content: user }] }, { turnId: turn.id, signal });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    logger.warn('block revision failed — the original block stands', { storyId: story.id, err: (err as Error).message });
+  }
+  return `${prose}\n\n\`\`\`round\n${JSON.stringify(block)}\n\`\`\``;
+}
+
 async function distribute(deps: RoundDeps, story: Story, turn: Turn, prose: string, presentIds: string[], playerId: string | null, signal: AbortSignal): Promise<RoundBlock> {
   const bound = deps.registry.getForRole('distributor', story.settings.roles.distributor);
   const session = deps.agents.ensureSession(story.id, 'distributor', bound.name);

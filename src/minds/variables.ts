@@ -14,9 +14,12 @@ const Base = z.object({
   description: z.string().default(''),
   /** For the AIs: when and how to change it. */
   changeGuide: z.string().default(''),
-  scope: z.enum(['character', 'world']).default('character'),
-  /** Character scope: 'all' | 'player' | 'npcs' | a list of handles (without '#'). */
+  /** character: one value per character · world: one for the story · relation: one per pair who have met (§4.9). */
+  scope: z.enum(['character', 'world', 'relation']).default('character'),
+  /** Character and relation scope: who holds it ('all' | 'player' | 'npcs' | handles without '#'); for a relation, the holder side. */
   appliesTo: z.union([z.enum(['all', 'player', 'npcs']), z.array(z.string().min(1))]).default('all'),
+  /** Relation scope: one shared value per pair (true) or one each way (false). */
+  mutual: z.boolean().default(false),
   visibility: z.enum(['public', 'self', 'hidden']).default('self'),
   changedBy: z.array(Changer).default(['narrator']),
   order: z.number().int().default(0),
@@ -73,6 +76,7 @@ export function defProblems(def: VariableDef): string[] {
     if (def.changedBy.includes('self')) p.push(`${name}: a world variable can't be changed by 'self'`);
     if (def.visibility === 'self') p.push(`${name}: a world variable is 'public' or 'hidden', not 'self'`);
   }
+  if (def.mutual && def.scope !== 'relation') p.push(`${name}: only a relation variable can be mutual`);
   if (def.type === 'number' && def.min !== undefined && def.max !== undefined && def.min >= def.max) p.push(`${name}: min must be below max`);
   if (def.type === 'number' && def.bands) {
     for (let i = 1; i < def.bands.length; i++) if (def.bands[i].upTo <= def.bands[i - 1].upTo) p.push(`${name}: bands must be in ascending order`);
@@ -118,21 +122,59 @@ export function defaultValue(def: VariableDef): VariableValue {
 
 // ---- Who holds and who sees ----
 
+export interface HolderSide {
+  id: string;
+  isPlayer: boolean;
+  handle?: string;
+}
+
 export interface HolderInfo {
-  id: string; // object id, or 'world'
+  id: string; // object id, 'world', or a relation holder "<from>><to>"
   isPlayer: boolean;
   handle?: string; // without '#'
+  /** A relation holder (§4.9): the pair, from → to. */
+  relation?: { from: HolderSide; to: HolderSide };
+}
+
+/** The separator in a relation holder id: "<from id>><to id>". */
+export const REL = '>';
+
+/** The holder id of `from`'s value toward `to` (mutual: the two ids in sorted order). */
+export function relationHolder(def: Pick<VariableDef, 'mutual'>, from: string, to: string): string {
+  return def.mutual && to < from ? `${to}${REL}${from}` : `${from}${REL}${to}`;
+}
+
+/** "<from>><to>" → { from, to }; undefined for any other holder id. */
+export function relationParts(holderId: string): { from: string; to: string } | undefined {
+  const i = holderId.indexOf(REL);
+  return i > 0 && i < holderId.length - 1 ? { from: holderId.slice(0, i), to: holderId.slice(i + 1) } : undefined;
+}
+
+/** Does an appliesTo selection pick this character? */
+function selects(a: VariableDef['appliesTo'], side: HolderSide): boolean {
+  if (a === 'all') return true;
+  if (a === 'player') return side.isPlayer;
+  if (a === 'npcs') return !side.isPlayer;
+  return !!side.handle && a.map((h) => h.replace(/^#/, '').toLowerCase()).includes(side.handle.toLowerCase());
 }
 
 /** Does this definition give `holder` a value? */
 export function appliesTo(def: VariableDef, holder: HolderInfo): boolean {
   if (def.scope === 'world') return holder.id === 'world';
   if (holder.id === 'world') return false;
-  const a = def.appliesTo;
-  if (a === 'all') return true;
-  if (a === 'player') return holder.isPlayer;
-  if (a === 'npcs') return !holder.isPlayer;
-  return !!holder.handle && a.map((h) => h.replace(/^#/, '').toLowerCase()).includes(holder.handle.toLowerCase());
+  if (def.scope === 'relation') {
+    const r = holder.relation;
+    if (!r) return false;
+    if (def.mutual) return r.from.id < r.to.id && (selects(def.appliesTo, r.from) || selects(def.appliesTo, r.to));
+    return selects(def.appliesTo, r.from);
+  }
+  if (holder.relation) return false;
+  return selects(def.appliesTo, holder);
+}
+
+/** Does a character hold this definition's values toward others (as the holder side of a relation)? */
+export function holdsRelation(def: VariableDef, side: HolderSide): boolean {
+  return def.scope === 'relation' && selects(def.appliesTo, side);
 }
 
 export type Viewer =
@@ -146,9 +188,14 @@ export function canSee(def: VariableDef, holderId: string, viewer: Viewer): bool
   if (viewer.kind === 'narrator' || viewer.kind === 'advanced') return true;
   if (def.visibility === 'hidden') return false;
   if (def.visibility === 'public') return true;
-  // 'self' (character scope only)
-  if (viewer.kind === 'character') return viewer.id === holderId;
-  return viewer.playerId !== null && viewer.playerId === holderId;
+  const who = viewer.kind === 'character' ? viewer.id : viewer.playerId;
+  if (!who) return false;
+  // 'self' on a relation: its holder side (both sides when mutual).
+  if (def.scope === 'relation') {
+    const p = relationParts(holderId);
+    return !!p && (p.from === who || (def.mutual && p.to === who));
+  }
+  return who === holderId;
 }
 
 // ---- The change pipeline (docs/11 §4.6) ----
@@ -325,7 +372,8 @@ export function runPipeline(input: PipelineInput, proposals: Proposal[]): { outc
     }
     const holder = input.holders.get(change.holder);
     if (!holder || !appliesTo(def, holder)) {
-      reject(`'${change.key}' does not apply to ${change.holder === 'world' ? 'the world' : 'this character'}`);
+      const what = change.holder === 'world' ? 'the world' : relationParts(change.holder) ? 'this pair (have they met?)' : 'this character';
+      reject(`'${change.key}' does not apply to ${what}`);
       continue;
     }
     if (by === 'narrator' && !def.changedBy.includes('narrator')) {
@@ -337,7 +385,9 @@ export function runPipeline(input: PipelineInput, proposals: Proposal[]): { outc
         reject(`you can't change '${change.key === STATE_KEY ? 'state' : change.key}'`);
         continue;
       }
-      if (proposal.proposer !== change.holder) {
+      const p = def.scope === 'relation' ? relationParts(change.holder) : undefined;
+      const own = p ? proposal.proposer === p.from || (def.mutual && proposal.proposer === p.to) : proposal.proposer === change.holder;
+      if (!own) {
         reject(`you can only change your own '${change.key}'`);
         continue;
       }

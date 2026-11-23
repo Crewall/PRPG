@@ -159,6 +159,7 @@ export const EDITABLE_PROMPTS: { name: string; label: string }[] = [
   { name: 'minds-narrator', label: 'Minds — narrator' },
   { name: 'minds-character', label: 'Minds — character mind' },
   { name: 'minds-distributor', label: 'Minds — round-block fallback' },
+  { name: 'minds-reviser', label: 'Minds — round block after an edited reply' },
   { name: 'minds-seed', label: 'Minds — new-character seeder' },
   { name: 'minds-compactor', label: 'Minds — thread compactor' },
   { name: 'minds-director', label: 'Minds — director (who is spoken to)' },

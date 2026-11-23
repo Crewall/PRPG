@@ -12,7 +12,7 @@ import { createSuggestionStore } from './db/stores/suggestionStore.ts';
 import { createSnapshotStore } from './db/stores/snapshotStore.ts';
 import { createNpcProfileStore } from './db/stores/npcProfileStore.ts';
 import { createUsageStore } from './db/stores/usageStore.ts';
-import { createSheetStore, createVariableStore, createThoughtStore, createNameStore, createTieStore } from './db/stores/mindsStore.ts';
+import { createSheetStore, createVariableStore, createThoughtStore, createNameStore, createTieStore, createMetStore } from './db/stores/mindsStore.ts';
 import { createThreadStore } from './db/stores/threadStore.ts';
 import { createRegistry } from './llm/registry.ts';
 import type { DriverFactory, LlmRegistry } from './llm/registry.ts';
@@ -51,6 +51,7 @@ export interface App {
   thoughts: ReturnType<typeof createThoughtStore>;
   names: ReturnType<typeof createNameStore>;
   ties: ReturnType<typeof createTieStore>;
+  met: ReturnType<typeof createMetStore>;
   threads: ReturnType<typeof createThreadStore>;
   settingsService: SettingsService;
   registry: LlmRegistry;
@@ -80,6 +81,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const thoughts = createThoughtStore(db);
   const names = createNameStore(db);
   const ties = createTieStore(db);
+  const met = createMetStore(db);
   const threads = createThreadStore(db);
 
   // Runtime settings: seed from config.json, then the DB is the source of truth.
@@ -96,7 +98,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   const contexts = createContextBuilder({ stories, summaries, memory, npcProfiles, verbosityOverride: () => settingsService.verbosityOverride() });
   const pipeline = new TurnPipeline({
     stories, agents, threadLog, jobs, memory, summaries, snapshots, npcProfiles, registry, contexts, events, rng: opts.rng,
-    db, sheets, variables, thoughts, names, ties, threads, verbosityOverride: () => settingsService.verbosityOverride(),
+    db, sheets, variables, thoughts, names, ties, met, threads, verbosityOverride: () => settingsService.verbosityOverride(),
   });
 
   // Job worker + handlers (post-turn scribes; player path never awaits these).
@@ -108,7 +110,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   worker.register('archive_faded', createArchiveFadedHandler(handlerDeps));
   worker.register('npc_dossier', createNpcDossierHandler(handlerDeps));
   worker.register('npc_seed', createNpcSeedHandler(handlerDeps));
-  const mindsJobDeps = { ...handlerDeps, sheets, variables, thoughts, names, ties, threads, verbosityOverride: () => settingsService.verbosityOverride() };
+  const mindsJobDeps = { ...handlerDeps, sheets, variables, thoughts, names, ties, met, threads, verbosityOverride: () => settingsService.verbosityOverride() };
   worker.register('minds_seed', createMindsSeedHandler(mindsJobDeps));
   worker.register('minds_compact', createMindsCompactHandler(mindsJobDeps));
 
@@ -134,6 +136,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
     thoughts,
     names,
     ties,
+    met,
     threads,
     settingsService,
     registry,

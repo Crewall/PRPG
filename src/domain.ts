@@ -87,6 +87,10 @@ export const StorySettings = z.object({
       thoughtRecallTokens: z.number().int().positive().default(300),
       pinnedTokens: z.number().int().positive().default(400),
       maxActiveThoughts: z.number().int().positive().default(80),
+      // How much characters say, 1–5: scales every focus tier (docs/10 §5.1e).
+      characterVerbosity: z.number().int().min(1).max(5).default(3),
+      // Thoughts fade: one point of importance per this many in-story hours without coming up (docs/11 §5.7).
+      fadeHours: z.number().positive().default(8),
       narratorSeesThoughts: z.boolean().default(false),
       playerSpeechHeardImmediately: z.boolean().default(true),
       // Names: who knows whom (docs/11 §2.5). New stories turn it on; older ones keep names common knowledge.

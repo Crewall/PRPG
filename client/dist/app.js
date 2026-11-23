@@ -135,6 +135,9 @@ async function renderPlay(storyId) {
   const endTalkBtn = h('button', { class: 'small', title: 'End the conversation; the narrator wraps it up and tells everyone else what they noticed' }, 'End conversation');
   const actBtn = h('button', { class: 'small', title: 'End the conversation by doing something: what you typed is sent as a normal action' }, 'Act');
   const dialogueBar = h('div', { class: 'dialogue-bar', style: 'display:none' }, dialogueLabel, endTalkBtn, actBtn);
+  // Revert (docs/10 §10a): one step back after a regenerate, Edit, remove or edit — usable once.
+  const undoBtn = h('button', { class: 'small' }, '↶ Revert');
+  const undoBar = h('div', { class: 'undo-bar', style: 'display:none' }, undoBtn);
   const DEFAULT_PLACEHOLDER = input.placeholder;
   function setDialogue(d) {
     dialogue = d;
@@ -147,8 +150,11 @@ async function renderPlay(storyId) {
   }
   endTalkBtn.addEventListener('click', () => { if (busy) return; setDialogue(null); submitText('', false); });
 
-  // Minds UI state: advanced mode (per story, this browser only), characters forced to act next round.
+  // Minds UI state: advanced mode (per story, this browser only), characters made to act next round (⚡) or given
+  // the floor (⚡⚡, docs/10 §5.1e).
   const forced = new Set();
+  const floor = new Set();
+  const marks = (oid) => (floor.has(oid) ? ' ⚡⚡' : forced.has(oid) ? ' ⚡' : '');
   const ADV_KEY = `prpg.advanced.${storyId}`;
   let advanced = false;
   try { advanced = localStorage.getItem(ADV_KEY) === '1'; } catch {}
@@ -162,9 +168,18 @@ async function renderPlay(storyId) {
     advanced: () => advanced,
     busy: () => busy,
     forced,
+    floor,
+    marks,
     dialoguePartner: () => dialogue?.partner,
     talk: (c) => setDialogue({ partner: c.objectId, name: c.name }),
-    toggleForce: (c) => { if (forced.has(c.objectId)) forced.delete(c.objectId); else forced.add(c.objectId); refreshSceneHeader(); if (activeTab === 'cast') renderDrawer(); },
+    // ⚡ cycles: off → act next round → give them the floor → off.
+    toggleForce: (c) => {
+      const id = c.objectId;
+      if (floor.has(id)) floor.delete(id);
+      else if (forced.has(id)) { forced.delete(id); floor.add(id); }
+      else forced.add(id);
+      refreshSceneHeader(); if (activeTab === 'cast') renderDrawer();
+    },
     refresh: () => { refreshSceneHeader(); if (activeTab === 'cast' || activeTab === 'pov') renderDrawer(); },
   };
   // How the box will be read (Minds): said / tried / note — and the syntax when it is empty. Hidden until the
@@ -345,6 +360,8 @@ async function renderPlay(storyId) {
       mindsNumIn('maxCharactersPerRound', 'characters called per round', 'At most this many characters are asked to act each round (the one spoken to, the spotlighted and newcomers first). The others wait; nothing they perceived is lost.', 1, 12),
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
+      mindsNumIn('characterVerbosity', 'character verbosity (1–5)', 'How much characters say and do, for every focus: the one with the floor, the ones you speak to, the rest of the room, the background. 3 is the default; 1 halves everything, 5 doubles it.', 1, 5),
+      mindsNumIn('fadeHours', 'thoughts fade: one point per (in-story hours)', 'A thought loses one point of importance for every this many in-story hours it doesn\'t come up; at 0 it fades from the character\'s mind (you can restore it on their sheet). Agenda items and thoughts of importance 8–10 never fade.', 1, 720),
       (() => {
         const cb = h('input', { type: 'checkbox' });
         cb.checked = !!minds.nameKnowledge;
@@ -422,7 +439,7 @@ async function renderPlay(storyId) {
   app.replaceChildren(
     topbar(sceneLabel, newSceneBtn, optsBtn, debugBtn, agentBarBtn, panelBtn, h('span', { class: 'row' }, wsDot)),
     agentBar,
-    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
+    h('div', { class: 'playwrap' }, h('div', { class: 'playmain' }, sceneHeader, firstRunHint(), scrollBox, undoBar, dialogueBar, inputPreview, h('div', { class: 'inputbar' }, h('div', { class: 'input-wrap' }, input, syntaxBtn), h('div', { class: 'btns' }, sendBtn, cancelBtn, rewindBtn))), drawer),
   );
 
   updateInputPreview();
@@ -487,8 +504,8 @@ async function renderPlay(storyId) {
           ? h('button', { class: 'chip pc', title: `${tip(pc)}\n\nTap for your sheet.`, onclick: () => minds.openCharacterCard(mindsCtx, pc.objectId) }, `🎭 ${pc.name}`)
           : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
-          ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
-              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${forced.has(c.objectId) ? ' ⚡' : ''}`))
+          ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) || floor.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
+              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${marks(c.objectId)}`))
           : [h('span', { class: 'sub' }, 'nobody else here yet')]),
         h('span', { class: 'spacer' }),
         h('button', { class: `chip adv${advanced ? ' on' : ''}`, title: 'Advanced mode: see and edit everything (spoilers)', onclick: () => setAdvanced(!advanced) }, advanced ? '🔍 Advanced: on' : '🔍 Advanced'),
@@ -862,22 +879,68 @@ async function renderPlay(storyId) {
     cancelB.addEventListener('click', () => form.replaceWith(bubble));
     saveB.addEventListener('click', async () => {
       saveB.disabled = true;
+      // Your last message in a Minds story: edit and resend (the AIs answer the new words; ↶ Revert brings back the old).
+      if (story.settings?.engine === 'minds' && field === 'playerInput' && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+        if (busy) { saveB.disabled = false; return; }
+        try {
+          await api.post(`/api/stories/${storyId}/rewind`, { turnId });
+          await redrawTranscript();
+          submitText(ta.value.trim(), false);
+        } catch (e) { alert('resend failed: ' + e.message); saveB.disabled = false; }
+        return;
+      }
+      // The last reply of a Minds story: everyone learns the edited version (a light model updates the round).
+      const replay = story.settings?.engine === 'minds' && field === 'narration' && lastTurn?.id === turnId;
+      if (replay) saveB.textContent = 'updating the story…';
       try {
         const r = await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: ta.value });
-        if (r.deleted) { form.remove(); return; }
+        if (r.deleted) { form.remove(); refreshUndo(); return; }
+        if (r.recommitted) { await redrawTranscript(); renderDrawer(); refreshSceneHeader(); if (!r.ok) addStatus(`(${r.error})`); return; }
         textEl.textContent = ta.value;
         form.replaceWith(bubble);
+        refreshUndo();
       } catch (e) { alert('save failed: ' + e.message); saveB.disabled = false; }
     });
   }
   async function deleteMessage(bubble, turnId, field) {
-    const msg = story.settings?.engine === 'minds'
-      ? 'Remove this message from the transcript?\n\nThe characters still remember it. To undo the last turn completely, use Edit or ↻ Retry.'
+    const minds = story.settings?.engine === 'minds';
+    // The last exchange in a Minds story: really undone, as if it never happened (↶ Revert brings it back).
+    if (minds && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+      if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
+      if (!confirm('Remove the last exchange?\n\nEverything it changed (memories, thoughts, variables) is undone too. You can bring it back with ↶ Revert.')) return;
+      try { await api.post(`/api/stories/${storyId}/rewind`, { turnId, action: 'remove' }); await redrawTranscript(); renderDrawer(); refreshSceneHeader(); }
+      catch (e) { alert('remove failed: ' + e.message); }
+      return;
+    }
+    const msg = minds
+      ? 'Remove this message from the transcript?\n\nThe characters still remember it (only the last exchange can be undone completely). ↶ Revert brings it back.'
       : 'Delete this message? Memory is unaffected; later story flow may shift.';
     if (!confirm(msg)) return;
-    try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); }
+    try { await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: '' }); bubble.remove(); refreshUndo(); }
     catch (e) { alert('delete failed: ' + e.message); }
   }
+
+  /** Show ↶ Revert when the last destructive action can be undone. */
+  async function refreshUndo() {
+    let info = null;
+    try { info = await api.get(`/api/stories/${storyId}/undo`); } catch {}
+    if (!info || info.none || busy) { undoBar.style.display = 'none'; return; }
+    undoBtn.textContent = `↶ Revert: ${info.label}`;
+    undoBar.style.display = '';
+  }
+  undoBtn.addEventListener('click', async () => {
+    if (busy) return;
+    undoBtn.disabled = true;
+    try {
+      await api.post(`/api/stories/${storyId}/undo`, {});
+      await redrawTranscript();
+      // A message Edit put back in the box is in the story again.
+      if (lastTurn?.playerInput && input.value.trim() === lastTurn.playerInput.trim()) { input.value = ''; input.dispatchEvent(new Event('input')); }
+      renderDrawer(); refreshSceneHeader();
+    } catch (e) { addStatus(`(revert failed: ${e.message})`); }
+    undoBtn.disabled = false;
+    refreshUndo();
+  });
 
   // The story's last turn as this page knows it: Edit and Retry name it, so the
   // server can refuse when the story has moved on (never undo an earlier turn by mistake).
@@ -966,11 +1029,15 @@ async function renderPlay(storyId) {
 
   // Load (or reload, after a rewind) the transcript from the server.
   let turnCount = 0;
+  let redrawGen = 0;
   async function redrawTranscript() {
-    transcript.replaceChildren();
-    pendingPlayerBubble = null;
+    // Redraws can overlap (an action's own and the server event's): only the latest one renders.
+    const gen = ++redrawGen;
     try {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
+      if (gen !== redrawGen) return;
+      transcript.replaceChildren();
+      pendingPlayerBubble = null;
       turnCount = turns.length;
       for (const t of turns) {
         const failed = t.status !== 'complete';
@@ -984,15 +1051,17 @@ async function renderPlay(storyId) {
       const tail = turns.at(-1);
       lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
       if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
-      const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
-      if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
+      // (Named apart from the outer `lastTurn`: a block-scoped one here made the assignment above throw, unseen.)
+      const lastDone = turns.filter((t) => t.status === 'complete').at(-1);
+      if (lastDone?.meta?.mode === 'dialogue' && !lastDone.meta.reply?.act) {
         let name = 'them';
-        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastTurn.meta.partner)?.name || name; } catch {}
-        setDialogue({ partner: lastTurn.meta.partner, name });
+        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastDone.meta.partner)?.name || name; } catch {}
+        setDialogue({ partner: lastDone.meta.partner, name });
       }
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange
     } catch {}
+    refreshUndo();
   }
   await redrawTranscript();
 
@@ -1054,7 +1123,7 @@ async function renderPlay(storyId) {
   }
   async function renderDrawer() {
     const isMinds = story.settings?.engine === 'minds';
-    const tabs = isMinds ? [['cast', 'Cast'], ...(advanced ? [['pov', 'POV']] : []), ['memory', 'Memory']] : [['memory', 'Memory']];
+    const tabs = isMinds ? [['cast', 'Cast'], ...(advanced ? [['pov', 'POV']] : []), ['memory', 'Places & things']] : [['memory', 'Memory']];
     // NPC Story Mode: each character's mind (personality + private notes) is a
     // first-class, player-editable panel — the mode's replacement for the
     // memory browser's NPC role.
@@ -1068,6 +1137,7 @@ async function renderPlay(storyId) {
     if (activeTab === 'cast') await minds.renderCastTab(mindsCtx, body);
     else if (activeTab === 'pov') await minds.renderPovTab(mindsCtx, body);
     else if (activeTab === 'minds') await renderMinds(body);
+    else if (activeTab === 'memory' && isMinds) await minds.renderPlacesTab(mindsCtx, body);
     else if (activeTab === 'memory') await renderMemory(body);
     else if (activeTab === 'summaries') await renderSummaries(body);
     else await renderThreads(body);
@@ -1400,7 +1470,7 @@ async function renderPlay(storyId) {
   let ws = null, current = null, busy = false, lastInput = '';
   let disposed = false, reconnectTimer = null;
   const wsInfo = { attempts: 0, since: null, lastClose: null, nextRetryAt: null };
-  const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; };
+  const setBusy = (b) => { busy = b; sendBtn.disabled = b; cancelBtn.disabled = !b; if (b) undoBar.style.display = 'none'; };
   const wsOpen = () => ws && ws.readyState === WebSocket.OPEN;
 
   function connectWs() {
@@ -1481,7 +1551,7 @@ async function renderPlay(storyId) {
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
-        current = null; setBusy(false); scrollDown();
+        current = null; setBusy(false); scrollDown(); refreshUndo();
         lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
@@ -1518,6 +1588,7 @@ async function renderPlay(storyId) {
         for (const oid of m.objectIds || []) transcript.querySelectorAll(`.job-notice[data-object="${oid}"]`).forEach((el) => el.remove());
       } break;
       case 'story.rewound': if (m.storyId === storyId && !rewinding) { current = null; setBusy(false); redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
+      case 'story.undone': if (m.storyId === storyId && !undoBtn.disabled) { redrawTranscript(); renderDrawer(); refreshSceneHeader(); } break;
       case 'thread.activity': if (m.storyId === storyId) noteAgentActivity(m.entry); if (activeTab === 'threads') renderDrawer(); break;
       // A background agent (scribe, archiver, dossier…) gave up after retries —
       // surface the full error in the transcript instead of failing silently.
@@ -1563,8 +1634,9 @@ async function renderPlay(storyId) {
     setBusy(true);
     resetAgentStatus(); // fresh round — clear last turn's agent activity
     const force = !dialogue && forced.size ? [...forced] : undefined;
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}) }));
-    if (force) { forced.clear(); refreshSceneHeader(); }
+    const floorIds = !dialogue && floor.size ? [...floor] : undefined;
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}), ...(floorIds ? { floor: floorIds } : {}) }));
+    if (force || floorIds) { forced.clear(); floor.clear(); refreshSceneHeader(); }
     return true;
   }
 

@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), Revert and edits that reach the minds (§10a), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -197,6 +197,45 @@ The narrator and distributor prompts say so, and a soft check (like the he/she c
 character its thoughts ("you're calculating", "you decide", "you wonder") and reminds the narrator next round; the
 brief is still delivered.
 
+### 5.1d Places and things (settled after a play test)
+
+A play test's Memory tab filled with empty duplicates: "Agnes's stuffed rabbit" and "Agnes's stuffed rabbit
+(Bun)", "Caseworker's clipboard" and "Caseworker's clipboard (removed)". The narrator was never shown which places
+and things already existed or their #handles, so it named them afresh each time, and marked a removal by renaming.
+
+- **The narrator's round message lists them:** `Places and things (reuse these #handles):` the location, the
+  things in view, then up to 12 other known places and things, most recently touched first (`#handle (name) —
+  line`). Things that are gone are left out.
+- **`objects` matches what exists** by #handle, by name ignoring case and a trailing parenthesis ("(Bun)" becomes
+  an alias), and by the handle its name would get. A trailing "(removed)", "(gone)", "(destroyed)", "(lost)" or
+  "(taken)" marks the thing gone instead of creating one. `"gone": true` is the proper way.
+- **The Memory tab in a Minds story** shows what Minds keeps: places and things with their public line, whether
+  they are here, in view or gone, and (advanced mode) how many thoughts mention them; edit the name and line,
+  mark gone or back, merge a duplicate into another (its thoughts' tags follow), delete. No facts, no
+  promote/demote: those belong to the legacy engines. Characters live on the Cast tab.
+
+### 5.1e How much each character says (focus tiers, settled with the owner)
+
+Every called character used to get the same "short" rule and the same 80-word cap: the one the player talks to
+was too terse, bystanders too chatty. Each called character now gets a **focus** for the round, worked out from
+what the round already knows:
+
+| Focus | When | Speech | Action |
+|---|---|---|---|
+| **sole** | the dialogue partner; the only one the player addresses (no one else called by the player or the narrator); or given the floor (⚡⚡) | ~240 words | ~50 words |
+| **lead** | spoken to by the player (with others), made to act (⚡), or spotlighted by the narrator | ~120 | ~25 |
+| **part** | the player spoke to everyone, mentioned them, or they just entered | ~40 | ~15 |
+| **background** | only reacting, or still going from last round | ~15 | ~10 |
+
+- The round message ends with one line saying the focus and how much to say ("You have the floor: say and do as
+  much as {{name}} naturally would, up to about …"). The numbers are ceilings, not targets: a taciturn character
+  stays brief.
+- The reply is held to the tier's limits (cut at a sentence end).
+- **Story options → Minds engine → character verbosity** (1–5, default 3) scales every tier (×0.5, ×0.75, ×1,
+  ×1.5, ×2).
+- ⚡ on a character card cycles: off → act next round (lead) → give them the floor (sole) → off.
+- The narrator does not mark minor characters (settled with the owner: not now).
+
 ### 5.2 Settled while building M4
 
 - **The player's words, once.** A called character hears the player's words in its round message ("Right
@@ -232,6 +271,20 @@ Making it obvious:
 - a small **?** next to the box opens the syntax entry of the help panel (§11.1).
 
 Empty input = "continue / wait".
+
+**Order (settled after a play test).** The lanes used to be joined: every quoted part became one line of speech and
+every action one list, so the narrator always wrote the player's words first and the actions after, whatever
+order they were typed in. The input is now also kept as ordered **beats**: `I set a coin on the counter. "A room,
+please." I watch her hands. "And a meal."` → 1 does · 2 says · 3 does · 4 says.
+
+- The narrator's round message lists the player's beats numbered, in order; its prompt says to keep that order in
+  the prose, interleave words and actions, and let each beat land on what the one before changed (a character
+  may cut in between).
+- Characters hear the player's lines as separate utterances, in order, with `…` where something happened between
+  them (`#tall-stranger: "A room, please." … "And a meal."`). They still don't see the player's actions before
+  they declare: an action is an attempt until the narrator resolves it, and a stealthy one must stay unseen.
+- The joined `say` / `do` stay for everything that reads them (the director, name learning, older turns).
+- A character's reply may use `beats` too (§9.1), so its words and actions keep their order.
 
 ## 7. Dialogue mode (manual)
 
@@ -388,15 +441,21 @@ repair-retry applies once; after that, the fallbacks of §5 step 5 (narrator) or
   "say": "exact words spoken aloud, or \"\"",
   "to": "optional #handle of who they address",
   "intent": "what they try to do, ≤ 25 words, or \"\"",
-  "state": "optional: their inner state now, one sentence",
-  "vars": [{ "key": "resolve", "set": 6, "why": "short reason" }],
-  "remember": [{ "text": "one statement ≤ 40 words", "tags": ["ledger", "#marta"], "pin": false }],
+  "state": "optional: their physical and emotional condition now, one sentence",
+  "vars": [{ "key": "resolve", "set": 6, "why": "short reason" }, { "key": "trust", "to": "#agnes", "delta": -1 }],
+  "remember": [{ "kind": "opinion", "about": "#agnes", "importance": 7, "text": "one statement ≤ 40 words", "tags": ["caseworker"] }],
+  "revise": [{ "id": "t4", "text": "the thought as it stands now", "importance": 6 }],
   "forget": ["t7"]
 }
 ```
 
-Clamps: `say` ≤ 80 words; `intent` ≤ 25 words; `state` ≤ 25 words (one sentence); at most 3 `remember` and 5
-`forget` per reply. `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
+Optionally, `"beats": [{ "do": "draws her knife" }, { "say": "Get out." }]` instead of `say` and `intent` when the
+order of words and actions matters (§6): the narrator reads them in that order; `say` and `intent` are derived from
+them.
+
+Clamps: `say` and `intent` by the round's focus tier (§5.1e; at most 240 and 50 words); `state` ≤ 25 words (one sentence); at most 3 `remember`, 3
+`revise` and 5 `forget` per reply; `kind` defaults to `note`, `importance` to 5 (clamped to 1–10); at most 3
+active agenda items (doc 11 §5.6–5.8). `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
 anything else is rejected and logged, never fatal. Whispering (`to` + private) is a TODO.
 
 ### 9.2 `DialogueReply`
@@ -421,7 +480,8 @@ Written after the prose, fenced as ```` ```round ````, never shown to the player
   "evoke": { "#marta": ["debt"] },
   "notes": { "remember": [{ "text": "Tom is the informant", "tags": ["#tom", "informant"] }], "forget": [] },
   "cast": { "enter": [{ "name": "Guard Captain Held", "appearance": "tall, scarred, city colours" }], "exit": ["#tom"] },
-  "objects": [{ "name": "silver locket", "type": "item", "line": "tarnished, engraved with an M" }],
+  "objects": [{ "name": "silver locket", "type": "item", "line": "tarnished, engraved with an M" },
+              { "name": "#ledger", "gone": true }],
   "scene": { "break": false, "title": null, "location": "#tavern", "items": ["#ledger", "#silver-locket"] },
   "time": 10
 }
@@ -437,8 +497,10 @@ Written after the prose, fenced as ```` ```round ````, never shown to the player
 - `tags`: situation tags for this round. `evoke`: extra per-character tags. Both feed recall next round (doc 11 §5.4).
 - `notes`: the narrator's own thoughts (owner = narrator; same store and recall as characters' thoughts).
 - `cast.enter`: creates a roster object + sheet; a seeding job fleshes it out. `cast.exit` removes from the scene.
-- `objects`: new roster items (handles assigned by the app). `scene.items`: what is in view; feeds the "Here:"
-  line and thought recall (doc 11 §6).
+- `objects`: new roster items (handles assigned by the app), or existing ones by #handle to update their line;
+  `"gone": true` when one is destroyed, taken away for good or no longer exists. `scene.items`: what is in view;
+  feeds the "Here:" line and thought recall (doc 11 §6). See §5.1d.
+- `vars` entries for relation variables carry `"to"` (doc 11 §4.9).
 - `time`: in-game minutes this round spans (replaces `advance_time`); missing → default.
 
 ### 9.4 Referee (later: special cases)
@@ -457,6 +519,27 @@ Input: a list of `{actor, action, sheet excerpt}`, the location, and the round c
 
 The existing adjudicator prompt (realism over drama, physics not morals) carries over, extended to many actions,
 and reads numeric variables (skills, health) as factors.
+
+## 10a. Revert, remove and edit (settled with the owner)
+
+Before: ↻ regenerate and Edit (below Send) restored the state from before a turn, and the replaced reply was lost
+for good (a regenerate that failed on an overloaded provider lost a good reply); × and ✎ only changed the
+transcript, so the minds kept what was removed or edited.
+
+- **One undo slot per story, usable once.** Before any destructive action (↻ on any reply, Edit, × on the last
+  exchange, ✎ on the last reply) the app saves the full current state: everything a pre-turn snapshot holds, the
+  thread messages, recaps and change-log rows the action would delete, the turn rows and their own snapshots.
+  **↶ Revert** under the last message ("Bring back the previous reply", "Restore the removed exchange", "Undo the
+  edit") restores it exactly. A new message, or another destructive action, replaces the slot; Revert empties it.
+- **× on the last exchange** is a real undo of that turn (like Edit, without putting the text back in the box).
+- **✎ on the last reply** brings everyone up to date: the turn is taken back to its start, a light AI call revises
+  the hidden round block to match the edited prose (briefs, states, variables, newcomers, places), and the round
+  is committed again with the characters' replies kept byte-exact. Everyone's brief and memory then follow the
+  edit. Revert brings back the original.
+- **✎ on the last player message** is edit and resend (Edit).
+- **Older messages:** × and ✎ stay transcript-only (the minds keep what happened; cutting rounds out of the middle
+  of their threads would corrupt them), and Revert can bring one back.
+- **Background jobs** (seeding, compaction) started by a turn that was undone do nothing.
 
 ## 10. Advanced mode and the POV filter
 
@@ -607,7 +690,6 @@ Each milestone is committed on its own and keeps the existing engines working.
 - The compactor proposing thought merges for a character at `maxActiveThoughts` (doc 11 §5); today it only
   proposes up to three pins.
 - Whispering: private `say` with `to` for characters; a whisper selector for the player.
-- Relation variables (a value per holder × target, e.g. Marta's trust in the player).
 - Derived variables and triggers (e.g. "health reaches 0 → the narrator is told the character is down").
 - Off-screen life for absent characters ("what were you doing meanwhile?").
 - Saving and loading scenarios (variable sets, cast) as templates.

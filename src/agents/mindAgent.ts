@@ -31,6 +31,9 @@ export const SeedReply = z.unknown().transform((raw) => {
         text: String(t.text),
         tags: Array.isArray(t.tags) ? t.tags.filter((x): x is string => typeof x === 'string') : [],
         pin: t.pin === true,
+        ...(typeof t.kind === 'string' ? { kind: t.kind } : {}),
+        ...(typeof t.about === 'string' && t.about.trim() ? { about: t.about } : {}),
+        ...(typeof t.importance === 'number' || typeof t.importance === 'string' ? { importance: t.importance } : {}),
       })),
   };
 });
