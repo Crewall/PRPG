@@ -29,6 +29,7 @@ interface SnapshotPayload {
   variableValues?: Row[];
   thoughts?: Row[];
   names?: Row[];
+  ties?: Row[];
   thoughtTags?: Row[];
   varChangeRowidWatermark?: number;
   /** Thread rows whose kind/compacted flag can change in place (pending → delivered, compaction). */
@@ -80,6 +81,7 @@ export function createSnapshotStore(db: Db) {
           variableValues: db.prepare(`SELECT * FROM variable_values WHERE story_id = ?`).all<Row>(storyId),
           thoughts: db.prepare(`SELECT * FROM thoughts WHERE story_id = ?`).all<Row>(storyId),
           names: db.prepare(`SELECT * FROM name_knowledge WHERE story_id = ?`).all<Row>(storyId),
+          ties: db.prepare(`SELECT * FROM character_ties WHERE story_id = ?`).all<Row>(storyId),
           thoughtTags: db
             .prepare(`SELECT tt.* FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ?`)
             .all<Row>(storyId),
@@ -192,9 +194,9 @@ export function createSnapshotStore(db: Db) {
           db.prepare(`DELETE FROM character_sheets WHERE story_id = ?`).run(storyId);
           for (const s of p.sheets) {
             db.prepare(
-              `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, state, tier_id, seeded, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
+              `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, state, tier_id, seeded, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.concept ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
           }
         }
         if (p.variableValues) {
@@ -225,6 +227,14 @@ export function createSnapshotStore(db: Db) {
           for (const n of p.names) {
             db.prepare(`INSERT OR IGNORE INTO name_knowledge (story_id, viewer, subject, learned_turn_id, created_at) VALUES (?, ?, ?, ?, ?)`).run(
               n.story_id, n.viewer, n.subject, n.learned_turn_id ?? null, n.created_at,
+            );
+          }
+        }
+        if (p.ties) {
+          db.prepare(`DELETE FROM character_ties WHERE story_id = ?`).run(storyId);
+          for (const t of p.ties) {
+            db.prepare(`INSERT OR IGNORE INTO character_ties (story_id, holder, other, label, created_turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+              t.story_id, t.holder, t.other, t.label, t.created_turn_id ?? null, t.created_at,
             );
           }
         }

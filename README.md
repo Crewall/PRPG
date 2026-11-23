@@ -55,7 +55,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   scenario variable editor, the **?** help panel) and M8 (the old engines retired) ✅ built — **every new story is
   a Minds story**. Since then: names are learned (strangers stay unnamed, for you and for every mind), a director
   works out whom you are talking to (only they answer), ↻ regenerates any recent reply, a failed turn offers Retry
-  or Discard, and overloaded providers are ridden out (waits, a fallback model per tier, quiet notices).
+  or Discard, and overloaded providers are ridden out (waits, a fallback model per tier, quiet notices). New
+  characters arrive whole: the narrator hands over who they are and how they are related to others (ties), and
+  their mind is written from that, from what they perceived and from who is around them.
 
 ## Running it
 

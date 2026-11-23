@@ -82,6 +82,13 @@
     "example": "\"I'm Tamsin.\" — now everyone who heard it calls her Tamsin."
   },
   {
+    "id": "ties",
+    "group": "Sheets",
+    "title": "Ties: how people are related",
+    "body": "A tie says what one person is to another, from their side: \"older brother\", \"employer\", \"old rival\". The narrator records ties when it brings someone in (and when they change); the new character's mind is written around them, so a sister knows her brother from her first line. A tie also means both know each other's name. Your own ties show on your card; in advanced mode you see and edit everyone's on their sheet. \"In short\" on a sheet is the narrator's one-line hand-over of who someone is: their mind uses it until the full description is written.",
+    "example": "Mira — Rin: older brother. Rin — Mira: younger sister."
+  },
+  {
     "id": "state",
     "group": "Sheets",
     "title": "State",

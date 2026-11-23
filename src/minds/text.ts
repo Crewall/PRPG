@@ -26,6 +26,14 @@ export function clampWords(text: string, max: number): { text: string; clamped: 
   return { text: words.slice(0, max).join(' '), clamped: true };
 }
 
+/** Keep at most `max` words, leaving the text's own spacing and line breaks as they are. */
+export function clampWordsKeepLines(text: string, max: number): string {
+  const t = text.trim();
+  let n = 0;
+  for (const m of t.matchAll(/\S+/g)) if (++n === max) return t.slice(0, m.index! + m[0].length);
+  return t;
+}
+
 /**
  * Normalize a thought tag (docs/11 §5.3): lowercase, trimmed, spaces → hyphens,
  * letters/digits/-/_ only (accented letters kept), ≤ 32 characters. A leading

@@ -337,6 +337,10 @@ td.vis.hidden { color: #ff8a8a; }
 .thought-actions { display: flex; gap: 4px; }
 .thought-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 .thought-add input[type=text] { flex: 1 1 160px; }
+.tie-row { gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 4px; }
+.tie-row select { flex: 0 1 180px; min-width: 0; }
+.tie-row input[type=text] { flex: 1 1 160px; min-width: 0; }
+.ties-field .field-label { font-size: 13px; color: var(--muted); margin: 12px 0 5px; }
 
 /* ---- Scenario editor ---- */
 .def-list { display: flex; flex-direction: column; gap: 6px; }

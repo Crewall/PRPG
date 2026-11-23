@@ -12,6 +12,7 @@ import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
 import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
+import { tieLines, tieSummary } from './ties.ts';
 import type { Thought } from './thoughts.ts';
 import { holdersFor, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
@@ -188,7 +189,7 @@ export function characterSystemPrompt(deps: ThreadDeps, storyId: string, objectI
   return renderPrompt('minds-character', {
     name: obj?.name ?? 'the character',
     handle: h(obj?.handle ?? deps.memory.ensureHandle(objectId)),
-    description: sheet?.description.trim() || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)',
+    description: whoYouAre(deps, storyId, objectId),
     appearance: `${sheet?.pronouns ? `Pronouns: ${sheet.pronouns}. ` : ''}${sheet?.appearance.trim() || '(not described yet)'}`,
     variables: lines.join('\n'),
   });
@@ -221,6 +222,19 @@ export function narratorVariableLines(defs: VariableDef[]): string[] {
     const step = d.type === 'number' && d.maxStep ? `, at most ${d.maxStep} per round` : '';
     return `- ${d.key} (${renderRange(d)}; ${scope}; ${vis}; changed by ${who}${step}): ${sentence(d.description || d.label)}${d.changeGuide ? ` When/how: ${d.changeGuide}` : ''}`;
   });
+}
+
+/**
+ * "Who you are": the description; until the seeder writes it, the narrator's hand-over (docs/11 §2.3); then the
+ * character's ties (docs/11 §2.6), so it always knows who its people are.
+ */
+function whoYouAre(deps: ThreadDeps, storyId: string, objectId: string): string {
+  const sheet = deps.sheets.get(objectId);
+  const core = sheet?.description.trim()
+    || (sheet?.concept.trim() ? `${sheet.concept.trim()}\n(More about you is still being written: stay true to this, and fill in the rest the way this person would be.)` : '')
+    || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)';
+  const ties = tieLines(deps, storyId, objectId);
+  return ties.length ? `${core}\n\nYour people (how you know them):\n${ties.join('\n')}` : core;
 }
 
 /** "Not applied" notes for the character's own proposals from its last reply (docs/11 §4.6). */
@@ -374,7 +388,10 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
     const known = knownNames(deps, storyId, holder.id, others).map((id) => h(deps.memory.getObject(id)?.handle));
     lines.push(`  Known to strangers as: ${sheet?.knownAs || '(not set)'} · knows the names of: ${known.length ? known.join(', ') : 'nobody yet'}`);
   }
-  if (full && sheet?.description) lines.push(`  Who: ${sheet.description.replace(/\s+/g, ' ').trim()}`);
+  const who = sheet?.description.trim() || sheet?.concept.trim();
+  if (full && who) lines.push(`  Who: ${who.replace(/\s+/g, ' ')}`);
+  const ties = tieSummary(deps, holder.id);
+  if (ties.length) lines.push(`  Ties: ${ties.join(', ')}`);
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);

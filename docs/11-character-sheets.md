@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6) and the editors included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -70,7 +70,39 @@ already established about the character, then invent the rest. It writes:
 - starting values for the character's variables, within their rules;
 - 3–10 starting thoughts with tags (what it knows right now).
 
-Until the job lands, the character plays from its appearance plus an "improvise consistently" note, as today.
+Until the job lands, the character plays from what the narrator handed over (below), or, without that, from its
+appearance plus an "improvise consistently" note.
+
+**The narrator's hand-over (settled after a play test).** A seeder that only gets a name, a look and the prose
+written to "you" has to guess who someone is: a player's 15-year-old sister came out as a stranger who knew "Rin
+from the market, he sells spices". The narrator knows more at the moment it brings someone in, so `cast.enter`
+carries it:
+
+- `who`: 1–3 sentences of fact, from the player's words and the narrator's own plan: who they are, why they are
+  here ("Rin's younger sister, 15; came to the market with Rin to buy a kettle"). Stored as the sheet's
+  **concept**: the character's "Who you are" until the seeder's description lands, and canon for the seeder;
+- `ties`: how the newcomer relates to people already in the story (§2.6).
+
+**The seeder's inputs** (`seedContext` in `src/minds/seed.ts`):
+1. **the frame:** the premise, genre, tone, the in-story time;
+2. **the player character:** `#handle Name (pronouns) — look`, and the rule that "you" in the story text is always
+   them, never the newcomer; the player's lines in the story are labelled `Player (#handle)`;
+3. **the newcomer:** handle, look, pronouns, known-as, the narrator's hand-over (concept) and ties as canon, any
+   description already written;
+4. **what the newcomer perceived on arriving:** its first round messages (the narrator's brief, the words heard);
+5. **who is around, as the newcomer perceives it:** the same "Here:" block its mind will get (place, people with
+   their public profiles, names it doesn't know left out), and whose names it knows;
+6. **the story:** the narrator's recap (after a compaction) and the recent story;
+7. **its variables,** each with its range and visibility (hidden ones are theirs but unknown to them).
+
+Left out on purpose: the narrator's secret notes, and every other character's description, state and thoughts.
+
+**The seeder's outputs:**
+- the **description** is who someone is (identity, voice, drives, fears, background, their people, secrets), never
+  the current scene: the moment goes into **state** and the first **thoughts**. It is held to
+  `descriptionMaxWords` (line breaks kept), and stray escaped newlines (`\n` written as text) become real ones;
+- the **state** (one sentence, ≤ 40 words), starting values, and 3–10 first thoughts (the established canon first);
+- **ties** the story shows but nobody recorded (added only; an existing tie is never changed).
 
 ### 2.4 The public profile (what others perceive)
 
@@ -136,6 +168,26 @@ label can be updated (she changes clothes) without changing the handle.
 
 **Switch:** `minds.nameKnowledge` (Story options → Minds engine). On for new stories; off for stories created
 before it existed, where everyone keeps knowing everyone's name (their handles were made from names anyway).
+
+### 2.6 Ties: how people are related
+
+A **tie** is how one character relates to another, from the holder's side: Mira → Rin "older sister",
+Rin → Mira "younger sister", Briony → Liraelen "stranger she distrusts". Ties are data, so they reach every place
+that needs them instead of living only in the prose.
+
+- **Set by:** the narrator (`cast.enter.ties` for a newcomer, keyed by #handle or name, so two newcomers of the
+  same round can be tied; `"ties": { "#holder": { "#other": "label" } }` in any round block, `""` removes one), the
+  seeder (only ties the story shows that nobody recorded; it never changes one) and the user (the sheet editor:
+  the player's own sheet, any sheet in advanced mode; `PATCH …/minds/:oid` with `ties: { "<object id or #handle>":
+  "label" }`, `""` removes).
+- **Seen by:** the holder (its own ties, in its system prompt under "Your people": `- #tall-stranger Rin: older
+  sister`), the narrator (every tie, on each sheet), the seeder (as fact), the player (their own character's ties
+  on its card; advanced mode: all).
+- **Names come with ties:** a tie means the holder knows the other's name, and the other knows the holder's
+  (§2.5).
+- A label is short (≤ 8 words, a leading "my"/"your" and a trailing period dropped) and says what the other person
+  is *to the holder*.
+- Data: `character_ties` (story, holder, other, label, turn), covered by rewind and Retry.
 
 ## 3. State
 

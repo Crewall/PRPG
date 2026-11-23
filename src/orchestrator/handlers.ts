@@ -125,11 +125,11 @@ export function createScribeStoryHandler(deps: HandlerDeps): JobHandler {
  * over budget, presented chronologically. Summaries lag and can be thin —
  * this is what "parse the story first" reads.
  */
-export function renderRecentStory(stories: StoryStore, storyId: string, maxTokens = 3000): string {
+export function renderRecentStory(stories: StoryStore, storyId: string, maxTokens = 3000, playerLabel = 'Player'): string {
   const blocks: string[] = [];
   let used = 0;
   for (const t of stories.recentTurns(storyId, 30).filter((x) => x.status === 'complete').reverse()) {
-    const block = `Player: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`;
+    const block = `${playerLabel}: ${t.playerInput || '(scene opens)'}\nNarration: ${t.narration}`;
     used += estimateTokens(block);
     if (blocks.length && used > maxTokens) break;
     blocks.push(block);
