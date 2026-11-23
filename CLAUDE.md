@@ -37,11 +37,14 @@ is right.
     - thoughts v2: agenda / opinion / feeling / note, importance 1–10 that fades, revising (`src/minds/thoughts.ts`),
       a state that is only body and mood; relation variables per pair who have met; the guided scenario editor and
       the full character sheet; places and things reused by #handle (`src/minds/places.ts`);
+    - event order (ordered beats for the player and characters), focus tiers for how much each character says
+      (`src/minds/focus.ts`), one-step Revert after regenerate/Edit/remove/edit (`undo_slots`), and ✎ on the last
+      reply re-committing the round (`TurnPipeline.editReply`);
     - overload handling: real waits on 429/503, a fallback model per tier, job backoff, re-seeding;
   - shared: rewind/edit and ↻ regenerate on every reply (failed attempts are dropped before the next turn), the premise randomizer, the
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
-  - 272 passing tests.
+  - 288 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases, a reload-on-update check (doc 10 §14).
 

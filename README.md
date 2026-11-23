@@ -60,7 +60,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   their mind is written from that, from what they perceived and from who is around them. Characters keep an
   agenda, opinions of the people that matter and deep feelings, each rated 1–10 and fading when old; variables can
   hold a value per pair of characters (trust, affection) and are set up in a guided editor; advanced mode shows
-  each character's full sheet.
+  each character's full sheet. Your words and actions keep the order you typed them; a character says as much as
+  the moment's focus on them allows (⚡⚡ gives one the floor); ↶ Revert undoes the last regenerate, Edit, remove
+  or edit, and editing the last reply updates what every character knows.
 
 ## Running it
 

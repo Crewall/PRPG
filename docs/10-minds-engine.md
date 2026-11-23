@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), Revert and edits that reach the minds (§10a), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 

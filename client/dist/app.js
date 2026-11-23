@@ -1029,11 +1029,15 @@ async function renderPlay(storyId) {
 
   // Load (or reload, after a rewind) the transcript from the server.
   let turnCount = 0;
+  let redrawGen = 0;
   async function redrawTranscript() {
-    transcript.replaceChildren();
-    pendingPlayerBubble = null;
+    // Redraws can overlap (an action's own and the server event's): only the latest one renders.
+    const gen = ++redrawGen;
     try {
       const turns = await api.get(`/api/stories/${storyId}/turns`);
+      if (gen !== redrawGen) return;
+      transcript.replaceChildren();
+      pendingPlayerBubble = null;
       turnCount = turns.length;
       for (const t of turns) {
         const failed = t.status !== 'complete';
@@ -1047,11 +1051,12 @@ async function renderPlay(storyId) {
       const tail = turns.at(-1);
       lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
       if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
-      const lastTurn = turns.filter((t) => t.status === 'complete').at(-1);
-      if (lastTurn?.meta?.mode === 'dialogue' && !lastTurn.meta.reply?.act) {
+      // (Named apart from the outer `lastTurn`: a block-scoped one here made the assignment above throw, unseen.)
+      const lastDone = turns.filter((t) => t.status === 'complete').at(-1);
+      if (lastDone?.meta?.mode === 'dialogue' && !lastDone.meta.reply?.act) {
         let name = 'them';
-        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastTurn.meta.partner)?.name || name; } catch {}
-        setDialogue({ partner: lastTurn.meta.partner, name });
+        try { name = (await api.get(`/api/stories/${storyId}/minds`)).characters.find((c) => c.objectId === lastDone.meta.partner)?.name || name; } catch {}
+        setDialogue({ partner: lastDone.meta.partner, name });
       }
       follow = true;
       scrollDown(true); // a (re)loaded transcript always opens at the latest exchange

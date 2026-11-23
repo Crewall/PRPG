@@ -3,7 +3,7 @@
     "id": "input-syntax",
     "group": "Playing",
     "title": "What you type",
-    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story, the small ? in the corner of the message box shows how your message will be read.",
+    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. The order counts: words and actions happen in the order you write them. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story, the small ? in the corner of the message box shows how your message will be read.",
     "example": "\"A room, please.\" I set a coin on the counter and watch her hands. ((make the inn feel dangerous))"
   },
   {
@@ -33,8 +33,8 @@
   {
     "id": "edit-rewind",
     "group": "Playing",
-    "title": "Retry, edit and undo",
-    "body": "↻ on any reply writes it again. For an earlier reply, every turn after it is removed too and the story continues from the new reply; nothing replaced is kept (only recent replies can be redone). When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt and puts your message back in the box; sending something else drops it too. Edit undoes the last exchange completely and puts your message back in the box. ⧉ copies a message, ✎ edits its text, × removes it from the transcript (in a Minds story the characters still remember it)."
+    "title": "Retry, edit, undo and Revert",
+    "body": "↻ on any reply writes it again (for an earlier reply, every turn after it goes too). Edit (below Send) takes back the last exchange and puts your message back in the box. × on the last exchange removes it completely, as if it never happened; ✎ on your last message edits and resends it; ✎ on the last reply changes the story itself: the characters are told what your edited text says. After any of these, ↶ Revert (above the box) brings back exactly what was there before, memories and all — once; a new message ends the chance. Older messages: × and ✎ change only the transcript (the characters remember what happened), and Revert can bring them back too. When a turn fails, your message is marked \"not delivered\": ↻ Retry sends it again, Discard drops the attempt. ⧉ copies a message."
   },
   {
     "id": "cast-bar",
@@ -59,8 +59,15 @@
   {
     "id": "force-act",
     "group": "Characters",
-    "title": "Making a character act",
-    "body": "A round calls only the characters who matter (spoken to, spotlighted by the narrator, new, or active last round), up to a cap. \"Act next round\" on a character's card makes sure they are called next round. ⚡ marks them in the Present bar until then."
+    "title": "Making a character act, or giving them the floor",
+    "body": "A round calls only the characters who matter (spoken to, spotlighted by the narrator, new, or active last round), up to a cap. On a character's card, ⚡ cycles: Act next round (⚡: they are called, and answer fully) → Give them the floor (⚡⚡: they may say and do much more) → off. The marks show in the Present bar until then."
+  },
+  {
+    "id": "focus",
+    "group": "Characters",
+    "title": "How much a character says",
+    "body": "Each round, every character who acts has a focus, and says and does about that much: the floor (the only one you speak to, your conversation partner, or ⚡⚡): up to ~240 words of speech; the centre (spoken to with others, ⚡, or spotlighted by the narrator): ~120; part of it (you spoke to everyone, mentioned them, or they just arrived): a sentence or two; the background: a few words or nothing. These are ceilings: a quiet character stays quiet. Story options → Minds engine → character verbosity (1–5) scales them all.",
+    "example": "\"Marta, tell me everything.\" — Marta has the floor."
   },
   {
     "id": "player-character",

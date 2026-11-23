@@ -77,6 +77,7 @@ src/
     variables.ts        variable definitions, validation, visibility, the change pipeline, rendering
     thoughts.ts         kinds and importance, remember/revise preparation, fading, recall selection, tag mentions
     places.ts           places and things: matching the narrator's names to what exists, the narrator's list
+    focus.ts            how much each character says: focus tiers, limits, holding a reply to them
     text.ts             handles, tag normalization, word limits
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
@@ -213,6 +214,7 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
 | `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded |
 | `character_met` | Minds: pairs of characters who have met (relation variables exist for them) |
+| `undo_slots` | one Revert step per story: the full state saved before a regenerate, Edit, remove or edit |
 | `name_knowledge` | Minds: who knows whose name (viewer → subject) |
 | `character_ties` | Minds: how one character relates to another, from the holder's side ("older sister") |
 
@@ -284,7 +286,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 272 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 288 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
