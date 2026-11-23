@@ -11,13 +11,13 @@ import { renderPrompt } from '../agents/prompts.ts';
 import { DEFAULT_TURN_MINUTES } from '../util/gameClock.ts';
 import { logger } from '../util/logger.ts';
 import { breakScene } from '../orchestrator/scenes.ts';
-import { buildCharacterCall, buildNarratorCall, commitCall, hereFromScene, queueForCharacter, NARRATOR_OWNER } from './builders.ts';
+import { buildCharacterCall, buildNarratorCall, commitCall, hereFromScene, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from './builders.ts';
 import type { Declaration, PreparedCall, ThreadDeps } from './builders.ts';
 import { emptyBlock, entryToOp, parsePlayerInput, parseRoundBlock, readRoundBlock, splitNarratorReply } from './contracts.ts';
 import type { CharacterReply, PlayerDeclaration, RoundBlock } from './contracts.ts';
 import { chooseCallers } from './gate.ts';
 import type { GateCandidate } from './gate.ts';
-import { applyChanges, applyThoughtOps, createCharacter } from './service.ts';
+import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { slugify } from './text.ts';
@@ -88,6 +88,46 @@ function ensurePlayerSheet(deps: RoundDeps, story: Story): string | null {
   return obj.id;
 }
 
+const VAGUE_PRONOUN = /\b(he|she|him|her|his|hers|himself|herself)\b/i;
+
+/**
+ * The block's `player` field (docs/11 §2.1): creates the player character when the story has none, else fills
+ * only its empty fields — what the user wrote is never overwritten. A name that belongs to a character present
+ * is refused (the narrator must not turn an NPC into the player).
+ */
+function settlePlayer(
+  deps: RoundDeps,
+  storyId: string,
+  playerId: string | null,
+  p: { name?: string; pronouns?: string; appearance?: string },
+  presentIds: string[],
+): { playerId?: string; changed?: boolean; problem?: string } {
+  const pronouns = p.pronouns?.trim() ?? '';
+  const appearance = p.appearance?.trim() ?? '';
+  if (playerId) {
+    const sheet = deps.sheets.get(playerId);
+    if (!sheet) return { playerId };
+    const patch = { ...(!sheet.appearance.trim() && appearance ? { appearance } : {}), ...(!sheet.pronouns.trim() && pronouns ? { pronouns } : {}) };
+    if (!Object.keys(patch).length) return { playerId };
+    deps.sheets.upsert(storyId, playerId, patch);
+    return { playerId, changed: true };
+  }
+  const name = p.name?.trim();
+  if (!name) return { problem: 'player: no name given for the new player character' };
+  const existing = deps.memory.findByName(storyId, name);
+  if (existing) {
+    if (presentIds.includes(existing.id) || existing.type !== 'character') return { problem: `player: '${name}' is already someone else` };
+    const sheet = deps.sheets.get(existing.id);
+    updateSheet(deps, storyId, existing.id, {
+      isPlayer: true,
+      ...(!sheet?.appearance.trim() && appearance ? { appearance } : {}),
+      ...(!sheet?.pronouns.trim() && pronouns ? { pronouns } : {}),
+    });
+    return { playerId: existing.id, changed: true };
+  }
+  return { playerId: createCharacter(deps, storyId, { name, isPlayer: true, appearance, pronouns }).objectId, changed: true };
+}
+
 /** Resolve a block key ("#marta", "Marta Vell", "world", "#player") to a holder id. */
 function resolveKey(deps: RoundDeps, storyId: string, key: string, playerId: string | null): string | undefined {
   const k = key.trim();
@@ -115,7 +155,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   if (!storyIn.currentSceneId) deps.stories.openScene(storyId);
   let story = deps.stories.getStory(storyId)!;
   const mset = story.settings.minds;
-  const playerId = ensurePlayerSheet(deps, story);
+  let playerId = ensurePlayerSheet(deps, story);
   const scene = deps.stories.getScene(story.currentSceneId!)!;
   const completed = deps.stories.recentTurns(storyId, 60).filter((t) => t.status === 'complete' && t.index < turn.index);
   // The last real round (dialogue exchanges carry no block).
@@ -207,6 +247,14 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       `Wrap it up: bridge back to the scene in a few sentences (or none if nothing else happens), resolve what the player${partnerAct ? ` and ${partnerName}` : ''} now try, ` +
       `and give every other present character a brief of what they overheard or noticed. ${partnerName} was there, so their brief only needs what happens next.`;
   }
+  // The player character must exist and be describable (docs/11 §2.1): ask the narrator for what is missing.
+  const playerSheet = playerId ? deps.sheets.get(playerId) : undefined;
+  const playerAsk = !playerSheet
+    ? 'The player has no character yet. In the block, add "player": {"name": "…", "pronouns": "…", "appearance": "…"}: what the story has established about them, else invent what fits the premise.'
+    : !playerSheet.appearance.trim() || !playerSheet.pronouns.trim()
+      ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
+      : undefined;
+  if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
   const nCall = buildNarratorCall(deps, { storyId, player: decl, presentIds, declarations, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
@@ -252,11 +300,26 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       changedIds.add(r.objectId);
     }
 
-    // 5b. Objects, cast and scene first, so briefs and changes can name them.
+    // 5b. The player character, objects, cast and scene first, so briefs and changes can name them.
+    if (block.player) {
+      const r = settlePlayer(deps, storyId, playerId, block.player, presentIds);
+      if (r.problem) blockProblems.push(r.problem);
+      if (r.playerId) {
+        playerId = r.playerId;
+        if (r.changed) changedIds.add(r.playerId);
+      }
+    }
     for (const o of block.objects) {
-      if (deps.memory.findByName(storyId, o.name)) continue;
+      const existing = deps.memory.findByName(storyId, o.name) ?? (o.name.trim().startsWith('#') ? deps.memory.findByHandle(storyId, o.name.trim()) : undefined);
+      if (existing) {
+        // The narrator keeps places' and things' public one-liners current (docs/11 §2.4).
+        const line = o.line.trim();
+        if (line && existing.type !== 'character' && existing.summary !== line) deps.memory.updateObject(existing.id, { summary: line });
+        continue;
+      }
       const type = OBJECT_TYPES.includes(o.type as ObjectType) && o.type !== 'character' ? (o.type as ObjectType) : 'item';
-      deps.memory.createObject({ storyId, type, name: o.name, aliases: [], summary: o.line, salience: 0.5, status: 'active' });
+      const name = o.name.trim().startsWith('#') ? o.name.trim().replace(/^#/, '').replace(/[-_]+/g, ' ') : o.name.trim();
+      deps.memory.createObject({ storyId, type, name, aliases: [], summary: o.line.trim(), salience: 0.5, status: 'active' });
     }
     const current = () => deps.stories.getScene(deps.stories.getStory(storyId)!.currentSceneId!)!;
     for (const key of block.cast.exit) {
@@ -270,9 +333,12 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (existing && existing.id !== playerId) {
         oid = existing.id;
         const sheet = deps.sheets.get(oid);
-        deps.sheets.upsert(storyId, oid, sheet?.appearance ? {} : { appearance: e.appearance });
+        deps.sheets.upsert(storyId, oid, {
+          ...(sheet?.appearance ? {} : { appearance: e.appearance }),
+          ...(sheet?.pronouns || !e.pronouns.trim() ? {} : { pronouns: e.pronouns.trim() }),
+        });
       } else if (!existing) {
-        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance }).objectId;
+        oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns }).objectId;
       } else continue;
       if (!current().activeNpcIds.includes(oid)) {
         deps.stories.addActiveNpc(current().id, oid);
@@ -335,6 +401,15 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const [key, text] of Object.entries(block.briefs)) {
       const oid = resolveKey(deps, storyId, key, playerId);
       if (oid && oid !== 'world' && oid !== playerId && text.trim()) briefs.set(oid, text.trim());
+    }
+    // Soft check (docs/11 §2.4): a brief that says he/she without naming anyone by #handle, while its reader
+    // has two or more people around, is delivered — and the narrator is reminded next round.
+    if (presentIds.length >= 2) {
+      const vague = [...briefs].filter(([, text]) => VAGUE_PRONOUN.test(text) && !/#[\p{L}\p{N}]/u.test(text)).map(([oid]) => label(deps, oid));
+      if (vague.length) {
+        blockProblems.push(`briefs: he/she without a #handle (${vague.join(', ')})`);
+        queueForNarrator(deps, storyId, `Note: your briefs for ${vague.join(', ')} said he/she without naming anyone by #handle. Name people by #handle in briefs (the player too), so each character knows who is meant.`, turn.id);
+      }
     }
     const speeches: { from: string; line: string }[] = [];
     if (decl.say) speeches.push({ from: 'player', line: `${playerLabel}: "${decl.say}"` });

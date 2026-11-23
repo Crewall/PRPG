@@ -81,6 +81,7 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     isPlayer: z.boolean().optional(),
     description: z.string().optional(),
     appearance: z.string().optional(),
+    pronouns: z.string().max(40).optional(),
     state: z.string().optional(),
     tierId: z.string().nullable().optional(),
   });

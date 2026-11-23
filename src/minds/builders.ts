@@ -10,6 +10,7 @@ import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { STATE_KEY, appliesTo, canSee, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
 import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
+import { clampWords } from './text.ts';
 import type { Thought } from './thoughts.ts';
 import { holdersFor, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
@@ -30,12 +31,12 @@ export interface ThreadDeps extends MindsDeps {
   verbosityOverride?: () => Record<string, string>;
 }
 
-/** What a character can see around it right now (the "Here:" line). */
+/** What a character can see around it right now (the "Here:" block; docs/11 §2.4). */
 export interface HereInfo {
-  location?: { handle: string; name: string };
-  /** Others present, the player character included. */
-  present: { handle: string; name: string; appearance: string }[];
-  items: { handle: string; name: string }[];
+  location?: { handle: string; name: string; line?: string };
+  /** Others present, the player character included: their public profile. */
+  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string }[];
+  items: { handle: string; name: string; line?: string }[];
 }
 
 export interface CharacterCallInput {
@@ -198,7 +199,7 @@ export function characterSystemPrompt(deps: ThreadDeps, storyId: string, objectI
     name: obj?.name ?? 'the character',
     handle: h(obj?.handle ?? deps.memory.ensureHandle(objectId)),
     description: sheet?.description.trim() || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)',
-    appearance: sheet?.appearance.trim() || '(not described yet)',
+    appearance: `${sheet?.pronouns ? `Pronouns: ${sheet.pronouns}. ` : ''}${sheet?.appearance.trim() || '(not described yet)'}`,
     variables: lines.join('\n'),
   });
 }
@@ -216,6 +217,25 @@ function proposalNotes(deps: ThreadDeps, storyId: string, objectId: string, last
       if (c.result === 'clamped') return `Adjusted: ${key} became ${JSON.stringify(c.new)} (limits).`;
       return `Overridden: what happened set your ${key} differently.`;
     });
+}
+
+/**
+ * The "Here:" block: the place, everyone present with their public profile
+ * (pronouns, appearance, what is visibly true), and the things in view.
+ *   Here: #broken-wheel (broken wheel) — a smugglers' inn on the coast road.
+ *   - #kael Kael (he/him) — Tall, rain-soaked. Visibly: health 7/10 (fine)
+ *   In view: #ledger (ledger — the smugglers' book of debts)
+ */
+export function renderHere(here: HereInfo): string {
+  const loc = here.location;
+  const lines = [`Here: ${loc ? `${h(loc.handle)} (${loc.name})${loc.line ? ` — ${loc.line}` : ''}` : 'an unnamed place'}`];
+  for (const p of [...here.present].sort((a, b) => a.handle.localeCompare(b.handle))) {
+    const who = `${h(p.handle)} ${p.name}${p.pronouns ? ` (${p.pronouns})` : ''}`;
+    lines.push(`- ${who}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
+  }
+  const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
+  if (items.length) lines.push(`In view: ${items.map((i) => `${h(i.handle)}${i.line ? ` (${i.name} — ${i.line})` : ''}`).join(', ')}`);
+  return lines.join('\n');
 }
 
 /** Build a character's next call (read-only). */
@@ -243,13 +263,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   const recalled = chosen.recalled;
 
   const parts: string[] = [];
-  const present = [...here.present].sort((a, b) => a.handle.localeCompare(b.handle));
-  const hereBits = [
-    here.location ? `${h(here.location.handle)} (${here.location.name})` : 'an unnamed place',
-    ...present.map((p) => `${h(p.handle)} ${p.name}${p.appearance ? ` — ${p.appearance}` : ''}`),
-  ];
-  const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
-  parts.push(`Here: ${hereBits.join(' · ')}${items.length ? ` · in view: ${items.map((i) => h(i.handle)).join(', ')}` : ''}`);
+  parts.push(renderHere(here));
   if (pending.length) parts.push(`Since you last acted:\n${pending.map((p) => p.content.trim()).join('\n\n')}`);
   if (input.now?.trim()) parts.push(`Right now:\n${input.now.trim()}`);
   const notes = proposalNotes(deps, storyId, objectId, lastReply);
@@ -328,7 +342,7 @@ export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string 
 function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, full: boolean): string[] {
   const obj = deps.memory.getObject(holder.id);
   const sheet = deps.sheets.get(holder.id);
-  const lines = [`${h(holder.handle)} (${obj?.name ?? '?'})${sheet?.appearance ? ` — ${sheet.appearance}` : ''}`];
+  const lines = [`${h(holder.handle)} (${obj?.name ?? '?'}${sheet?.pronouns ? `, ${sheet.pronouns}` : ''})${sheet?.appearance ? ` — ${sheet.appearance}` : ''}`];
   if (full && sheet?.description) lines.push(`  Who: ${sheet.description.replace(/\s+/g, ' ').trim()}`);
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
@@ -421,18 +435,34 @@ export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories']
   if (player) present.add(player.objectId);
   present.delete(objectId);
   const loc = scene?.locationObjectId ? deps.memory.getObject(scene.locationObjectId) : undefined;
+  const defs = deps.variables.listDefs(storyId);
+  const holders = holdersFor(deps, storyId);
+  const oneLine = (text: string | undefined, words: number) => (text?.trim() ? clampWords(text.replace(/\s+/g, ' ').trim(), words).text.replace(/[.\s]+$/, '') : undefined);
   return {
-    location: loc ? { handle: deps.memory.ensureHandle(loc.id) ?? '', name: loc.name } : undefined,
+    location: loc ? { handle: deps.memory.ensureHandle(loc.id) ?? '', name: loc.name, line: oneLine(loc.summary, 25) } : undefined,
     present: [...present]
       .map((oid) => {
         const obj = deps.memory.getObject(oid);
-        return obj ? { handle: deps.memory.ensureHandle(oid) ?? '', name: obj.name, appearance: deps.sheets.get(oid)?.appearance ?? '' } : undefined;
+        if (!obj) return undefined;
+        const sheet = deps.sheets.get(oid);
+        const holder = holders.get(oid);
+        // Only what anyone present may see: public variables (docs/11 §1).
+        const visibly = holder ? valueLine(deps, storyId, defs, holder, { kind: 'character', id: objectId }, false) : '';
+        return {
+          handle: deps.memory.ensureHandle(oid) ?? '',
+          name: obj.name,
+          appearance: sheet?.appearance ?? '',
+          ...(sheet?.pronouns ? { pronouns: sheet.pronouns } : {}),
+          ...(visibly ? { visibly } : {}),
+        };
       })
       .filter((x): x is HereInfo['present'][number] => !!x),
     items: (scene?.itemHandles ?? [])
       .map((handle) => {
         const obj = deps.memory.findByHandle(storyId, handle);
-        return obj ? { handle: obj.handle ?? handle, name: obj.name } : undefined;
+        if (!obj) return undefined;
+        const line = oneLine(obj.summary, 15);
+        return { handle: obj.handle ?? handle, name: obj.name, ...(line ? { line } : {}) };
       })
       .filter((x): x is HereInfo['items'][number] => !!x),
   };

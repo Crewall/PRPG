@@ -46,6 +46,7 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
       deps.sheets.upsert(storyId, objectId, {
         ...(reply.description && (force || !now.description.trim()) ? { description: reply.description } : {}),
         ...(reply.appearance && !now.appearance.trim() ? { appearance: reply.appearance } : {}),
+        ...(reply.pronouns && !now.pronouns.trim() ? { pronouns: reply.pronouns } : {}),
         seeded: true,
       });
       const proposals: Proposal[] = [];

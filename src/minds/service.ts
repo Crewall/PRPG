@@ -110,7 +110,7 @@ export function applyThoughtOps(
       result.notes.push(`Not kept: you already hold ${maxActive} thoughts. Forget or merge some first.`);
       break;
     }
-    const t = deps.thoughts.insert(storyId, owner, { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source }, turnId);
+    const t = deps.thoughts.insert(storyId, owner, { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: story?.clockMin ?? null }, turnId);
     existing.add(prepared.text.toLowerCase());
     result.added.push(t);
     for (const n of prepared.notes) result.notes.push(`${thoughtHandle(t)}: ${n}.`);
@@ -122,13 +122,14 @@ export function applyThoughtOps(
 export function createCharacter(
   deps: MindsDeps,
   storyId: string,
-  input: { name: string; isPlayer?: boolean; description?: string; appearance?: string; state?: string },
+  input: { name: string; isPlayer?: boolean; description?: string; appearance?: string; pronouns?: string; state?: string },
 ): CharacterSheet {
   const obj = deps.memory.createObject({ storyId, type: 'character', name: input.name.trim(), aliases: [], summary: '', salience: 0.6, status: 'active' });
   const sheet = deps.sheets.upsert(storyId, obj.id, {
     isPlayer: !!input.isPlayer,
     description: input.description ?? '',
     appearance: input.appearance ?? '',
+    pronouns: input.pronouns?.trim() ?? '',
     state: input.state ?? '',
   });
   if (input.isPlayer) deps.stories.updateStory(storyId, { settings: { playerObjectId: obj.id } });
@@ -159,6 +160,7 @@ export interface CharacterView {
   name: string;
   isPlayer: boolean;
   appearance: string;
+  pronouns: string;
   /** Present only when the viewer may see it. */
   description?: string;
   state?: string;
@@ -192,6 +194,7 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
       name: obj.name,
       isPlayer: sheet.isPlayer,
       appearance: sheet.appearance,
+      pronouns: sheet.pronouns,
       ...(own ? { description: sheet.description, state: sheet.state } : {}),
       ...(viewer.kind === 'advanced' ? { tierId: sheet.tierId } : {}),
       seeded: sheet.seeded,

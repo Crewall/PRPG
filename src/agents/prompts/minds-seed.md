@@ -11,6 +11,7 @@ as a complete person.
 - "description": 80–200 words of plain prose in the third person, like a character sheet. Identity, personality, voice and manner of speaking, drives and fears, background, and anything they know about
   themselves that others don't (secrets welcome if the story hints at one).
 - "appearance": one or two lines anyone would notice at a glance (keep the established one if given).
+- "pronouns": how others refer to them ("she/her", "he/him", "they/them", …), as the story established.
 - "state": one sentence, how they are right now.
 - "values": starting values for the variables listed below, as {"key": value}, within their ranges. Leave out
   any you have no reason to set.
@@ -22,6 +23,7 @@ as a complete person.
 {
   "description": "…",
   "appearance": "…",
+  "pronouns": "…",
   "state": "…",
   "values": { "health": 8 },
   "thoughts": [{ "text": "…", "tags": ["topic", "#handle"], "pin": false }]

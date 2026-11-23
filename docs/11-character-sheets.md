@@ -30,14 +30,22 @@ invariants enforced by the context builders and pinned by tests.
   It sits in the character's **frozen system prompt**, so editing it costs one cache miss and is fine.
 - **Appearance** (public, 1–2 lines): what anyone perceives at a glance. Used in cast lists, given to other
   present characters, shown on the cast bar.
+- **Pronouns** (public, short: "she/her", "he/him", "they/them", or anything else): how others refer to the
+  character. Shown with the name everywhere others see the character (§2.4).
 
 ### 2.1 The player character
 
-Created at story setup, in one of two ways:
+A Minds story **always has a player character**: without one the player is an anonymous voice, absent from
+everyone's "Here:" line and without a #handle, so characters can't tell the player from anyone else (a bug seen
+in play: the barkeep took the player and the stranger for one person). It is created in one of these ways:
 
-- written by the user: description, appearance, starting variable values;
-- drafted by the existing interviewer (≤ 3 questions; it now outputs a sheet instead of memory facts), then
-  edited by the user.
+- written by the user: a small form (name, pronouns, appearance, who they are) that opens before a new Minds story
+  starts, and from the 🎭 chip in the Present bar at any time;
+- carried over from the classic player interview (the story's player object gets a sheet);
+- **by the narrator**, as a fallback: while the story has no player character, or its sheet lacks a name-worthy
+  appearance or pronouns, the narrator's round message asks for them and the round block's `player` field
+  (`{ "name", "pronouns", "appearance" }`) creates the character or fills **only the empty fields**. What the
+  user wrote is never overwritten.
 
 Its state and variables are changed by the narrator (and the user). It has no thread of its own; the narrator's
 prose is its POV.
@@ -63,6 +71,32 @@ already established about the character, then invent the rest. It writes:
 - 3–10 starting thoughts with tags (what it knows right now).
 
 Until the job lands, the character plays from its appearance plus an "improvise consistently" note, as today.
+
+### 2.4 The public profile (what others perceive)
+
+Everything another character perceives about someone present, in one line of its "Here:" list:
+
+```
+#marta Marta (she/her) — Stout, flour on her apron, sharp eyes. · visibly: health hurt
+```
+
+- name and #handle, **pronouns**, **appearance**;
+- the holder's **public variables** ("visibly: …"), so a visible wound or a drawn sword is known to everyone
+  present (the table in §1 always said so; the builders now show it).
+
+The narrator sees the same header on every sheet (`#marta (Marta, she/her) — …`). Pronouns come from the user,
+the narrator's `cast.enter` (`pronouns` beside `appearance`) or the seeder, which fills them when empty.
+
+**Places and things** have a public one-liner too: the object's summary, set by the narrator's `objects` list
+(`line`) and updatable by it, including whose they are ("Kael's rented room"). The "Here:" line shows the
+location's line and each item in view with its line.
+
+**Briefs name people by #handle.** The narrator prompt says so, and a soft check backs it up: a brief that uses
+he/she/him/her/his without any #handle, while its reader has two or more people around, earns the narrator a note
+in its next round message ("name people by #handle so each character knows who is meant"). The brief is still
+delivered.
+
+*Later (doc 10 §14):* "known as" names per observer (Marta knows the player only as "the stranger" until told).
 
 ## 3. State
 
@@ -228,6 +262,7 @@ app can bring the right ones back at the right time.
 | `pinned` | Always delivered (see §5.4). Untagged thoughts are pinned automatically, since nothing could recall them. |
 | `status` | `active` · `revoked` (soft; history kept). |
 | `source` | `self` · `seed` · `compactor` (proposal) · `user`. |
+| `created_clock_min` | The in-story time it was written. Shown with the thought (`t12 · Day 2, 19:40 [tags] text`) so a character keeps events in order. Empty for thoughts written before it existed. |
 | bookkeeping | `created_turn_id`, `revoked_turn_id`, `last_recalled_turn_id`, `recall_count`. |
 
 ### 5.3 Operations, tags and handles

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { clampWords, normalizeTag } from './text.ts';
 import { estimateTokens } from '../util/tokens.ts';
+import { formatGameClock } from '../util/gameClock.ts';
 
 // Self-written thoughts (docs/11 §5): preparing writes and choosing recalls.
 // Pure — the thought store does the I/O.
@@ -28,6 +29,8 @@ export interface Thought {
   status: 'active' | 'revoked';
   source: 'self' | 'seed' | 'compactor' | 'user';
   createdTurnId: string | null;
+  /** In-story time it was written (game-clock minutes); null for older thoughts. */
+  createdClockMin: number | null;
   revokedTurnId: string | null;
   lastRecalledTurnId: string | null;
   recallCount: number;
@@ -77,9 +80,10 @@ export function prepareRemember(op: RememberOp, rosterHandles: Set<string>): Pre
   return { text: clamped.text, tags, pinned: op.pin || tags.length === 0, notes };
 }
 
-/** "t12 [ledger, #marta] Marta keeps the ledger under the counter." */
-export function renderThought(t: Pick<Thought, 'seq' | 'tags' | 'text'>): string {
-  return `${thoughtHandle(t)}${t.tags.length ? ` [${t.tags.join(', ')}]` : ''} ${t.text}`;
+/** "t12 · Day 2, 19:40 [ledger, #marta] Marta keeps the ledger under the counter." (the time when known) */
+export function renderThought(t: Pick<Thought, 'seq' | 'tags' | 'text'> & { createdClockMin?: number | null }): string {
+  const when = t.createdClockMin != null ? ` · ${formatGameClock(t.createdClockMin)}` : '';
+  return `${thoughtHandle(t)}${when}${t.tags.length ? ` [${t.tags.join(', ')}]` : ''} ${t.text}`;
 }
 
 /**

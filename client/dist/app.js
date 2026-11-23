@@ -22,7 +22,7 @@ const h = (tag, attrs = {}, ...kids) => {
 const api = {
   async get(p) { const r = await fetch(p); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async post(p, b, opts = {}) { const r = await fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}), signal: opts.signal }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
-  async patch(p, b) { const r = await fetch(p, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
+  async patch(p, b) { const r = await fetch(p, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async put(p, b) { const r = await fetch(p, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); },
   async del(p) { const r = await fetch(p, { method: 'DELETE' }); if (!r.ok) throw new Error(r.statusText); return r.json(); },
 };
@@ -384,6 +384,48 @@ async function renderPlay(storyId) {
   );
 
   let activeNpcIds = new Set();
+  // The player character (Minds, docs/11 §2.1): who you play, as the other minds perceive you.
+  // Resolves when the form closes (saved, skipped or cancelled).
+  function showPlayerForm(pc) {
+    return new Promise((resolve) => {
+      const field = (label, el, hint) => h('label', { class: 'form-row' }, h('span', { class: 'sub' }, label), el, hint ? h('span', { class: 'hint' }, hint) : null);
+      const nameIn = h('input', { type: 'text', value: pc?.name || '', placeholder: 'e.g. Kael' });
+      const pronIn = h('input', { type: 'text', value: pc?.pronouns || '', placeholder: 'she/her, he/him, they/them…', list: 'pronoun-list', maxlength: '40' });
+      const lookIn = h('textarea', { rows: '2', placeholder: 'What anyone sees at a glance: build, clothes, anything striking.' });
+      lookIn.value = pc?.appearance || '';
+      const whoIn = h('textarea', { rows: '4', placeholder: 'Optional: who you are, background, what you want. Only the narrator reads this.' });
+      whoIn.value = pc?.description || '';
+      const err = h('div', { class: 'sub err' });
+      const close = (v) => { modal.remove(); resolve(v); };
+      const save = h('button', { class: 'primary', onclick: async () => {
+        const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+        if (!body.name) { err.textContent = 'Give your character a name.'; return; }
+        try {
+          if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
+          else await api.post(`/api/stories/${storyId}/minds`, { ...body, isPlayer: true });
+          close('saved');
+          refreshSceneHeader();
+        } catch (e) { err.textContent = e.message; }
+      } }, pc ? 'Save' : 'Play as this character');
+      const modal = h('div', { class: 'modal-bg' },
+        h('div', { class: 'modal' },
+          h('h3', {}, pc ? 'Your character' : 'Who do you play?'),
+          h('div', { class: 'sub' }, 'The other characters see your name, pronouns and appearance, so they can tell you apart from everyone else.'),
+          field('Name', nameIn),
+          field('Pronouns', pronIn),
+          h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
+          field('Appearance', lookIn),
+          field('Who you are', whoIn),
+          err,
+          h('div', { class: 'row', style: 'gap:8px; justify-content:flex-end; flex-wrap:wrap' },
+            pc ? null : h('button', { class: 'ghost', title: 'The narrator creates your character from the premise; you can edit it later from the 🎭 chip.', onclick: () => close('skipped') }, 'Let the narrator decide'),
+            pc ? h('button', { class: 'ghost', onclick: () => close('cancelled') }, 'Cancel') : null,
+            save)));
+      document.body.append(modal);
+      nameIn.focus();
+    });
+  }
+
   async function refreshSceneHeader() {
     // Minds engine: the scene's present characters, each its own mind (tooltip: what you can see of them).
     if (story.settings?.engine === 'minds') {
@@ -394,9 +436,11 @@ async function renderPlay(storyId) {
       const pc = view.characters.find((c) => c.isPlayer);
       const here = view.characters.filter((c) => present.has(c.objectId) && !c.isPlayer);
       activeNpcIds = new Set(here.map((c) => c.objectId));
-      const tip = (c) => [c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
+      const tip = (c) => [c.pronouns ? `(${c.pronouns})` : '', c.appearance, c.state ? `State: ${c.state}` : '', ...c.variables.map((v) => `${v.label}: ${v.display}`)].filter(Boolean).join('\n');
       npcChips.replaceChildren(
-        pc ? h('span', { class: 'chip pc', title: tip(pc) }, `🎭 ${pc.name}`) : h('span', { class: 'sub' }, '🎭 no player character'),
+        pc
+          ? h('button', { class: 'chip pc', title: `${pc.pronouns ? `${pc.pronouns}\n` : ''}${tip(pc)}\n\nTap to edit your character.`, onclick: () => showPlayerForm(pc) }, `🎭 ${pc.name}`)
+          : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
           ? here.map((c) => h('button', { class: 'chip', title: `${tip(c)}\n\nTap to talk with ${c.name} directly.`, onclick: () => {
               if (busy || dialogue?.partner === c.objectId) return;
@@ -687,6 +731,16 @@ async function renderPlay(storyId) {
   };
   const addBubble = (cls, text) => { const b = h('div', { class: `bubble ${cls}` }, text); transcript.append(b); scrollDown(); return b; };
   const addStatus = (t) => { transcript.append(h('div', { class: 'status-line' }, t)); scrollDown(); };
+  // The turn's progress ("the narrator is writing…"): one live line, replaced by
+  // each new stage and gone when the turn ends — it never piles up in the chat.
+  let liveStage = null;
+  const showStage = (t) => {
+    if (!liveStage) liveStage = h('div', { class: 'status-line live' });
+    liveStage.textContent = t;
+    transcript.append(liveStage); // (re)placed at the bottom
+    scrollDown();
+  };
+  const clearStage = () => { liveStage?.remove(); liveStage = null; };
 
   // Feature: copy/edit/delete ANY past message. Each transcript bubble carries
   // ⧉/✎/× controls; edit/delete are bound to its turn + field (player input or
@@ -762,10 +816,17 @@ async function renderPlay(storyId) {
 
   // A brand-new story opens itself: the storyteller sets the scene unprompted.
   let autoOpened = false;
-  function maybeAutoOpen() {
+  async function maybeAutoOpen() {
     if (autoOpened || turnCount > 0 || busy || !wsOpen()) return;
     autoOpened = true;
-    addStatus('(the storyteller opens the story…)');
+    // A new Minds story asks who you play first (docs/11 §2.1); skipping lets the narrator decide.
+    if (story.settings?.engine === 'minds') {
+      let hasPc = true;
+      try { hasPc = (await api.get(`/api/stories/${storyId}/minds`)).characters.some((c) => c.isPlayer); } catch {}
+      if (!hasPc) await showPlayerForm(null);
+      if (turnCount > 0 || busy || !wsOpen()) return;
+    }
+    showStage('the storyteller opens the story…');
     submitText('', false);
   }
 
@@ -1081,6 +1142,7 @@ async function renderPlay(storyId) {
   function parsedPayload(l) {
     const p = l.payload || {};
     const box = h('div', { class: 'thread-parsed' });
+    if (p.error) box.append(h('div', { class: 'call-error' }, `failed: ${p.error}`));
     if (l.direction === 'request') {
       if (p.model) box.append(h('div', { class: 'sub' }, `model: ${p.model}`));
       if (p.system) box.append(h('details', {}, h('summary', { class: 'sub' }, 'system prompt'), h('div', { class: 'prose' }, p.system)));
@@ -1112,22 +1174,36 @@ async function renderPlay(storyId) {
     return box;
   }
 
+  // One row per agent call: whose mind, when (turn · game time · clock), size,
+  // speed, cache use — request and response together; failures say why.
   async function renderThreads(body) {
     body.replaceChildren();
-    let logs = [];
-    try { logs = await api.get(`/api/stories/${storyId}/threadlog?limit=60`); } catch {}
-    if (!logs.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
-    for (const l of logs) {
+    let calls = [];
+    try { calls = await api.get(`/api/stories/${storyId}/calls?limit=40`); } catch {}
+    if (!calls.length) { body.append(h('div', { class: 'empty' }, 'No agent activity yet.')); return; }
+    const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    for (const c of calls) {
       const detail = h('div', { class: 'gone' });
       let built = false;
-      body.append(h('div', { class: 'mem-card' },
-        h('div', { class: 'mem-head', onclick: () => { if (!built) { detail.append(parsedPayload(l)); built = true; } detail.classList.toggle('gone'); } },
-          h('span', { class: `role-badge ${l.agentRole}` }, l.agentRole),
-          // Requests carry no duration; show the input size and how long ago it
-          // was sent instead of a misleading "0ms". Responses show real latency.
-          h('span', { class: 'sub' }, l.direction === 'response'
-            ? `response · ${l.tokensOut ?? 0}tk · ${((l.durationMs ?? 0) / 1000).toFixed(1)}s`
-            : `request · ${l.tokensIn ?? 0}tk · sent ${Math.max(0, Math.round((Date.now() - l.createdAt) / 1000))}s ago`)),
+      const when = [c.turnIndex != null ? `turn ${c.turnIndex + 1}` : '', c.gameTime || '', clock(c.startedAt)].filter(Boolean).join(' · ');
+      const cachePct = c.cacheRead && c.tokensIn ? ` · cache ${Math.round((100 * c.cacheRead) / c.tokensIn)}%` : '';
+      const size = c.status === 'waiting'
+        ? `${c.tokensIn ?? 0}tk sent · waiting ${Math.max(0, Math.round((Date.now() - c.startedAt) / 1000))}s`
+        : c.status === 'failed'
+          ? `failed after ${((c.durationMs ?? 0) / 1000).toFixed(1)}s`
+          : `${c.tokensIn ?? 0}→${c.tokensOut ?? 0}tk · ${((c.durationMs ?? 0) / 1000).toFixed(1)}s${cachePct}`;
+      body.append(h('div', { class: `mem-card call ${c.status}` },
+        h('div', { class: 'mem-head', onclick: () => {
+          if (!built) {
+            detail.append(h('div', { class: 'sub' }, 'request'), parsedPayload(c.request));
+            if (c.response) detail.append(h('div', { class: 'sub' }, 'response'), parsedPayload(c.response));
+            built = true;
+          }
+          detail.classList.toggle('gone');
+        } },
+          h('div', { class: 'call-who' }, h('span', { class: `role-badge ${c.role}` }, c.role), h('b', {}, c.mind)),
+          h('div', { class: 'call-meta' }, h('span', { class: 'sub' }, when), h('span', { class: c.status === 'failed' ? 'sub err' : 'sub' }, size))),
+        c.error ? h('div', { class: 'call-error' }, c.error) : null,
         detail));
     }
   }
@@ -1198,9 +1274,10 @@ async function renderPlay(storyId) {
     const m = JSON.parse(ev.data);
     switch (m.t) {
       case 'turn.accepted': currentTurnId = m.turnId; current = addBubble('narration cursor', ''); showReplyStart(current); break;
-      case 'turn.status': addStatus(m.text); break;
-      case 'turn.delta': if (!current) { current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
+      case 'turn.status': showStage(m.text); break;
+      case 'turn.delta': if (!current) { clearStage(); current = addBubble('narration cursor', ''); showReplyStart(current); } current.textContent += m.text; scrollDown(); break;
       case 'turn.final':
+        clearStage();
         // Swap the live bubbles for edit/delete-capable ones now that the turn
         // has a persisted id — no reload needed to fix a just-written message.
         if (current) { const nb = messageBubble('narration', m.narration, m.turnId, 'narration'); current.replaceWith(nb); current = nb; }
@@ -1215,8 +1292,9 @@ async function renderPlay(storyId) {
           setTimeout(() => submitText('', false), 300);
         } else if (m.meta?.mode && m.meta.mode !== 'dialogue') setDialogue(null);
         break;
-      case 'turn.rejected': if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
+      case 'turn.rejected': clearStage(); if (current) current.remove(); addStatus('(cancelled)'); current = null; pendingPlayerBubble = null; setBusy(false); break;
       case 'turn.error':
+        clearStage();
         if (current) current.remove();
         addBubble('error', `The turn failed — ${m.message}`);
         // Don't lose the message: put it back in the box for another try.

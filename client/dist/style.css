@@ -274,3 +274,20 @@ button.link[disabled] { opacity: .35; cursor: not-allowed; }
 /* Dialogue mode (Minds) */
 .dialogue-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel-2); font-size: 14px; }
 .dialogue-bar span { flex: 1 1 auto; }
+
+/* Threads view: one row per agent call */
+.mem-card.call .mem-head { flex-wrap: wrap; }
+.call-who { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.call-who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; margin-left: auto; }
+.mem-card.call.failed { border-color: #7a3b3b; }
+.mem-card.call.waiting { border-style: dashed; }
+.sub.err, .call-error { color: #ff8a8a; }
+.call-error { font-size: 12px; padding: 0 11px 9px; word-break: break-word; }
+.status-line.live { opacity: .85; }
+
+/* Forms in modals (player character, sheets) */
+.form-row { display: flex; flex-direction: column; gap: 4px; }
+.form-row input, .form-row textarea, .form-row select { width: 100%; box-sizing: border-box; }
+.form-row .hint { font-size: 12px; color: var(--muted); }
+.chip.pc.missing { border-style: dashed; color: var(--accent); }

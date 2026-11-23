@@ -13,6 +13,7 @@ import { EDITABLE_PROMPTS, ModelEntry, TierCfg } from '../config/settingsService
 import { PRESETS, ProviderKind, ProviderPreset, capsFromListing } from '../config/config.ts';
 import { utcDay } from '../db/stores/usageStore.ts';
 import { registerMindsRoutes } from './mindsRoutes.ts';
+import { listCalls } from './callsView.ts';
 import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
 import { callJson } from '../llm/jsonCall.ts';
 import { rollSeeds, parseSeeds, defaultSeedsText } from '../util/seeds.ts';
@@ -155,6 +156,13 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     const { id } = req.params as { id: string };
     const q = req.query as { turnId?: string; role?: string; limit?: string };
     return threadLog.query(id, { turnId: q.turnId, role: q.role, limit: q.limit ? Number(q.limit) : 200 });
+  });
+
+  // The Threads view: one row per agent call (request + response), newest first.
+  server.get('/api/stories/:id/calls', async (req) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { limit?: string };
+    return listCalls(app, id, q.limit ? Math.min(200, Math.max(1, Number(q.limit))) : 40);
   });
 
   // ---- Layer 2: scenes & summaries ----
