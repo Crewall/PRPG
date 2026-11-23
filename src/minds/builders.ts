@@ -182,10 +182,22 @@ export function characterSystemPrompt(deps: ThreadDeps, storyId: string, objectI
   const obj = deps.memory.getObject(objectId);
   const sheet = deps.sheets.get(objectId);
   const holder = holdersFor(deps, storyId).get(objectId) ?? { id: objectId, isPlayer: false };
-  const viewer: Viewer = { kind: 'character', id: objectId };
+  const lines = characterVariableLines(deps.variables.listDefs(storyId), holder);
+  return renderPrompt('minds-character', {
+    name: obj?.name ?? 'the character',
+    handle: h(obj?.handle ?? deps.memory.ensureHandle(objectId)),
+    description: sheet?.description.trim() || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)',
+    appearance: `${sheet?.pronouns ? `Pronouns: ${sheet.pronouns}. ` : ''}${sheet?.appearance.trim() || '(not described yet)'}`,
+    variables: lines.join('\n'),
+  });
+}
+
+/** The "Your variables" lines of a character's system prompt: what it can see, and what it may change. */
+export function characterVariableLines(defs: VariableDef[], holder: HolderInfo): string[] {
+  const viewer: Viewer = { kind: 'character', id: holder.id };
   const lines: string[] = [];
-  for (const d of deps.variables.listDefs(storyId)) {
-    const mine = d.scope === 'character' && appliesTo(d, holder) && canSee(d, objectId, viewer);
+  for (const d of defs) {
+    const mine = d.scope === 'character' && appliesTo(d, holder) && canSee(d, holder.id, viewer);
     const world = d.scope === 'world' && canSee(d, 'world', viewer);
     if (!mine && !world) continue;
     const mayChange = mine && d.changedBy.includes('self');
@@ -195,12 +207,17 @@ export function characterSystemPrompt(deps: ThreadDeps, storyId: string, objectI
     lines.push(`- ${world ? '(the world) ' : ''}${d.key} (${renderRange(d)}): ${sentence(d.description || d.label)} ${who}${mayChange ? guide : ''}`.trim());
   }
   lines.push(`- state (one sentence): how you feel or are right now. YOU may update it; the narrator records what happens to you.`);
-  return renderPrompt('minds-character', {
-    name: obj?.name ?? 'the character',
-    handle: h(obj?.handle ?? deps.memory.ensureHandle(objectId)),
-    description: sheet?.description.trim() || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)',
-    appearance: `${sheet?.pronouns ? `Pronouns: ${sheet.pronouns}. ` : ''}${sheet?.appearance.trim() || '(not described yet)'}`,
-    variables: lines.join('\n'),
+  return lines;
+}
+
+/** The variables section of the narrator's system prompt: every definition with its rules. */
+export function narratorVariableLines(defs: VariableDef[]): string[] {
+  return defs.map((d) => {
+    const scope = d.scope === 'world' ? 'world' : d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
+    const vis = d.visibility === 'hidden' ? 'hidden from its holder' : d.visibility === 'public' ? 'visible to everyone present' : 'visible to its holder';
+    const who = [d.changedBy.includes('narrator') ? 'you' : '', d.changedBy.includes('self') ? 'the holder' : ''].filter(Boolean).join(' and ') || 'nobody';
+    const step = d.type === 'number' && d.maxStep ? `, at most ${d.maxStep} per round` : '';
+    return `- ${d.key} (${renderRange(d)}; ${scope}; ${vis}; changed by ${who}${step}): ${sentence(d.description || d.label)}${d.changeGuide ? ` When/how: ${d.changeGuide}` : ''}`;
   });
 }
 
@@ -319,13 +336,7 @@ export function narratorSystemPrompt(deps: ThreadDeps, storyId: string): string 
   const playerObj = player ? deps.memory.getObject(player.objectId) : undefined;
   const override = deps.verbosityOverride?.() ?? {};
   const verbosity = override[String(s.verbosity)]?.trim() || VERBOSITY_STYLE[s.verbosity] || VERBOSITY_STYLE[3];
-  const lines = deps.variables.listDefs(storyId).map((d) => {
-    const scope = d.scope === 'world' ? 'world' : d.appliesTo === 'all' ? 'every character' : Array.isArray(d.appliesTo) ? d.appliesTo.map((x) => `#${x}`).join(', ') : d.appliesTo === 'player' ? 'the player character' : 'every non-player character';
-    const vis = d.visibility === 'hidden' ? 'hidden from its holder' : d.visibility === 'public' ? 'visible to everyone present' : 'visible to its holder';
-    const who = [d.changedBy.includes('narrator') ? 'you' : '', d.changedBy.includes('self') ? 'the holder' : ''].filter(Boolean).join(' and ') || 'nobody';
-    const step = d.type === 'number' && d.maxStep ? `, at most ${d.maxStep} per round` : '';
-    return `- ${d.key} (${renderRange(d)}; ${scope}; ${vis}; changed by ${who}${step}): ${sentence(d.description || d.label)}${d.changeGuide ? ` When/how: ${d.changeGuide}` : ''}`;
-  });
+  const lines = narratorVariableLines(deps.variables.listDefs(storyId));
   return renderPrompt('minds-narrator', {
     playerName: playerObj?.name ?? 'the player character',
     playerHandle: h(playerObj?.handle ?? (player ? deps.memory.ensureHandle(player.objectId) : 'player')),

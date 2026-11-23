@@ -3,6 +3,8 @@ import { mindsHarness, round, fail } from './fixtures/minds.ts';
 import type { MindsHarness } from './fixtures/minds.ts';
 import { VariableDef } from '../src/minds/variables.ts';
 import { listCalls } from '../src/api/callsView.ts';
+import Fastify from 'fastify';
+import { registerHttpRoutes } from '../src/api/http.ts';
 
 // The public profile and the player character (docs/11 §2.1, §2.4), plus the
 // Threads view of calls and the Minds scene break.
@@ -168,5 +170,63 @@ describe('the Threads view and Minds scenes', () => {
     await h.play('I go to my room.');
     const scribe = h.app.db.prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'scribe_story'`).get<{ n: number }>()!.n;
     expect(scribe).toBe(0);
+  });
+});
+
+describe('M7 endpoints', () => {
+  let h: MindsHarness;
+  let server: ReturnType<typeof Fastify>;
+  afterEach(async () => {
+    await server.close();
+    h.close();
+  });
+  const start = async (opts?: { player?: boolean }) => {
+    h = mindsHarness(opts);
+    server = Fastify();
+    await registerHttpRoutes(server, h.app);
+  };
+
+  it('the scenario preview shows how a character and the narrator read definitions, without saving', async () => {
+    await start();
+    const defs = [
+      { key: 'courage', label: 'Courage', type: 'number', min: 0, max: 5, visibility: 'self', changedBy: ['self'], maxStep: 1, description: 'Nerve under pressure.' },
+      { key: 'secret', label: 'Secret', type: 'text', visibility: 'hidden', changedBy: ['narrator'], description: 'What they hide.' },
+    ];
+    const r = await server.inject({ method: 'POST', url: `/api/stories/${h.storyId}/variables/preview`, payload: { defs } });
+    expect(r.statusCode).toBe(200);
+    const p = r.json() as { character: string[]; narrator: string[] };
+    expect(p.character.join('\n')).toContain('- courage (0–5): Nerve under pressure. YOU may change it, by at most 1 per round.');
+    expect(p.character.join('\n')).not.toContain('secret'); // hidden from its holder
+    expect(p.narrator.join('\n')).toContain('- secret (');
+    expect(p.narrator.join('\n')).toContain('hidden from its holder');
+    expect(h.app.variables.listDefs(h.storyId).map((d) => d.key)).toEqual(['health', 'suspicion', 'alarm']); // not saved
+
+    const bad = await server.inject({ method: 'POST', url: `/api/stories/${h.storyId}/variables/preview`, payload: { defs: [{ key: 'Bad Key', label: 'x', type: 'flag' }] } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toMatch(/variable 1: key/);
+  });
+
+  it('calls, the change log with holder names, and pronouns on sheets', async () => {
+    await start();
+    await h.opening();
+    const calls = await server.inject({ method: 'GET', url: `/api/stories/${h.storyId}/calls?limit=5` });
+    expect((calls.json() as { mind: string; status: string }[]).map((c) => `${c.mind}:${c.status}`)).toEqual(['Narrator:done']);
+
+    const marta = h.idOf('Marta');
+    const patch = await server.inject({ method: 'PATCH', url: `/api/stories/${h.storyId}/minds/${marta}`, payload: { pronouns: 'she/her', state: 'Tired.' } });
+    expect(patch.statusCode).toBe(200);
+    const view = await server.inject({ method: 'GET', url: `/api/stories/${h.storyId}/minds` });
+    expect((view.json() as { characters: { name: string; pronouns: string }[] }).characters.find((c) => c.name === 'Marta')!.pronouns).toBe('she/her');
+    const log = await server.inject({ method: 'GET', url: `/api/stories/${h.storyId}/variables/changes` });
+    expect((log.json() as { key: string; holderName: string }[]).find((c) => c.key === '$state')!.holderName).toBe('Marta');
+    const tooLong = await server.inject({ method: 'PATCH', url: `/api/stories/${h.storyId}/minds/${marta}`, payload: { pronouns: 'x'.repeat(41) } });
+    expect(tooLong.statusCode).toBe(400);
+  });
+
+  it('the player character can be created through the API with pronouns', async () => {
+    await start({ player: false });
+    const r = await server.inject({ method: 'POST', url: `/api/stories/${h.storyId}/minds`, payload: { name: 'Rin', isPlayer: true, pronouns: 'she/her', appearance: 'Short, sea-green coat.' } });
+    expect(r.statusCode).toBe(201);
+    expect(h.app.sheets.player(h.storyId)).toMatchObject({ pronouns: 'she/her', appearance: 'Short, sea-green coat.' });
   });
 });

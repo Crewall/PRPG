@@ -1,0 +1,162 @@
+[
+  {
+    "id": "input-syntax",
+    "group": "Playing",
+    "title": "What you type",
+    "body": "Words in \"quotes\" are said aloud: everyone present hears them exactly. Everything outside quotes is what you try to do; only the narrator sees it, and decides what happens. ((Double parentheses)) are a note to the narrator, out of character. In a Minds story a line under the box shows how your message was read.",
+    "example": "\"A room, please.\" I set a coin on the counter and watch her hands. ((make the inn feel dangerous))"
+  },
+  {
+    "id": "empty-message",
+    "group": "Playing",
+    "title": "An empty message",
+    "body": "Sending nothing means \"continue\" or \"I wait\": the story moves on without you acting. A new story opens itself this way. In a conversation, it ends the conversation."
+  },
+  {
+    "id": "round",
+    "group": "Playing",
+    "title": "What a round is",
+    "body": "Minds engine: after your message, the characters who matter this round decide at the same time, each with its own mind, saying exactly what they say and briefly what they try. Then the narrator resolves everything and writes what you read. Each character is told only what it perceived, and the exact words it heard."
+  },
+  {
+    "id": "who-decides",
+    "group": "Playing",
+    "title": "Who decides what",
+    "body": "You decide your words and what you try. The narrator decides what actually happens, fairly, by everyone's abilities, condition and the situation: your attempts can fail. It never decides your words, actions or feelings for you. Each other character decides only its own words and attempts."
+  },
+  {
+    "id": "chance",
+    "group": "Playing",
+    "title": "Chance and dice",
+    "body": "In the Minds engine the narrator weighs uncertain attempts itself. The classic engine can use a hidden dice roll judged by a separate referee (Story options → Adjudicator); it returns to Minds later for special cases. You never see numbers, only what happens."
+  },
+  {
+    "id": "edit-rewind",
+    "group": "Playing",
+    "title": "Edit, retry and rewind",
+    "body": "Edit removes the last turn and puts your message back in the box. Everything that turn changed is undone too: sheets, values, memories, threads, the clock. ⧉ copies a message, ✎ edits it, × deletes it. /retry sends your last message again."
+  },
+  {
+    "id": "cast-bar",
+    "group": "Characters",
+    "title": "The Present bar",
+    "body": "Who is here with you. 🎭 is your own character. Tap anyone else to see what you can perceive of them (pronouns, appearance, what is visibly true), to talk with them directly, or to make them act next round."
+  },
+  {
+    "id": "dialogue",
+    "group": "Characters",
+    "title": "Dialogue mode",
+    "body": "A quick back-and-forth with one character: tap them in the Present bar → Talk. Only they hear you and only they answer; each exchange takes a minute of story time. End conversation (or an empty message) hands back to the narrator, who wraps it up and tells everyone else what they overheard. Act ends it with what you typed as an action. If they decide to do something that matters, the conversation ends by itself.",
+    "example": "\"So you knew him?\" I lower my voice."
+  },
+  {
+    "id": "force-act",
+    "group": "Characters",
+    "title": "Making a character act",
+    "body": "A round calls only the characters who matter (spoken to, spotlighted by the narrator, new, or active last round), up to a cap. \"Act next round\" on a character's card makes sure they are called next round. ⚡ marks them in the Present bar until then."
+  },
+  {
+    "id": "player-character",
+    "group": "Characters",
+    "title": "Your character",
+    "body": "Name, pronouns and appearance are what the others perceive of you, so they can tell you apart from everyone else. \"Who you are\" is for the narrator only. Tap 🎭 to edit. If you skip it, the narrator creates your character from the premise (you can change it afterwards); it only ever fills in what is empty."
+  },
+  {
+    "id": "profile",
+    "group": "Sheets",
+    "title": "Description, appearance, pronouns",
+    "body": "The description is private: who the character is, their voice, drives and secrets. Only that character's own mind and the narrator read it. Appearance and pronouns are public: everyone present sees them, along with any public variables (\"visibly: wounded\"). Places and things have a public line too (\"Kael's rented room\")."
+  },
+  {
+    "id": "state",
+    "group": "Sheets",
+    "title": "State",
+    "body": "One sentence: how a character feels or is right now. The character updates it itself; the narrator records what happens to it. Others never read it directly; they notice what shows.",
+    "example": "Bruised ribs, adrenaline still high, suspicious of everyone."
+  },
+  {
+    "id": "variables",
+    "group": "Sheets",
+    "title": "Variables",
+    "body": "Numbers, short texts, choices, yes/no flags or lists, defined for the story (Story options → Scenario). Each has a visibility: public (everyone present sees it), self (only its holder and the narrator) or hidden (only the narrator, not even its holder). Each says who may change it: the narrator, the holder, or both. Out-of-range changes are clamped, forbidden ones refused and logged. In advanced mode you can change any value."
+  },
+  {
+    "id": "thoughts",
+    "group": "Sheets",
+    "title": "Thoughts and tags",
+    "body": "Characters keep their own memory as short thoughts they write and can later forget. Each carries tags (topics, #people, #places) and the in-story time it was written. Tagged thoughts come back when something related happens; pinned (or untagged) ones are always with them. Thoughts are private: nobody else reads them, the narrator included unless you allow it.",
+    "example": "t12 · Day 2, 19:40 [#marta, ledger] Marta keeps the ledger under the counter."
+  },
+  {
+    "id": "advanced",
+    "group": "Modes",
+    "title": "Advanced mode",
+    "body": "Shows everything (descriptions, states, hidden variables, every character's thoughts) and lets you edit it: sheets, values, thoughts. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
+  },
+  {
+    "id": "pov",
+    "group": "Modes",
+    "title": "The POV filter",
+    "body": "Advanced mode → the POV tab: pick a character (or the narrator) and read the story as that mind experienced it: the round messages it was given, what it answered, its recap after a compaction, and what waits for its next round."
+  },
+  {
+    "id": "prompt-viewer",
+    "group": "Modes",
+    "title": "Prompt viewer",
+    "body": "In the POV tab: \"Next prompt\" shows exactly what that mind would be sent now (the same function the round uses); \"Last prompt\" shows what it was actually sent last time."
+  },
+  {
+    "id": "threads",
+    "group": "Modes",
+    "title": "Threads (debug)",
+    "body": "With Debug on, the Threads tab lists every AI call: whose mind it was, the turn, the in-story and clock time, tokens in and out, how much came from the cache, how long it took, and the error when a call failed. Tap a row for the full request and response."
+  },
+  {
+    "id": "scenario",
+    "group": "Story setup",
+    "title": "Scenario variables and templates",
+    "body": "Story options → Scenario: the variables this story tracks. Start from a template or from scratch, then add, edit, reorder or delete. For each: type and range, who holds it (every character, the player, the others, or the world), visibility, who may change it, and guidance for the AIs on when and how. The preview shows exactly how a character and the narrator will read it."
+  },
+  {
+    "id": "engine",
+    "group": "Story setup",
+    "title": "Engines",
+    "body": "Story options → Engine. Classic: one storyteller voices everyone, a scribe extracts memory facts. NPC story mode: present characters act from their personality and notes. Minds: one narrator plus a separate mind for each character, with sheets, variables, self-written memories and dialogue mode."
+  },
+  {
+    "id": "premise-tone",
+    "group": "Story setup",
+    "title": "Premise, tone, verbosity",
+    "body": "The premise is the story's starting point (🎲 rolls one). Tone and verbosity in Story options shape the narrator's prose; verbosity runs from terse to expansive."
+  },
+  {
+    "id": "compaction",
+    "group": "Story setup",
+    "title": "Long stories (compaction)",
+    "body": "Each mind keeps one growing conversation, which providers cache cheaply. When one grows past its limit (Story options → Minds engine), a light model folds its oldest half into a recap: in the character's own words, or \"the story so far\" for the narrator. Pinned thoughts are always kept. Rewind undoes it."
+  },
+  {
+    "id": "providers",
+    "group": "Settings",
+    "title": "Providers",
+    "body": "Settings → Providers: add connections (DeepSeek, OpenRouter and others at once), press Test, then List models to add models with their capabilities. Some OpenRouter models always reason; List models marks them so reasoning is never switched off for them."
+  },
+  {
+    "id": "tiers",
+    "group": "Settings",
+    "title": "Tiers and roles",
+    "body": "Every AI role (narrator, character minds, seeder, compactor…) follows a tier: Heavy, Medium, Light, or your own. Change a tier's model and every role on it follows. A character can have its own tier in advanced mode."
+  },
+  {
+    "id": "free-limits",
+    "group": "Settings",
+    "title": "Free-model request limits",
+    "body": "OpenRouter's free models allow 50 requests a day, or 1000 once you have bought at least 10 credits. A Minds round makes one request per acting character plus one for the narrator. Settings shows today's request count."
+  },
+  {
+    "id": "cache",
+    "group": "Settings",
+    "title": "Cache hits",
+    "body": "Minds threads only ever grow at the end, so each request starts with the previous one, which providers serve from their cache at a fraction of the price. The Threads view shows the cache share of each call; a compaction costs one miss for that thread."
+  }
+]
