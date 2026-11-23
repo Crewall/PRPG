@@ -37,7 +37,8 @@ the story with new information.
   "tags": ["topics", "places", "#handles that matter in this moment"],
   "evoke": { "#handle": ["topics this character should recall"] },
   "notes": { "remember": [{ "text": "a private note to yourself", "tags": ["topic"] }], "forget": ["t3"] },
-  "cast": { "enter": [{ "name": "<their name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>", "knows": ["#handles of people they already know by name"], "knownBy": ["#handles of people who already know their name"] }], "exit": ["#handle"] },
+  "cast": { "enter": [{ "name": "<their name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>", "who": "<who they are, in one or two sentences: role, what they want here>", "ties": { "#handle": "<what that person is to them>" }, "knows": ["#handles of people they already know by name"], "knownBy": ["#handles of people who already know their name"] }], "exit": ["#handle"] },
+  "ties": { "#handle": { "#other": "<what #other is to them now>" } },
   "names": { "#handle of someone who learned a name": ["#handle whose name they learned"] },
   "objects": [{ "name": "new or existing item or place", "type": "item", "line": "one public line, including whose it is" }],
   "scene": { "break": false, "title": null, "location": "#handle", "items": ["#handles of things in view"] },
@@ -48,6 +49,14 @@ the story with new information.
 Text in <angle brackets> stands for what you write there: never copy it.
 - Give a brief to every present character who perceived anything. Don't quote what was said aloud; the app
   delivers spoken words verbatim.
+- **Briefs carry perception only**: what they saw, heard, felt and suffered. Never what they think, decide, plan
+  or feel about it ("you're calculating", "you decide to stay"): their own minds work that out.
+- **Bring newcomers in whole.** Everything you know about a newcomer goes in their "cast.enter": "who" (the
+  person, not this scene) and "ties" to anyone already in the story, keyed by that person's #handle, with what
+  they are to the newcomer ("older brother", "employer"). Their mind is built from that, not from your prose. A
+  newcomer's first brief is what they perceive as they arrive.
+- "ties" records a relationship that forms or changes later, from the holder's side; "" removes one. A tie means
+  both know each other's names.
 - **Name people by #handle in briefs**, the player's character too ("{{playerHandle}} climbs the stairs"), never
   by a bare he/she or a description that could fit someone else. Each character only knows what you tell it.
   Only use #handles that exist in this story (in your round message); never invent people from examples.

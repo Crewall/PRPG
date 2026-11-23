@@ -33,7 +33,7 @@ import { truncateToTokens } from './contextBuilder.ts';
 import type { NpcProfileStore } from '../db/stores/npcProfileStore.ts';
 import type { Story, Turn } from '../domain.ts';
 import type { Db } from '../db/db.ts';
-import type { SheetStore, ThoughtStore, VariableStore, NameStore } from '../db/stores/mindsStore.ts';
+import type { SheetStore, ThoughtStore, VariableStore, NameStore, TieStore } from '../db/stores/mindsStore.ts';
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
 import { runDialogueExchange } from '../minds/dialogue.ts';
@@ -70,6 +70,7 @@ export interface PipelineDeps {
   variables: VariableStore;
   thoughts: ThoughtStore;
   names: NameStore;
+  ties: TieStore;
   threads: ThreadStore;
   verbosityOverride?: () => Record<string, string>;
 }
@@ -210,7 +211,7 @@ export class TurnPipeline {
   private roundDeps(): RoundDeps {
     const d = this.deps;
     return {
-      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names,
+      db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names, ties: d.ties,
       agents: d.agents, threads: d.threads, registry: d.registry, threadLog: d.threadLog, jobs: d.jobs, events: d.events,
       verbosityOverride: d.verbosityOverride,
     };

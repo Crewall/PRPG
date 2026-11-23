@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -187,6 +187,15 @@ direction** of the player's words:
 - **The character prompt:** words said to someone else aren't yours to answer: react, or cut in only when you
   really would.
 - The turn records it (`meta.direction`: to, all, react, and whether it came from a rule or the director).
+
+### 5.1c Briefs carry perception only
+
+A brief tells a character what it perceived: what it saw, heard and felt in its body, and the outcomes that touch
+it. It never says what the character thinks, plans, concludes or wants: that is the character's own mind's job. (A
+play test brief said "You're calculating: is this a scam?"; the character then acted out the narrator's thought.)
+The narrator and distributor prompts say so, and a soft check (like the he/she check) flags briefs that tell a
+character its thoughts ("you're calculating", "you decide", "you wonder") and reminds the narrator next round; the
+brief is still delivered.
 
 ### 5.2 Settled while building M4
 

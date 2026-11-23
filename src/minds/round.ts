@@ -20,7 +20,8 @@ import type { GateCandidate } from './gate.ts';
 import { applyChanges, applyThoughtOps, createCharacter, updateSheet } from './service.ts';
 import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
-import { isPlaceholder, isRealName, realValue, slugify } from './text.ts';
+import { clampWords, isPlaceholder, isRealName, realValue, slugify } from './text.ts';
+import { setTie } from './ties.ts';
 import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { NO_DIRECTION, resolveDirection } from './director.ts';
@@ -90,6 +91,10 @@ function ensurePlayerSheet(deps: RoundDeps, story: Story): string | null {
   deps.sheets.upsert(story.id, obj.id, { isPlayer: true, description: obj.summary });
   return obj.id;
 }
+
+/** A brief telling its reader its own thoughts ("you're calculating", "you decide"). */
+const TELLS_THOUGHTS =
+  /\byou(?:'re|’re| are)\s+(?:thinking|calculating|wondering|deciding|planning|considering|weighing|sure|convinced|certain)\b|\byou\s+(?:think|decide|wonder|plan|realize|realise|conclude|suspect|believe|intend|resolve|figure)\b/i;
 
 const VAGUE_PRONOUN = /\b(he|she|him|her|his|hers|himself|herself)\b/i;
 
@@ -370,6 +375,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       if (oid && oid !== 'world' && oid !== playerId) deps.stories.removeActiveNpc(current().id, oid);
     }
     const entered: string[] = [];
+    const arrivals: [string, (typeof block.cast.enter)[number]][] = [];
     for (const e of block.cast.enter) {
       if (!isRealName(e.name)) {
         blockProblems.push(`cast.enter: "${e.name}" is not a name`);
@@ -391,7 +397,24 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       } else if (!existing) {
         oid = createCharacter(deps, storyId, { name: e.name, appearance: e.appearance, pronouns: e.pronouns, knownAs: realValue(e.knownAs).slice(0, 60) }).objectId;
       } else continue;
-      // Whom the newcomer already knows by name, and who already knows theirs (family, old friends).
+      // The narrator's hand-over (docs/11 §2.3): who they are, as fact — their identity until the seeder lands.
+      const who = realValue(e.who);
+      if (who && !deps.sheets.get(oid)?.concept.trim()) deps.sheets.upsert(storyId, oid, { concept: clampWords(who, 80).text });
+      arrivals.push([oid, e]);
+      if (!current().activeNpcIds.includes(oid)) {
+        deps.stories.addActiveNpc(current().id, oid);
+        entered.push(oid);
+      }
+      const sheet = deps.sheets.get(oid);
+      if (sheet && !sheet.seeded && !sheet.description.trim()) seedQueue.push(oid);
+    }
+    // Once everyone has entered (two newcomers may be family): their ties, whom they already know by name, and
+    // who already knows theirs (docs/11 §2.5, §2.6).
+    for (const [oid, e] of arrivals) {
+      for (const [k, tie] of Object.entries(e.ties)) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world') setTie(deps, storyId, oid, other, tie, turn.id);
+      }
       for (const k of e.knows) {
         const other = resolveKey(deps, storyId, k, playerId);
         if (other && other !== 'world') learnName(deps, storyId, oid, other, turn.id);
@@ -400,12 +423,6 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         const other = resolveKey(deps, storyId, k, playerId);
         if (other && other !== 'world') learnName(deps, storyId, other, oid, turn.id);
       }
-      if (!current().activeNpcIds.includes(oid)) {
-        deps.stories.addActiveNpc(current().id, oid);
-        entered.push(oid);
-      }
-      const sheet = deps.sheets.get(oid);
-      if (sheet && !sheet.seeded && !sheet.description.trim()) seedQueue.push(oid);
     }
     if (block.scene.break) {
       breakScene(deps, storyId, { title: block.scene.title, carryNpcs: current().activeNpcIds });
@@ -453,6 +470,16 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     outcomes = applyChanges(deps, storyId, proposals, turn.id);
     for (const o of outcomes) if (o.proposal.change.holder !== 'world') changedIds.add(o.proposal.change.holder);
 
+    // 5c''. Ties set or changed by the narrator (docs/11 §2.6); "" removes one.
+    for (const [holderKey, others] of Object.entries(block.ties)) {
+      const holder = resolveKey(deps, storyId, holderKey, playerId);
+      if (!holder || holder === 'world') continue;
+      for (const [k, label] of Object.entries(others)) {
+        const other = resolveKey(deps, storyId, k, playerId);
+        if (other && other !== 'world' && setTie(deps, storyId, holder, other, label, turn.id)) changedIds.add(holder);
+      }
+    }
+
     // 5c'. Names learned other than by hearing them (docs/11 §2.5).
     for (const [learnerKey, subjects] of Object.entries(block.names)) {
       const learner = resolveKey(deps, storyId, learnerKey, playerId);
@@ -471,6 +498,13 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     for (const [key, text] of Object.entries(block.briefs)) {
       const oid = resolveKey(deps, storyId, key, playerId);
       if (oid && oid !== 'world' && oid !== playerId && text.trim()) briefs.set(oid, text.trim());
+    }
+    // Soft check (docs/10 §5.1c): briefs carry perception only. One that tells its reader what it thinks or plans
+    // is delivered, and the narrator is reminded next round.
+    const thinking = [...briefs].filter(([, text]) => TELLS_THOUGHTS.test(text)).map(([oid]) => label(deps, oid));
+    if (thinking.length) {
+      blockProblems.push(`briefs: told thoughts (${thinking.join(', ')})`);
+      queueForNarrator(deps, storyId, `Note: your briefs for ${thinking.join(', ')} told them what they think or plan. Briefs carry perception only: what they saw, heard and felt. Their own minds decide what they make of it.`, turn.id);
     }
     // Soft check (docs/11 §2.4): a brief that says he/she without naming anyone by #handle, while its reader
     // has two or more people around, is delivered — and the narrator is reminded next round.

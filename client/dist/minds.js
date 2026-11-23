@@ -69,7 +69,8 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
     h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${unknown ? (adv ? ` · you don't know this name (to you: ${c.knownAs || 'someone'})` : ' · name unknown to you') : ''}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
     c.appearance ? h('p', {}, c.appearance) : h('p', { class: 'sub' }, '(no appearance yet)'),
     c.state ? h('p', {}, h('span', { class: 'sub' }, 'State: '), `"${c.state}"`) : null,
-    c.description ? h('details', { open: c.isPlayer ? null : true }, h('summary', { class: 'sub' }, c.isPlayer ? 'Who you are' : 'Who they are (private)'), h('p', { class: 'prose' }, c.description)) : null,
+    c.description || c.concept ? h('details', { open: c.isPlayer ? null : true }, h('summary', { class: 'sub' }, c.isPlayer ? 'Who you are' : 'Who they are (private)'), h('p', { class: 'prose' }, c.description || c.concept)) : null,
+    c.ties?.length ? h('p', {}, h('span', { class: 'sub' }, c.isPlayer ? 'Your people: ' : 'Their people: '), c.ties.map((t) => `${t.name} (${t.label})`).join(', '), ' ', helpLink('ties')) : null,
     vars.length
       ? h('table', { class: 'vars' }, ...vars.map((v) => h('tr', {}, h('td', { class: 'sub' }, v.label), h('td', {}, v.display), adv ? h('td', { class: `vis ${v.visibility}` }, v.visibility) : null)))
       : null,
@@ -99,13 +100,35 @@ export async function openSheetEditor(ctx, objectId) {
   knowsBox.checked = c.playerKnowsName !== false;
   const lookIn = textarea(c.appearance, 2);
   const whoIn = textarea(c.description, 5);
+  const conceptIn = textarea(c.concept, 2, { placeholder: 'e.g. a smuggler\'s daughter who wants out of the trade' });
   const stateIn = input(c.state);
+  // Ties: what each other person is to this one. People are listed as the player knows them, unless advanced.
+  let people = view.characters;
+  if (!adv) { try { people = (await mindsView(ctx)).characters; } catch { /* keep the advanced list */ } }
+  const others = people.filter((x) => x.objectId !== c.objectId);
+  const tieRows = [];
+  const tiesBox = h('div', { class: 'ties-edit' });
+  const addTieRow = (other = '', label = '') => {
+    const sel = select([['', '(someone)'], ...others.map((x) => [x.objectId, `${x.isPlayer ? '🎭 ' : ''}${x.name} · #${x.handle}`])], other);
+    const lab = input(label, { maxlength: '120', placeholder: 'what they are to them: older brother, employer…' });
+    const line = h('div', { class: 'row tie-row' }, sel, lab);
+    const entry = { sel, lab, line };
+    line.append(h('button', { class: 'ghost small', title: 'Remove this tie', onclick: () => { tieRows.splice(tieRows.indexOf(entry), 1); line.remove(); } }, '×'));
+    tieRows.push(entry);
+    tiesBox.append(line);
+  };
+  for (const t of c.ties ?? []) addTieRow(t.other, t.label);
+  const readTies = () => {
+    const out = Object.fromEntries((c.ties ?? []).map((t) => [t.other, '']));
+    for (const { sel, lab } of tieRows) if (sel.value && lab.value.trim()) out[sel.value] = lab.value.trim();
+    return out;
+  };
   const tierSel = select([['', '(the role\'s tier)'], ...tiers.map((t) => [t.id, t.label])], c.tierId ?? '');
   const err = errLine();
   const saved = h('span', { class: 'sub' });
   const save = h('button', { class: 'primary', onclick: async () => {
     err.textContent = ''; saved.textContent = '';
-    const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownAsIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim() };
+    const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownAsIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim(), concept: conceptIn.value.trim(), ties: readTies() };
     if (adv && !c.isPlayer) body.playerKnowsName = knowsBox.checked;
     if (adv || c.isPlayer) body.state = stateIn.value.trim();
     if (adv && !c.isPlayer) body.tierId = tierSel.value || null;
@@ -119,7 +142,11 @@ export async function openSheetEditor(ctx, objectId) {
     adv && !c.isPlayer ? h('label', { class: 'sub' }, knowsBox, ' You (the player) know this name') : null,
     h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
     row('Appearance', lookIn, 'Public: what anyone sees at a glance.'),
+    !c.isPlayer || c.concept ? row('In short', conceptIn, 'Who they are in a sentence or two (the narrator\'s hand-over). Their mind uses it until the description is written.') : null,
     row(c.isPlayer ? 'Who you are' : 'Description', whoIn, c.isPlayer ? 'Only the narrator reads this.' : 'Private: only this character\'s mind and the narrator read it.'),
+    h('div', { class: 'form-row ties-field' }, h('span', { class: 'field-label' }, c.isPlayer ? 'Your people ' : 'Their people ', helpLink('ties')), tiesBox,
+      h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => addTieRow() }, '+ Add tie')),
+      h('span', { class: 'hint' }, 'From this character\'s side. A tie also means both know each other\'s name.')),
     row('State', stateIn, 'One sentence: how they feel or are right now.'),
     adv && !c.isPlayer ? row('Model tier', tierSel, 'Override the tier this character\'s mind runs on.') : null,
     h('div', { class: 'row' }, save, saved), err,

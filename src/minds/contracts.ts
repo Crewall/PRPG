@@ -158,6 +158,10 @@ const RoundBlockShape = {
           knownAs: Str.default(''),
           knows: z.array(Str).default([]),
           knownBy: z.array(Str).default([]),
+          /** The narrator's hand-over: who they are, why here (docs/11 §2.3). */
+          who: Str.default(''),
+          /** What each person already in the story is to the newcomer: { "#handle": "older sibling" }. */
+          ties: z.record(z.string(), Str).default({}),
         }),
       ),
       exit: z.array(Str).default([]),
@@ -177,6 +181,8 @@ const RoundBlockShape = {
   player: z.object({ name: Str.optional(), pronouns: Str.optional(), appearance: Str.optional(), knownAs: Str.optional() }).optional(),
   /** Names learned other than by hearing them: { "#learner": ["#whose name"] } (docs/11 §2.5). */
   names: z.record(z.string(), z.array(Str)).default({}),
+  /** Ties set or changed: { "#holder": { "#other": "what other is to holder", "#x": "" removes } } (docs/11 §2.6). */
+  ties: z.record(z.string(), z.record(z.string(), Str)).default({}),
 };
 export type RoundBlock = z.infer<z.ZodObject<typeof RoundBlockShape>>;
 

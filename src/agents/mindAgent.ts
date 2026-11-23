@@ -21,6 +21,10 @@ export const SeedReply = z.unknown().transform((raw) => {
     pronouns: str(r.pronouns).slice(0, 40),
     state: str(r.state),
     values: r.values && typeof r.values === 'object' && !Array.isArray(r.values) ? (r.values as Record<string, unknown>) : {},
+    ties: Object.fromEntries(
+      Object.entries(r.ties && typeof r.ties === 'object' && !Array.isArray(r.ties) ? (r.ties as Record<string, unknown>) : {})
+        .filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1].trim()),
+    ),
     thoughts: thoughts
       .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object' && typeof (t as { text?: unknown }).text === 'string')
       .map((t) => ({

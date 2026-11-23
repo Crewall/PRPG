@@ -72,7 +72,8 @@ src/
     names.ts            who knows whose name: labels per viewer, learning from speech, masking briefs
     contracts.ts        player input lanes, character reply, round block (lenient parsing)
     gate.ts             who acts this round
-    seed.ts             minds_seed job: a mind for a newly introduced character
+    seed.ts             minds_seed job: a mind for a newly introduced character (seedContext: what it reads)
+    ties.ts             how characters are related (holder → other), shown in prompts and sheets
     variables.ts        variable definitions, validation, visibility, the change pipeline, rendering
     thoughts.ts         remember/forget preparation, recall selection, tag mentions
     text.ts             handles, tag normalization, word limits
@@ -156,10 +157,14 @@ server refuses (409) rather than undo the wrong turns.
    or broken block goes to the distributor (Light tier), then to plain briefs.
 5. One transaction commits everything: threads, thoughts, cast and scene changes, variable and state changes by
    the rules, the narrator's notes, names learned (from speech heard, the prose for the player, the block's
-   `names`), each character's brief (names it doesn't know replaced by handles) plus the exact words it heard,
-   the clock, the turn.
+   `names`), ties (a newcomer's `cast.enter.ties`, the block's `ties`), each character's brief (names it doesn't
+   know replaced by handles) plus the exact words it heard, the clock, the turn. Briefs that say he/she without a
+   #handle, or tell a character what it thinks, are delivered and the narrator is reminded next round.
 6. New characters (and present ones whose mind still isn't written) get a `minds_seed` job; threads over their
-   threshold get a `minds_compact` job. No scribes run.
+   threshold get a `minds_compact` job. No scribes run. Until its seed lands, a newcomer plays from the narrator's
+   hand-over (`cast.enter.who`, stored as the sheet's concept) and its ties. The seeder reads the frame, who the
+   player character is ("you"), the hand-over and ties, what the newcomer perceived on arriving, the "Here:" block
+   as it perceives it, the narrator's recap and the recent story (doc 11 §2.3).
 
 **Names** (doc 11 §2.5, `minds.nameKnowledge`, on for new stories): nobody knows a stranger's name. Handles are
 made from a known-as label (`#elf-girl-in-green`), and each mind, and the player's UI, see a name only once it is
@@ -203,10 +208,11 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `jobs` | background work queue (`not_before`: backoff between attempts) |
 | `settings` | runtime settings (`runtimeConfig`), seeded from `config.json` on first boot |
 | `rules` | unused (the overseer was never built) |
-| `character_sheets` | Minds: description, appearance, one-sentence state, player flag, tier override |
+| `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
 | `thoughts` / `thought_tags` | Minds: self-written memories with tags, pinned / active / revoked |
 | `name_knowledge` | Minds: who knows whose name (viewer → subject) |
+| `character_ties` | Minds: how one character relates to another, from the holder's side ("older sister") |
 
 `memory_objects.handle` (unique per story) gives every roster object a `#handle`. `agent_messages` gained `kind`
 and `compacted` for Minds threads.
@@ -276,7 +282,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 245 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 253 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

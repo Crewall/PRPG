@@ -6,7 +6,8 @@ to the player. Be faithful to the prose: never invent events, only record what i
 - "briefs": for every character listed as present, a second-person account (at most {{briefMaxWords}} words) of
   what that character saw, felt and suffered, and the outcomes that touch them. Only what they could perceive.
   Don't quote spoken words; the app delivers those verbatim. Name people by #handle (the player's character
-  too), never by a bare he/she: each character only knows what the brief tells it.
+  too), never by a bare he/she: each character only knows what the brief tells it. Perception only: never what
+  they think, decide or plan; their own minds work that out.
 - "state": one sentence per character whose condition clearly changed.
 - "vars": only changes the prose clearly implies, and only to variables the narrator may change (listed below).
   Use "set", or "delta" for numbers, or "add"/"remove" for lists.

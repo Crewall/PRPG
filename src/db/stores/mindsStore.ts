@@ -19,6 +19,8 @@ export interface CharacterSheet {
   pronouns: string;
   /** Public: what someone who doesn't know their name calls them ("the elf girl in green"; docs/11 §2.5). */
   knownAs: string;
+  /** The narrator's hand-over: who they are, why here (docs/11 §2.3). Canon for the seeder. */
+  concept: string;
   state: string;
   tierId: string | null;
   seeded: boolean;
@@ -34,6 +36,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   appearance: r.appearance as string,
   pronouns: (r.pronouns as string) ?? '',
   knownAs: (r.known_as as string) ?? '',
+  concept: (r.concept as string) ?? '',
   state: r.state as string,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
@@ -41,7 +44,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'state' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -64,18 +67,19 @@ export function createSheetStore(db: Db) {
         appearance: patch.appearance ?? prev?.appearance ?? '',
         pronouns: patch.pronouns ?? prev?.pronouns ?? '',
         knownAs: patch.knownAs ?? prev?.knownAs ?? '',
+        concept: patch.concept ?? prev?.concept ?? '',
         state: patch.state ?? prev?.state ?? '',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, state, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
-           appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, state = excluded.state,
-           tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, concept = excluded.concept,
+           state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 
@@ -357,3 +361,37 @@ export function createNameStore(db: Db) {
   };
 }
 export type NameStore = ReturnType<typeof createNameStore>;
+
+// ---- Ties: how one character relates to another (docs/11 §2.6) ----
+
+export interface Tie {
+  holder: string;
+  other: string;
+  /** What `other` is to `holder` ("older sibling"). */
+  label: string;
+  createdTurnId: string | null;
+}
+
+export function createTieStore(db: Db) {
+  const toTie = (r: Row): Tie => ({ holder: r.holder as string, other: r.other as string, label: r.label as string, createdTurnId: (r.created_turn_id as string) ?? null });
+  return {
+    /** Set (or replace) what `other` is to `holder`. */
+    set(storyId: string, holder: string, other: string, label: string, turnId: string | null): void {
+      db.prepare(
+        `INSERT INTO character_ties (story_id, holder, other, label, created_turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(holder, other) DO UPDATE SET label = excluded.label`,
+      ).run(storyId, holder, other, label, turnId, Date.now());
+    },
+    remove(holder: string, other: string): void {
+      db.prepare(`DELETE FROM character_ties WHERE holder = ? AND other = ?`).run(holder, other);
+    },
+    /** The holder's ties, in the order they were made. */
+    of(holder: string): Tie[] {
+      return db.prepare(`SELECT * FROM character_ties WHERE holder = ? ORDER BY created_at, other`).all<Row>(holder).map(toTie);
+    },
+    listForStory(storyId: string): Tie[] {
+      return db.prepare(`SELECT * FROM character_ties WHERE story_id = ? ORDER BY created_at, holder, other`).all<Row>(storyId).map(toTie);
+    },
+  };
+}
+export type TieStore = ReturnType<typeof createTieStore>;

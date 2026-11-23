@@ -32,11 +32,13 @@ is right.
     - M8 the old engines retired (new stories are Minds; legacy stories keep running);
     - names that are learned (known-as labels, neutral handles; `src/minds/names.ts`) and the director that works
       out who the player is talking to (`src/minds/director.ts`);
+    - the narrator's hand-over and ties (`src/minds/ties.ts`), a seeder that reads the whole frame
+      (`seedContext` in `src/minds/seed.ts`), perception-only briefs;
     - overload handling: real waits on 429/503, a fallback model per tier, job backoff, re-seeding;
   - shared: rewind/edit and ↻ regenerate on every reply (failed attempts are dropped before the next turn), the premise randomizer, the
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
-  - 245 passing tests.
+  - 253 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases, relation variables, a reload-on-update check (doc 10 §14).
 

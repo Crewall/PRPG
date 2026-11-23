@@ -1,7 +1,7 @@
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import { handleBaseFor, knowsName, namesOn } from './names.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
-import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore } from '../db/stores/mindsStore.ts';
+import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatch, NameStore, TieStore } from '../db/stores/mindsStore.ts';
 import { STATE_KEY, appliesTo, canSee, defaultValue, renderValue, runPipeline, splitFinalId } from './variables.ts';
 import type { ChangeOutcome, HolderInfo, Proposal, VariableDef, VariableValue, Viewer } from './variables.ts';
 import { MAX_FORGET_PER_REPLY, MAX_REMEMBER_PER_REPLY, parseThoughtHandle, prepareRemember, thoughtHandle } from './thoughts.ts';
@@ -18,6 +18,8 @@ export interface MindsDeps {
   thoughts: ThoughtStore;
   /** Who knows whose name (docs/11 §2.5). Absent: names are common knowledge. */
   names?: NameStore;
+  /** How characters relate (docs/11 §2.6). */
+  ties?: TieStore;
 }
 
 /** Every variable holder in the story: each character with a sheet, plus 'world'. */
@@ -185,10 +187,30 @@ export interface CharacterView {
   playerKnowsName?: boolean;
   /** Present only when the viewer may see it. */
   description?: string;
+  /** The narrator's hand-over: who they are, until (and besides) the description (docs/11 §2.3). */
+  concept?: string;
   state?: string;
+  /** How they are related to others, from their side (docs/11 §2.6): own sheet only, or advanced. */
+  ties?: TieView[];
   tierId?: string | null;
   seeded: boolean;
   variables: VariableView[];
+}
+
+export interface TieView {
+  other: string;
+  handle: string;
+  name: string;
+  label: string;
+}
+
+function tieViews(deps: MindsDeps, holder: string): TieView[] {
+  return (deps.ties?.of(holder) ?? [])
+    .map((t) => {
+      const o = deps.memory.getObject(t.other);
+      return o ? { other: t.other, handle: o.handle ?? '', name: o.name, label: t.label } : undefined;
+    })
+    .filter((x): x is TieView => !!x);
 }
 
 function variableViews(deps: MindsDeps, storyId: string, defs: VariableDef[], holder: HolderInfo, viewer: Viewer): VariableView[] {
@@ -224,7 +246,7 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
       knownAs: sheet.knownAs,
       nameKnown: viewer.kind === 'player' ? known : true,
       ...(viewer.kind === 'advanced' ? { realName: obj.name, playerKnowsName: known } : {}),
-      ...(own ? { description: sheet.description, state: sheet.state } : {}),
+      ...(own ? { description: sheet.description, concept: sheet.concept, state: sheet.state, ties: tieViews(deps, sheet.objectId) } : {}),
       ...(viewer.kind === 'advanced' ? { tierId: sheet.tierId } : {}),
       seeded: sheet.seeded,
       variables: variableViews(deps, storyId, defs, holder, viewer),
