@@ -1054,7 +1054,7 @@ async function renderPlay(storyId) {
   }
   async function renderDrawer() {
     const isMinds = story.settings?.engine === 'minds';
-    const tabs = isMinds ? [['cast', 'Cast'], ...(advanced ? [['pov', 'POV']] : []), ['memory', 'Memory']] : [['memory', 'Memory']];
+    const tabs = isMinds ? [['cast', 'Cast'], ...(advanced ? [['pov', 'POV']] : []), ['memory', 'Places & things']] : [['memory', 'Memory']];
     // NPC Story Mode: each character's mind (personality + private notes) is a
     // first-class, player-editable panel — the mode's replacement for the
     // memory browser's NPC role.
@@ -1068,6 +1068,7 @@ async function renderPlay(storyId) {
     if (activeTab === 'cast') await minds.renderCastTab(mindsCtx, body);
     else if (activeTab === 'pov') await minds.renderPovTab(mindsCtx, body);
     else if (activeTab === 'minds') await renderMinds(body);
+    else if (activeTab === 'memory' && isMinds) await minds.renderPlacesTab(mindsCtx, body);
     else if (activeTab === 'memory') await renderMemory(body);
     else if (activeTab === 'summaries') await renderSummaries(body);
     else await renderThreads(body);

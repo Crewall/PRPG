@@ -40,7 +40,7 @@ the story with new information.
   "cast": { "enter": [{ "name": "<their name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>", "who": "<who they are, in one or two sentences: role, what they want here>", "ties": { "#handle": "<what that person is to them>" }, "knows": ["#handles of people they already know by name"], "knownBy": ["#handles of people who already know their name"] }], "exit": ["#handle"] },
   "ties": { "#handle": { "#other": "<what #other is to them now>" } },
   "names": { "#handle of someone who learned a name": ["#handle whose name they learned"] },
-  "objects": [{ "name": "new or existing item or place", "type": "item", "line": "one public line, including whose it is" }],
+  "objects": [{ "name": "#handle of an existing one, or a new name", "type": "item", "line": "one public line, including whose it is", "gone": false }],
   "scene": { "break": false, "title": null, "location": "#handle", "items": ["#handles of things in view"] },
   "time": 10,
   "player": { "name": "<a real name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>" }
@@ -60,8 +60,11 @@ Text in <angle brackets> stands for what you write there: never copy it.
 - **Name people by #handle in briefs**, the player's character too ("{{playerHandle}} climbs the stairs"), never
   by a bare he/she or a description that could fit someone else. Each character only knows what you tell it.
   Only use #handles that exist in this story (in your round message); never invent people from examples.
-- "objects" creates places and things, or updates the public line of existing ones. Say whose they are when it
-  matters ("the room {{playerHandle}} rented"): characters see these lines.
+- "objects" creates places and things, or updates the public line of existing ones. Your round message lists the
+  places and things that exist: refer to them by their #handle (in "objects", "scene" and briefs), never under a
+  new name. Say whose they are when it matters ("the room {{playerHandle}} rented"): characters see these lines.
+  When a thing is destroyed, taken away for good or used up, mark it { "name": "#handle", "gone": true }; never
+  rename it.
 - "player" only when your round message asks for it (the player character is missing or incomplete).{{namesRule}}
 - In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. Change a variable only when its rules
   allow you to, and follow its guidance.

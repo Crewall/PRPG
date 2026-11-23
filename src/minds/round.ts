@@ -4,7 +4,6 @@ import type { JobStore } from '../db/stores/jobStore.ts';
 import type { LlmRegistry } from '../llm/registry.ts';
 import type { EventBus } from '../util/events.ts';
 import type { Story, Turn } from '../domain.ts';
-import type { ObjectType } from '../memory/model.ts';
 import { Storyteller } from '../agents/storyteller.ts';
 import { MindAgent } from '../agents/mindAgent.ts';
 import { renderPrompt } from '../agents/prompts.ts';
@@ -22,6 +21,7 @@ import { STATE_KEY, renderRange } from './variables.ts';
 import type { ChangeOutcome, Proposal } from './variables.ts';
 import { clampWords, isPlaceholder, isRealName, realValue, slugify } from './text.ts';
 import { setTie } from './ties.ts';
+import { applyObjects, matchObject } from './places.ts';
 import { labelFor, learnFromSpeech, learnName, maskUnknownNames, namesOn } from './names.ts';
 import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { NO_DIRECTION, resolveDirection } from './director.ts';
@@ -174,7 +174,6 @@ const label = (deps: RoundDeps, oid: string) => {
   return `#${obj?.handle ?? deps.memory.ensureHandle(oid)} ${obj?.name ?? '?'}`;
 };
 
-const OBJECT_TYPES: ObjectType[] = ['character', 'item', 'location', 'faction', 'event', 'lore'];
 
 export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn, playerInput: string, out: RoundEmitter, opts: RoundOptions): Promise<Turn> {
   const t0 = Date.now();
@@ -355,20 +354,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         if (r.changed) changedIds.add(r.playerId);
       }
     }
-    for (const o of block.objects) {
-      if (isPlaceholder(o.name)) continue;
-      o.line = realValue(o.line);
-      const existing = deps.memory.findByName(storyId, o.name) ?? (o.name.trim().startsWith('#') ? deps.memory.findByHandle(storyId, o.name.trim()) : undefined);
-      if (existing) {
-        // The narrator keeps places' and things' public one-liners current (docs/11 §2.4).
-        const line = o.line.trim();
-        if (line && existing.type !== 'character' && existing.summary !== line) deps.memory.updateObject(existing.id, { summary: line });
-        continue;
-      }
-      const type = OBJECT_TYPES.includes(o.type as ObjectType) && o.type !== 'character' ? (o.type as ObjectType) : 'item';
-      const name = o.name.trim().startsWith('#') ? o.name.trim().replace(/^#/, '').replace(/[-_]+/g, ' ') : o.name.trim();
-      deps.memory.createObject({ storyId, type, name, aliases: [], summary: o.line.trim(), salience: 0.5, status: 'active' });
-    }
+    // Places and things (docs/10 §5.1d): existing ones are matched, not named afresh; gone ones are marked gone.
+    const { gone: goneIds } = applyObjects(deps, storyId, block.objects);
     const current = () => deps.stories.getScene(deps.stories.getStory(storyId)!.currentSceneId!)!;
     for (const key of block.cast.exit) {
       const oid = resolveKey(deps, storyId, key, playerId);
@@ -428,23 +415,29 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       breakScene(deps, storyId, { title: block.scene.title, carryNpcs: current().activeNpcIds });
     }
     if (block.scene.location) {
-      let loc = resolveKey(deps, storyId, block.scene.location, playerId);
-      if (!loc || loc === 'world') {
+      let loc: string | undefined = matchObject(deps, storyId, block.scene.location).obj?.id;
+      if (!loc) {
         const name = block.scene.location.replace(/^#/, '').replace(/[-_]+/g, ' ').trim();
-        loc = name ? deps.memory.createObject({ storyId, type: 'location', name, aliases: [], summary: '', salience: 0.5, status: 'active' }).id : undefined;
+        loc = name && !isPlaceholder(name) ? deps.memory.createObject({ storyId, type: 'location', name, aliases: [], summary: '', salience: 0.5, status: 'active' }).id : undefined;
       }
       if (loc) deps.stories.setSceneLocation(current().id, loc);
     }
     if (block.scene.items) {
       const handles = block.scene.items
         .map((k) => {
-          const oid = resolveKey(deps, storyId, k, playerId);
-          if (oid && oid !== 'world') return deps.memory.ensureHandle(oid);
-          const name = k.replace(/^#/, '').replace(/[-_]+/g, ' ').trim();
-          return name ? deps.memory.createObject({ storyId, type: 'item', name, aliases: [], summary: '', salience: 0.4, status: 'active' }).handle : undefined;
+          if (isPlaceholder(k)) return undefined;
+          const m = matchObject(deps, storyId, k);
+          if (m.obj) return m.obj.type === 'character' || m.obj.status === 'destroyed' || m.gone ? undefined : deps.memory.ensureHandle(m.obj.id);
+          const name = m.name.trim();
+          return name && !m.gone ? deps.memory.createObject({ storyId, type: 'item', name, aliases: m.alias ? [m.alias] : [], summary: '', salience: 0.4, status: 'active' }).handle : undefined;
         })
         .filter((x): x is string => !!x);
-      deps.stories.setSceneItems(current().id, handles);
+      deps.stories.setSceneItems(current().id, [...new Set(handles)]);
+    } else if (goneIds.length) {
+      // A thing that is gone is no longer in view.
+      const goneHandles = new Set(goneIds.map((oid) => deps.memory.getObject(oid)?.handle));
+      const items = current().itemHandles ?? [];
+      if (items.some((x) => goneHandles.has(x))) deps.stories.setSceneItems(current().id, items.filter((x) => !goneHandles.has(x)));
     }
 
     // 5c. Variables and states: characters' proposals first, then the narrator's (it wins on the same key).

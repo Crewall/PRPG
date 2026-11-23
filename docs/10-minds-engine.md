@@ -197,6 +197,23 @@ The narrator and distributor prompts say so, and a soft check (like the he/she c
 character its thoughts ("you're calculating", "you decide", "you wonder") and reminds the narrator next round; the
 brief is still delivered.
 
+### 5.1d Places and things (settled after a play test)
+
+A play test's Memory tab filled with empty duplicates: "Agnes's stuffed rabbit" and "Agnes's stuffed rabbit
+(Bun)", "Caseworker's clipboard" and "Caseworker's clipboard (removed)". The narrator was never shown which places
+and things already existed or their #handles, so it named them afresh each time, and marked a removal by renaming.
+
+- **The narrator's round message lists them:** `Places and things (reuse these #handles):` the location, the
+  things in view, then up to 12 other known places and things, most recently touched first (`#handle (name) —
+  line`). Things that are gone are left out.
+- **`objects` matches what exists** by #handle, by name ignoring case and a trailing parenthesis ("(Bun)" becomes
+  an alias), and by the handle its name would get. A trailing "(removed)", "(gone)", "(destroyed)", "(lost)" or
+  "(taken)" marks the thing gone instead of creating one. `"gone": true` is the proper way.
+- **The Memory tab in a Minds story** shows what Minds keeps: places and things with their public line, whether
+  they are here, in view or gone, and (advanced mode) how many thoughts mention them; edit the name and line,
+  mark gone or back, merge a duplicate into another (its thoughts' tags follow), delete. No facts, no
+  promote/demote: those belong to the legacy engines. Characters live on the Cast tab.
+
 ### 5.2 Settled while building M4
 
 - **The player's words, once.** A called character hears the player's words in its round message ("Right
@@ -388,15 +405,17 @@ repair-retry applies once; after that, the fallbacks of §5 step 5 (narrator) or
   "say": "exact words spoken aloud, or \"\"",
   "to": "optional #handle of who they address",
   "intent": "what they try to do, ≤ 25 words, or \"\"",
-  "state": "optional: their inner state now, one sentence",
-  "vars": [{ "key": "resolve", "set": 6, "why": "short reason" }],
-  "remember": [{ "text": "one statement ≤ 40 words", "tags": ["ledger", "#marta"], "pin": false }],
+  "state": "optional: their physical and emotional condition now, one sentence",
+  "vars": [{ "key": "resolve", "set": 6, "why": "short reason" }, { "key": "trust", "to": "#agnes", "delta": -1 }],
+  "remember": [{ "kind": "opinion", "about": "#agnes", "importance": 7, "text": "one statement ≤ 40 words", "tags": ["caseworker"] }],
+  "revise": [{ "id": "t4", "text": "the thought as it stands now", "importance": 6 }],
   "forget": ["t7"]
 }
 ```
 
-Clamps: `say` ≤ 80 words; `intent` ≤ 25 words; `state` ≤ 25 words (one sentence); at most 3 `remember` and 5
-`forget` per reply. `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
+Clamps: `say` ≤ 80 words; `intent` ≤ 25 words; `state` ≤ 25 words (one sentence); at most 3 `remember`, 3
+`revise` and 5 `forget` per reply; `kind` defaults to `note`, `importance` to 5 (clamped to 1–10); at most 3
+active agenda items (doc 11 §5.6–5.8). `vars` may only touch variables this character can see **and** may change (doc 11 §4.4);
 anything else is rejected and logged, never fatal. Whispering (`to` + private) is a TODO.
 
 ### 9.2 `DialogueReply`
@@ -421,7 +440,8 @@ Written after the prose, fenced as ```` ```round ````, never shown to the player
   "evoke": { "#marta": ["debt"] },
   "notes": { "remember": [{ "text": "Tom is the informant", "tags": ["#tom", "informant"] }], "forget": [] },
   "cast": { "enter": [{ "name": "Guard Captain Held", "appearance": "tall, scarred, city colours" }], "exit": ["#tom"] },
-  "objects": [{ "name": "silver locket", "type": "item", "line": "tarnished, engraved with an M" }],
+  "objects": [{ "name": "silver locket", "type": "item", "line": "tarnished, engraved with an M" },
+              { "name": "#ledger", "gone": true }],
   "scene": { "break": false, "title": null, "location": "#tavern", "items": ["#ledger", "#silver-locket"] },
   "time": 10
 }
@@ -437,8 +457,10 @@ Written after the prose, fenced as ```` ```round ````, never shown to the player
 - `tags`: situation tags for this round. `evoke`: extra per-character tags. Both feed recall next round (doc 11 §5.4).
 - `notes`: the narrator's own thoughts (owner = narrator; same store and recall as characters' thoughts).
 - `cast.enter`: creates a roster object + sheet; a seeding job fleshes it out. `cast.exit` removes from the scene.
-- `objects`: new roster items (handles assigned by the app). `scene.items`: what is in view; feeds the "Here:"
-  line and thought recall (doc 11 §6).
+- `objects`: new roster items (handles assigned by the app), or existing ones by #handle to update their line;
+  `"gone": true` when one is destroyed, taken away for good or no longer exists. `scene.items`: what is in view;
+  feeds the "Here:" line and thought recall (doc 11 §6). See §5.1d.
+- `vars` entries for relation variables carry `"to"` (doc 11 §4.9).
 - `time`: in-game minutes this round spans (replaces `advance_time`); missing → default.
 
 ### 9.4 Referee (later: special cases)

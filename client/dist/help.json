@@ -89,6 +89,13 @@
     "example": "Mira — Rin: older brother. Rin — Mira: younger sister."
   },
   {
+    "id": "places",
+    "group": "Sheets",
+    "title": "Places and things",
+    "body": "The story keeps one public line for each place and thing, known by its #handle (\"#ledger — Marta's book of debts\"). Characters read these lines when the thing is around; the narrator is shown the list so it reuses them instead of naming them afresh. In the Places & things tab: tap one to edit its line, merge a duplicate into it (the thoughts that mention it follow), mark it gone, or delete it. Gone things drop out of view and out of the narrator's list.",
+    "example": "#rabbit (Agnes's stuffed rabbit, also: Bun) — worn grey plush, one ear stitched back on"
+  },
+  {
     "id": "state",
     "group": "Sheets",
     "title": "State",

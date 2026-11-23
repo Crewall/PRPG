@@ -398,6 +398,59 @@ export async function renderCastTab(ctx, body) {
   );
 }
 
+// ---- Drawer: places and things (docs/10 §5.1d) ----
+
+export async function renderPlacesTab(ctx, body) {
+  fill(body, h('div', { class: 'sub' }, 'Loading…'));
+  let places;
+  try { places = await api.get(`/api/stories/${ctx.storyId}/minds/places${ctx.advanced() ? '?advanced=1' : ''}`); } catch (e) { fill(body, h('div', { class: 'empty' }, e.message)); return; }
+  const adv = ctx.advanced();
+  const reload = () => renderPlacesTab(ctx, body);
+  const patch = async (p, body) => { try { await api.patch(`/api/memory/objects/${p.objectId}`, body); reload(); } catch (e) { alert(e.message); } };
+  const card = (p) => {
+    const edit = h('div', { class: 'place-edit gone' });
+    const nameIn = input(p.name);
+    const lineIn = input(p.line, { placeholder: 'One public line: what it is, whose it is' });
+    const others = places.filter((x) => x.objectId !== p.objectId);
+    const mergeSel = select([['', 'Merge a duplicate into this…'], ...others.map((x) => [x.objectId, `${x.name} · #${x.handle}${x.gone ? ' (gone)' : ''}`])], '');
+    mergeSel.addEventListener('change', async () => {
+      const victim = others.find((x) => x.objectId === mergeSel.value);
+      if (!victim) return;
+      if (!confirm(`Merge "${victim.name}" into "${p.name}"? Its aliases and the thoughts that mention it move here; the duplicate is deleted.`)) { mergeSel.value = ''; return; }
+      try { await api.post(`/api/memory/objects/${p.objectId}/merge`, { mergeId: victim.objectId }); } catch (e) { alert(e.message); }
+      reload();
+    });
+    fill(edit,
+      row('Name', nameIn), row('Public line', lineIn, 'Everyone present reads it with the #handle.'),
+      h('div', { class: 'row', style: 'gap:8px; flex-wrap:wrap' },
+        h('button', { class: 'small primary', onclick: () => patch(p, { name: nameIn.value.trim() || p.name, summary: lineIn.value.trim() }) }, 'Save'),
+        h('button', { class: 'small', onclick: () => patch(p, { status: p.gone ? 'active' : 'destroyed' }) }, p.gone ? 'Back in the story' : 'Mark gone'),
+        h('button', { class: 'small danger', onclick: async () => {
+          if (!confirm(`Delete "${p.name}"? Thoughts that mention #${p.handle} keep the tag.`)) return;
+          try { await api.del(`/api/memory/objects/${p.objectId}`); } catch (e) { alert(e.message); }
+          reload();
+        } }, 'Delete')),
+      others.length ? mergeSel : null);
+    const where = p.here ? 'here' : p.inView ? 'in view' : p.gone ? 'gone' : '';
+    return h('div', { class: `mem-card place${p.gone ? ' is-gone' : ''}` },
+      h('div', { class: 'mem-head', onclick: () => edit.classList.toggle('gone') },
+        h('div', {},
+          h('b', {}, p.name), h('span', { class: 'sub' }, ` #${p.handle}${p.aliases?.length ? ` · also: ${p.aliases.join(', ')}` : ''}`),
+          h('div', { class: 'sub' }, p.line || '(no public line yet)')),
+        h('span', { class: 'sub place-meta' }, [where, adv && p.mentions ? `${p.mentions} thought${p.mentions === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '))),
+      edit);
+  };
+  const groups = [['location', 'Places'], ['item', 'Things'], ['other', 'Other']];
+  const groupOf = (p) => (p.type === 'location' ? 'location' : p.type === 'item' ? 'item' : 'other');
+  fill(body,
+    h('div', { class: 'sub', style: 'margin-bottom:8px' }, 'What the story keeps about places and things: a public line each, known by its #handle. Tap one to edit, merge a duplicate or mark it gone. ', helpLink('places')),
+    ...(places.length ? [] : [h('div', { class: 'empty' }, 'No places or things yet: the narrator adds them as the story names them.')]),
+    ...groups.flatMap(([g, label]) => {
+      const items = places.filter((p) => groupOf(p) === g);
+      return items.length ? [h('h4', { class: 'sub' }, label), ...items.map(card)] : [];
+    }));
+}
+
 function changeLog(ctx) {
   const box = h('details', {}, h('summary', { class: 'sub' }, 'Change log (variables and states)'));
   box.addEventListener('toggle', async () => {

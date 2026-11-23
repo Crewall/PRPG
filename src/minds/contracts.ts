@@ -167,7 +167,7 @@ const RoundBlockShape = {
       exit: z.array(Str).default([]),
     })
     .default({}),
-  objects: listOf(z.object({ name: z.string().min(1), type: Str.default('item'), line: Str.default('') })),
+  objects: listOf(z.object({ name: z.string().min(1), type: Str.default('item'), line: Str.default(''), gone: z.boolean().optional() })),
   scene: z
     .object({
       break: z.boolean().default(false),

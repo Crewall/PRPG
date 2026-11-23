@@ -384,3 +384,9 @@ td.vis.hidden { color: #ff8a8a; }
 .job-notice { font-size: 13px; color: var(--muted); padding: 4px 2px; align-self: stretch; }
 .job-notice .link { font-size: 13px; padding: 0 4px; }
 .job-notice pre { margin: 4px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; }
+
+/* ---- Places & things (Minds) ---- */
+.mem-card.place .mem-head { align-items: flex-start; gap: 8px; }
+.mem-card.place .place-meta { white-space: nowrap; }
+.mem-card.place.is-gone { opacity: .6; }
+.place-edit { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); }

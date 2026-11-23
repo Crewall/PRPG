@@ -96,6 +96,41 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     };
   });
 
+  // ---- Places and things (docs/10 §5.1d) ----
+
+  server.get('/api/stories/:id/minds/places', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const story = storyOr404(id, reply);
+    if (!story) return { error: 'story not found' };
+    const adv = viewerOf(id, req.query).kind === 'advanced';
+    const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+    const inView = new Set(scene?.itemHandles ?? []);
+    const mentions = (handle: string) =>
+      app.db
+        .prepare(`SELECT count(*) AS n FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ? AND t.status = 'active' AND tt.tag = ?`)
+        .get<{ n: number }>(id, `#${handle}`)!.n;
+    return app.memory
+      .listObjects(id)
+      .filter((o) => o.type !== 'character')
+      .map((o) => {
+        const handle = o.handle ?? app.memory.ensureHandle(o.id) ?? '';
+        return {
+          objectId: o.id,
+          handle,
+          name: o.name,
+          type: o.type,
+          aliases: o.aliases,
+          line: o.summary,
+          gone: o.status === 'destroyed',
+          here: scene?.locationObjectId === o.id,
+          inView: inView.has(handle),
+          updatedAt: o.updatedAt,
+          ...(adv ? { mentions: mentions(handle) } : {}),
+        };
+      })
+      .sort((a, b) => Number(a.gone) - Number(b.gone) || Number(b.here) - Number(a.here) || Number(b.inView) - Number(a.inView) || b.updatedAt - a.updatedAt);
+  });
+
   // ---- Sheets ----
 
   server.get('/api/stories/:id/minds', async (req, reply) => {

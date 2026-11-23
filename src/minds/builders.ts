@@ -13,6 +13,7 @@ import { renderThought, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
+import { placesAndThings } from './places.ts';
 import type { Thought } from './thoughts.ts';
 import { holdersFor, valueOf } from './service.ts';
 import type { MindsDeps } from './service.ts';
@@ -441,6 +442,10 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
     parts.push(`Characters present:\n${blocks.join('\n')}`);
   }
 
+  // Places and things with their #handles, so the block reuses them instead of naming them afresh (docs/10 §5.1d).
+  const scene = story.currentSceneId ? deps.stories.getScene(story.currentSceneId) : undefined;
+  const things = placesAndThings(deps, storyId, scene);
+  if (things) parts.push(things);
   const world = valueLine(deps, storyId, defs, holders.get('world')!, { kind: 'narrator' }, true);
   if (world) parts.push(`The world: ${world}`);
   parts.push(`Time: ${formatGameClock(story.clockMin)}`);
