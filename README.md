@@ -64,7 +64,8 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   the moment's focus on them allows (⚡⚡ gives one the floor); ↶ Revert undoes the last regenerate, Edit, remove
   or edit, and editing the last reply updates what every character knows. Characters keep a short nature (their
   traits) in view every round, hold views of people in proportion, and foresee what comes next: when they turn out
-  wrong, they are surprised and rethink.
+  wrong, they are surprised and rethink. You can add a major character yourself (+ Add character in the
+  Cast tab); the narrator brings them in. On Android, Back closes an open dialog or the side panel first.
 
 ## Running it
 

@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9), opinions kept in proportion (§5.7b), the character's nature (§2.7), expectations (§5.11) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9), opinions kept in proportion (§5.7b), the character's nature (§2.7), expectations (§5.11), the full character sheet (§5.10) and adding a character during play (§2.2) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -56,6 +56,13 @@ prose is its POV.
 
 The scenario can list characters up front, with full sheets. They join the scene when the narrator brings them in
 (`cast.enter` with a matching name or handle) or when the user adds them.
+
+**Adding a character during play** (Cast tab → "+ Add character"): name, pronouns, appearance, known-as, "in short"
+(the hand-over), nature and description (all but the name optional), and optionally a tie each way with the player
+character. They get a mind like anyone the narrator brings in: a seed job writes what was left empty and never
+overwrites what the user wrote. "Here now" (default on) adds them to the scene, tells them they have just arrived,
+and asks the narrator, in its next round message, to bring them in. A name already in the story is refused.
+`POST /api/stories/:id/minds` with `here`, `playerKnowsName`, `ties`, `concept`, `nature`.
 
 ### 2.3 New characters during play (seeding)
 

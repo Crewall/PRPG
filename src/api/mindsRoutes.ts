@@ -9,7 +9,7 @@ import { HOPES, HORIZONS, THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
 import { setTie } from '../minds/ties.ts';
-import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, NARRATOR_OWNER } from '../minds/builders.ts';
+import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from '../minds/builders.ts';
 import type { ThreadDeps } from '../minds/builders.ts';
 
 // Minds engine data layer API (docs/10 §11, docs/11): scenario variables,
@@ -185,7 +185,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
   server.post('/api/stories/:id/minds', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!storyOr404(id, reply)) return { error: 'story not found' };
-    const body = SheetBody.extend({ name: z.string().min(1) }).safeParse(req.body);
+    // `here`: added by the player during play (docs/11 §2.2): they join the scene now, the narrator is told to bring
+    // them in, and a mind is written for them like for anyone the narrator brings in.
+    const body = SheetBody.extend({ name: z.string().min(1), here: z.boolean().optional() }).safeParse(req.body);
     if (!body.success) {
       reply.code(400);
       return { error: 'a character needs a name' };
@@ -195,12 +197,39 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const { playerKnowsName: _known, ties, concept, ...fields } = body.data;
-    const sheet = createCharacter(deps, id, { ...fields, name: body.data.name });
-    if (concept !== undefined) updateSheet(deps, id, sheet.objectId, { concept: concept.trim() });
-    if (ties) setTies(id, sheet.objectId, ties);
+    const { playerKnowsName, ties, concept, nature, here, ...fields } = body.data;
+    if (app.memory.findByName(id, body.data.name.trim())) {
+      reply.code(409);
+      return { error: `there is already someone called ${body.data.name.trim()} in this story` };
+    }
+    const sheet = createCharacter(deps, id, { ...fields, name: body.data.name.trim() });
+    const oid = sheet.objectId;
+    if (concept !== undefined || nature !== undefined) updateSheet(deps, id, oid, { ...(concept !== undefined ? { concept: concept.trim() } : {}), ...(nature !== undefined ? { nature: nature.trim() } : {}) });
+    if (ties) setTies(id, oid, ties);
+    const pc = app.sheets.player(id)?.objectId;
+    if (playerKnowsName && pc && pc !== oid) app.names.learn(id, pc, oid, null);
+    if (!fields.isPlayer && app.stories.getStory(id)?.settings.engine === 'minds') {
+      const story = app.stories.getStory(id)!;
+      const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+      if (here && scene) {
+        app.stories.addActiveNpc(scene.id, oid);
+        const loc = scene.locationObjectId ? app.memory.getObject(scene.locationObjectId)?.name : undefined;
+        const obj = app.memory.getObject(oid)!;
+        const now = app.sheets.get(oid)!;
+        queueForCharacter(threadDeps, id, oid, `You have just arrived${loc ? ` at ${loc}` : ''}.`, null);
+        queueForNarrator(
+          threadDeps,
+          id,
+          `Note: the player added a character who is here now: #${obj.handle} ${obj.name}${now.pronouns ? ` (${now.pronouns})` : ''}${now.appearance ? ` — ${now.appearance}` : ''}.` +
+            `${now.concept ? ` Who they are: ${now.concept}.` : ''} Bring them in naturally in your next prose, and give them a brief.`,
+          null,
+        );
+      }
+      // Their mind, written like for anyone the narrator brings in; what the player wrote is never overwritten.
+      app.jobs.enqueue('minds_seed', { storyId: id, payload: { objectId: oid } });
+    }
     reply.code(201);
-    return { ...(app.sheets.get(sheet.objectId) ?? sheet), handle: app.memory.getObject(sheet.objectId)?.handle ?? null };
+    return { ...(app.sheets.get(oid) ?? sheet), handle: app.memory.getObject(oid)?.handle ?? null };
   });
 
   server.patch('/api/stories/:id/minds/:oid', async (req, reply) => {

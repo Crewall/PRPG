@@ -546,6 +546,14 @@ transcript, so the minds kept what was removed or edited.
   of their threads would corrupt them), and Revert can bring one back.
 - **Background jobs** (seeding, compaction) started by a turn that was undone do nothing.
 
+## 10b. The Back button (settled after a play test)
+
+On Android, Back with a dialog or the side panel open used to leave the page behind them and keep the overlay open.
+Each dialog, and the side panel on a narrow screen, now adds a history entry when it opens, so Back closes the top
+overlay first (a dialog through its own Close or Cancel); closing it by hand takes the entry back out. Backing out
+of a new story's "Who do you play?" form leaves the story waiting (the 🎭 chip opens the form again).
+`client/dist/back.js`.
+
 ## 10. Advanced mode and the POV filter
 
 A global toggle in the header (persisted per installation). It replaces today's `debug.showThreads`.

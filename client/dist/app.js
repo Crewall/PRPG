@@ -6,6 +6,7 @@
 import { h, api } from './ui.js';
 import { openHelp, helpLink, firstRunHint } from './help.js';
 import * as minds from './minds.js';
+import './back.js'; // Android back closes the top dialog or the side panel
 
 const app = document.getElementById('app');
 // Clipboard copy that also works on plain-http LAN/Termux, where the async
@@ -485,6 +486,8 @@ async function renderPlay(storyId) {
             pc ? null : h('button', { class: 'ghost', title: 'The narrator creates your character from the premise; you can edit it later from the 🎭 chip.', onclick: () => close('skipped') }, 'Let the narrator decide'),
             pc ? h('button', { class: 'ghost', onclick: () => close('cancelled') }, 'Cancel') : null,
             save)));
+      // Android back: leave the form without starting the story (the 🎭 chip opens it again).
+      modal.backClose = () => close('cancelled');
       document.body.append(modal);
       nameIn.focus();
       // A new story starts from the character you played last (you can change anything, or start blank).
@@ -1088,7 +1091,7 @@ async function renderPlay(storyId) {
     if (story.settings?.engine === 'minds') {
       let hasPc = true;
       try { hasPc = (await api.get(`/api/stories/${storyId}/minds`)).characters.some((c) => c.isPlayer); } catch {}
-      if (!hasPc) await showPlayerForm(null);
+      if (!hasPc && (await showPlayerForm(null)) === 'cancelled') return; // backed out: the story waits for you
       if (turnCount > 0 || busy || !wsOpen()) return;
     }
     showStage('the storyteller opens the story…');

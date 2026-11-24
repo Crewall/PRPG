@@ -76,6 +76,13 @@
     "body": "Name, pronouns and appearance are what the others perceive of you, so they can tell you apart from everyone else. \"Who you are\" is for the narrator only. Tap 🎭 to edit. If you skip it, the narrator creates your character from the premise (you can change it afterwards); it only ever fills in what is empty. A new story's form starts filled in with the character you played last: change anything, or tap Start blank."
   },
   {
+    "id": "add-character",
+    "group": "Characters",
+    "title": "Adding a character yourself",
+    "body": "Cast tab → + Add character: a new person with their own mind, like anyone the narrator brings in. Only the name is needed; whatever you leave empty (their nature, description, first thoughts) is written for them from what you give, and nothing you wrote is overwritten. You can say how they and your character are related (a tie means you know each other's names). With \"Here now\" they join the scene, and the narrator brings them in next round.",
+    "example": "Brenna Holt · she/her · \"the red-haired smith\" · In short: the village smith, owes your character a favour"
+  },
+  {
     "id": "profile",
     "group": "Sheets",
     "title": "Description, appearance, pronouns",

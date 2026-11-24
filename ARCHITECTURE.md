@@ -88,7 +88,8 @@ src/
   data/story-seeds.txt  premise randomizer seed phrases
 client/dist/            index.html, style.css and ES modules (no build): app.js (home, play view, settings),
                         ui.js (shared DOM/API helpers), minds.js (Minds cards, sheet and scenario editors, Cast and
-                        POV tabs), help.js + help.json (the help panel's entries)
+                        POV tabs), help.js + help.json (the help panel's entries), back.js
+                        (Android/browser Back closes the top dialog or the side panel first)
 test/                   Vitest; fake/replay LLM drivers in test/fixtures/drivers.ts — no API key needed
 scripts/                smoke.ts (live provider check), migrate.ts, termux-install.sh
 ```
@@ -287,7 +288,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 297 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 298 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
