@@ -91,6 +91,8 @@ export interface NarratorCallInput {
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
+  /** The characters who act, in the order the narrator should tell them (docs/10 §5.1): new every round. */
+  order?: string[];
   situationTags?: string[];
   /** Extra context for this round, e.g. a conversation that just ended (dialogue wrap-up). */
   context?: string;
@@ -542,6 +544,9 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
       return lines.join('\n');
     });
     parts.push(`Characters present:\n${blocks.join('\n')}`);
+    // Said outright, or the narrator falls back on the order of its own earlier rounds (settled after a play test).
+    const acting = (input.order ?? []).filter((oid) => present.includes(oid));
+    if (acting.length >= 2) parts.push(`Order this round: ${acting.map((oid) => h(holders.get(oid)?.handle)).join(' → ')}. Tell what they say and do in this order; a quick reaction may still cut in.`);
   }
 
   // Places and things with their #handles, so the block reuses them instead of naming them afresh (docs/10 §5.1d).

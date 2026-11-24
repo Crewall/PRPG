@@ -48,7 +48,7 @@ is right.
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
   - adding a major character by hand during play (a mind, seeded; the narrator brings them in), and Back on
     Android closing the top dialog or side panel first (`client/dist/back.js`);
-  - 298 passing tests.
+  - 299 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases, a reload-on-update check (doc 10 §14).
 

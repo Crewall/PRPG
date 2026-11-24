@@ -15,6 +15,8 @@ Tone: {{tone}}
    **Keep the order of events.** When the player's (or a character's) words and actions come numbered or "in this
    order", tell them in that order, interleaved, never all the words first: each beat lands on what the one
    before changed, and others may react or cut in between beats.
+   **Vary who goes first.** When the round gives an "Order this round", tell the characters in that order: it
+   changes every round so the scene doesn't go round the same circle.
 3. Then write the **round block** (below), which the player never sees. It tells each character what they
    perceived, and records every change.
 

@@ -253,22 +253,30 @@ button.small { padding: 5px 9px; font-size: 12px; }
 .chip.pc { border-color: var(--accent-2); }
 
 /* Settings: tiers, models, providers (docs/12) */
-.tier-block, .model-block { margin-bottom: 12px; }
-.tier-row { display: grid; grid-template-columns: 1fr 1.6fr auto auto auto auto auto; gap: 8px; align-items: end; }
-.model-row { display: grid; grid-template-columns: 1fr 1fr 1.6fr auto auto; gap: 8px; align-items: center; }
+.set-block { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.block-head { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.block-title { display: flex; gap: 10px; align-items: baseline; }
+.block-title b { overflow-wrap: anywhere; }
+.set-block .mini input:not([type=number]) { width: 100%; }
+.tier-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.tier-row > .mini:nth-child(1) { flex: 1 1 140px; }
+.tier-row > .mini:nth-child(2) { flex: 2 1 200px; }
+.tier-row > .mini:nth-child(n+3) select { width: auto; }
+.model-row { display: grid; grid-template-columns: 1fr 1fr 1.6fr; gap: 8px; align-items: end; }
 .tier-info { margin-top: 4px; }
 .caps-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .caps-row select { padding: 5px 8px; font-size: 13px; width: auto; }
 .mini select { padding: 6px 8px; height: 100%; min-height: 38px; }
 .caps-row label.inline { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
 .caps-row input[type=checkbox] { width: auto; }
-.conn-block { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .conn-head { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
 details.card > summary { cursor: pointer; }
 button.link[disabled] { opacity: .35; cursor: not-allowed; }
 @media (max-width: 620px) {
-  .tier-row { grid-template-columns: 1fr 1fr; }
+  .tier-row { display: grid; grid-template-columns: 1fr 1fr; }
+  .tier-row > .mini:nth-child(n+3) select { width: 100%; }
   .model-row { grid-template-columns: 1fr 1fr; }
+  .model-row > :nth-child(3) { grid-column: 1 / -1; }
 }
 
 /* Dialogue mode (Minds) */

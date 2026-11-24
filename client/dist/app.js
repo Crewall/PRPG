@@ -1686,6 +1686,9 @@ const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
 const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
 const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);
 const mini = (label, el) => h('div', { class: 'mini' }, h('span', { class: 'sub' }, label), el);
+// A settings box's header: its name and its own buttons on one line, a short note under them.
+const blockHead = (title, note, ...buttons) =>
+  h('div', { class: 'block-head' }, h('div', { class: 'block-title' }, title, h('span', { style: 'flex:1' }), ...buttons), note ? h('div', { class: 'sub' }, note) : null);
 
 async function renderSettings() {
   app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
@@ -1724,7 +1727,8 @@ async function renderSettings() {
       const used = rolesOnTier(t.id);
       const m = st.models.find((x) => x.id === t.modelId);
       const c = m && conn(m.providerId);
-      const label = h('input', { value: t.label, placeholder: 'tier name', oninput: (e) => (t.label = e.target.value) });
+      const title = h('b', {}, t.label || 'Unnamed tier');
+      const label = h('input', { value: t.label, placeholder: 'tier name', oninput: (e) => { t.label = e.target.value; title.textContent = t.label || 'Unnamed tier'; } });
       const model = h('select', { onchange: (e) => { t.modelId = e.target.value; paint(); } }, opt('', '— pick a model —', t.modelId), ...st.models.map((x) => opt(x.id, modelName(x), t.modelId)));
       const maxT = h('input', { type: 'number', min: '1', step: '1', value: t.maxTokens, oninput: (e) => (t.maxTokens = parseInt(e.target.value, 10) || 1) });
       const temp = h('input', { type: 'number', min: '0', max: '2', step: '0.1', placeholder: '—', value: t.temperature ?? '', title: 'Empty = not sent (some models reject it)', oninput: (e) => { const v = e.target.value.trim(); t.temperature = v === '' ? undefined : parseFloat(v); } });
@@ -1742,7 +1746,10 @@ async function renderSettings() {
         m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
         m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
         m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
-      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb), rm), info);
+      return h('div', { class: 'set-block' },
+        blockHead(title, m ? modelName(m) : 'no model', rm),
+        h('div', { class: 'tier-row' }, mini('name', label), mini('model', model), mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb)),
+        info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
     const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');
@@ -1762,9 +1769,11 @@ async function renderSettings() {
     const rows = st.models.map((m) => {
       const inUse = st.tiers.some((t) => t.modelId === m.id);
       const c = conn(m.providerId);
-      const label = h('input', { value: m.label, placeholder: 'label', oninput: (e) => (m.label = e.target.value) });
+      const titleOf = () => m.label || m.model || 'New model';
+      const title = h('b', {}, titleOf());
+      const label = h('input', { value: m.label, placeholder: 'label', oninput: (e) => { m.label = e.target.value; title.textContent = titleOf(); } });
       const provider = h('select', { onchange: (e) => { m.providerId = e.target.value; paint(); } }, ...st.connections.map((x) => opt(x.id, x.label, m.providerId)));
-      const model = h('input', { value: m.model, list: 'ml-' + m.providerId, placeholder: 'model id', oninput: (e) => (m.model = e.target.value),
+      const model = h('input', { value: m.model, list: 'ml-' + m.providerId, placeholder: 'model id', oninput: (e) => { m.model = e.target.value; title.textContent = titleOf(); },
         onchange: () => { const known = (modelLists[m.providerId] || []).find((x) => x.id === m.model); if (known) { m.caps = { ...known.caps }; if (!m.label) m.label = known.name; paint(); } } });
       const testRes = h('span', { class: 'sub' });
       const test = h('button', { class: 'link', onclick: async () => {
@@ -1777,11 +1786,14 @@ async function renderSettings() {
       const json = h('select', { onchange: (e) => (m.caps.json = e.target.value) }, opt('json_object', 'JSON mode', m.caps.json), opt('schema', 'structured outputs', m.caps.json), opt('prompt', 'prompt only', m.caps.json));
       const reasoning = h('select', { onchange: (e) => (m.caps.reasoning = e.target.value) }, opt('toggle', 'switchable', m.caps.reasoning), opt('always', 'always on', m.caps.reasoning), opt('none', 'none', m.caps.reasoning));
       const sampling = h('input', { type: 'checkbox', ...(m.caps.sampling ? { checked: true } : {}), onchange: (e) => (m.caps.sampling = e.target.checked) });
-      return h('div', { class: 'model-block' },
-        h('div', { class: 'model-row' }, label, provider, model, test, rm),
+      const tiersOn = st.tiers.filter((t) => t.modelId === m.id).map((t) => t.label || 'a tier');
+      return h('div', { class: 'set-block' },
+        blockHead(title, tiersOn.length ? `used by ${tiersOn.join(', ')}` : 'not used by a tier', test, rm),
+        testRes,
+        h('div', { class: 'model-row' }, mini('label', label), mini('provider', provider), mini('model id', model)),
         h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning,
           m.caps.efforts ? h('span', { title: 'Effort levels this model accepts (from the provider)' }, `efforts: ${m.caps.efforts.join(' / ')}`) : null,
-          h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
+          h('label', { class: 'inline' }, sampling, ' accepts temperature')));
     });
     const lists = Object.entries(modelLists).map(([cid, list]) => h('datalist', { id: 'ml-' + cid }, ...list.map((x) => h('option', { value: x.id }, x.name))));
     const add = h('button', { class: 'small', disabled: !st.connections.length, onclick: () => { const c = st.connections[0]; st.models.push({ id: newSettingsId('m'), label: '', providerId: c.id, model: '', caps: capsForPreset(c.preset) }); paint(); } }, '+ Add model');
@@ -1839,7 +1851,7 @@ async function renderSettings() {
       } }, 'Check limits');
       const reqs = usage[c.id] || 0;
       const rm = h('button', { class: 'link', disabled: used, title: used ? 'Models use this provider' : '', onclick: () => { st.connections = st.connections.filter((x) => x !== c); paint(); } }, 'remove');
-      return h('div', { class: 'conn-block' },
+      return h('div', { class: 'set-block' },
         h('div', { class: 'conn-head' }, preset, label, rm),
         h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
         h('div', { class: 'row', style: 'margin-top:8px; gap:8px; flex-wrap:wrap; align-items:center' }, test, list, limits, h('span', { class: 'sub' }, `${reqs} request${reqs === 1 ? '' : 's'} today`)),

@@ -351,7 +351,11 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
       : undefined;
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
-  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
+  // The order the narrator tells them in: whoever the player spoke to answers first, the rest in this round's order.
+  const acting = declarations.filter((d) => d.status !== 'idle').map((d) => d.objectId);
+  const spokenTo = direction.all ? [] : direction.to;
+  const order = [...acting.filter((x) => spokenTo.includes(x)), ...acting.filter((x) => !spokenTo.includes(x))];
+  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, order, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = opts.replay
     ? await replayNarration(deps, story, turn, nCall.roundMessage, opts.replay, signal)

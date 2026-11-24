@@ -165,6 +165,12 @@ round: the order breaks ties for who is called under the cap, and it is the orde
 the order the lines heard are delivered. The same order every round made the narrator go round the same circle. A
 replayed round (§10a) keeps its first order; tests pass a fixed random source.
 
+A shuffled list alone was not enough (second play test): the narrator kept the order of its own earlier prose. So
+when two or more characters act, the round message says it outright: `Order this round: #b → #a → #c. Tell what
+they say and do in this order; a quick reaction may still cut in.` Whoever the player spoke to comes first (they
+answer); the rest follow the round's random order. The narrator prompt has a matching rule ("Vary who goes
+first").
+
 ### 5.1b Who is being spoken to (the director)
 
 The gate above calls everyone who is new or acted last round, and the player's words reach everyone with no

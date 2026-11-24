@@ -159,6 +159,34 @@ describe('character order', () => {
       expect(m).toBeGreaterThan(0);
       expect(t).toBeGreaterThan(0);
       expect(orders.at(-1)!.startsWith('Tom') ? t < m : m < t).toBe(true);
+      // Said outright too, or the narrator keeps the order of its own earlier prose.
+      const ask = h.requests('narrator').at(-1)!.messages.at(-1)!.content;
+      expect(ask).toContain(`Order this round: ${orders.at(-1)!.startsWith('Tom') ? '#tom → #marta' : '#marta → #tom'}. Tell what they say and do in this order`);
+      expect(h.requests('narrator').at(-1)!.system).toContain('**Vary who goes first.**');
+    } finally {
+      h.close();
+    }
+  });
+
+  it('whoever the player speaks to comes first; nobody else acting means no order line', async () => {
+    const h = mindsHarness();
+    try {
+      await h.opening();
+      const ask = () => h.requests('narrator').at(-1)!.messages.at(-1)!.content;
+      h.script.director.push(JSON.stringify({ to: ['#tom'], react: ['#marta'], all: false }));
+      h.script.characters['Marta'] = [JSON.stringify({ say: 'Hm.' })];
+      h.script.characters['Tom'] = [JSON.stringify({ say: 'Aye.' })];
+      h.script.narrator.push(round('Tom nods.', { briefs: {} }));
+      await h.play('"What do you think?"');
+      expect(h.app.stories.listTurns(h.storyId).at(-1)!.meta.direction).toMatchObject({ to: [h.idOf('Tom')] });
+      expect(h.app.stories.lastTurn(h.storyId)!.meta.presentNpcIds).toEqual([h.idOf('Marta'), h.idOf('Tom')]); // the round's own order
+      expect(ask()).toContain('Order this round: #tom → #marta.');
+
+      h.script.director.push(JSON.stringify({ to: ['#tom'], react: [], all: false }));
+      h.script.characters['Tom'] = [JSON.stringify({ say: 'Aye.' })];
+      h.script.narrator.push(round('Tom nods again.', { briefs: {} }));
+      await h.play('"And you?"');
+      expect(ask()).not.toContain('Order this round');
     } finally {
       h.close();
     }

@@ -288,7 +288,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 298 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 299 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)
