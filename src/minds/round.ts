@@ -41,6 +41,18 @@ export interface RoundDeps extends ThreadDeps {
   threadLog: ThreadLog;
   jobs: JobStore;
   events: EventBus;
+  /** Randomness for the round's character order (tests pass a fixed one). */
+  rng?: () => number;
+}
+
+/** A copy of `xs` in random order (Fisher–Yates). An rng that always returns ~1 keeps the order. */
+export function shuffled<T>(xs: T[], rng: () => number = Math.random): T[] {
+  const out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.min(i, Math.floor(rng() * (i + 1)));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 export interface RoundEmitter {
@@ -209,8 +221,14 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   const decl: PlayerDeclaration = parsePlayerInput(playerInput);
   if (!completed.length && !decl.say && !decl.do && !decl.ooc) decl.ooc = OPENING_NOTE;
 
-  // Present characters (not the player). Roster objects without a sheet get a bare one.
-  const presentIds = scene.activeNpcIds.filter((oid) => oid !== playerId && deps.memory.getObject(oid));
+  // Present characters (not the player), in a new random order every round (settled after a play test: the same
+  // order every round made the narrator go round the same circle). The order breaks ties for who is called and is
+  // the order the narrator reads them in. A replayed round keeps its first order. Roster objects without a sheet get
+  // a bare one.
+  const inScene = scene.activeNpcIds.filter((oid) => oid !== playerId && deps.memory.getObject(oid));
+  const presentIds = opts.replay?.presentOrder
+    ? [...opts.replay.presentOrder.filter((x) => inScene.includes(x)), ...inScene.filter((x) => !opts.replay!.presentOrder!.includes(x))]
+    : shuffled(inScene, deps.rng);
   for (const oid of presentIds) if (!deps.sheets.get(oid)) deps.sheets.upsert(storyId, oid, {});
 
   // ---- 1. Who acts (docs/10 §5.1) ----
@@ -649,6 +667,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
 /** The distributor (Light tier): a round block rebuilt from the prose when the narrator's is missing or broken. */
 export interface ReplayInput {
   direction: DirectionResult;
+  /** The character order of the first run (it decided who was called). */
+  presentOrder?: string[];
   /** Each called character's raw reply from the first time. */
   characterReplies: Map<string, string>;
   /** The narrator's prose as the user edited it. */

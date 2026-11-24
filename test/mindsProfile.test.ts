@@ -274,3 +274,20 @@ describe('copied placeholders and example names', () => {
     expect(bare).toContain('never copy it');
   });
 });
+
+describe('the last character you played', () => {
+  it('a new story offers the player character of the story played last', async () => {
+    const h = mindsHarness(); // Kael is the player of this story
+    try {
+      const other = h.app.stories.createStory({ title: 'Second', settings: { engine: 'minds' } as never }).id;
+      const server = Fastify();
+      await registerHttpRoutes(server, h.app);
+      const get = async (exclude: string) => (await server.inject({ method: 'GET', url: `/api/minds/last-player?exclude=${exclude}` })).json();
+      expect(await get(other)).toMatchObject({ name: 'Kael', appearance: 'Tall, rain-soaked.', storyTitle: 'Inn' });
+      expect(await get(h.storyId)).toEqual({ none: true }); // never the story itself
+      await server.close();
+    } finally {
+      h.close();
+    }
+  });
+});

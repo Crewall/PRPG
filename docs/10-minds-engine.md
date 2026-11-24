@@ -160,6 +160,11 @@ Reuses `shouldInvokeNpc`. A present character is called when any of these holds:
 Present but not called: no call, but its pending brief stays pending, so the next time it is called it reads
 everything it witnessed, in order. Cap: `maxCharactersPerRound` (default 4; spotlighted characters first).
 
+**A new order every round (settled after a play test).** The present characters are shuffled at the start of each
+round: the order breaks ties for who is called under the cap, and it is the order the narrator reads them in and
+the order the lines heard are delivered. The same order every round made the narrator go round the same circle. A
+replayed round (§10a) keeps its first order; tests pass a fixed random source.
+
 ### 5.1b Who is being spoken to (the director)
 
 The gate above calls everyone who is new or acted last round, and the player's words reach everyone with no

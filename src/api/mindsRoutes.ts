@@ -43,6 +43,22 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
 
   server.get('/api/minds/templates', async () => SCENARIO_TEMPLATES);
 
+  // The character you played last (docs/11 §2.1): the "Who do you play?" form of a new story starts from it.
+  server.get('/api/minds/last-player', async (req) => {
+    const exclude = (req.query as { exclude?: string }).exclude ?? '';
+    const r = app.db
+      .prepare(
+        `SELECT cs.pronouns AS pronouns, cs.known_as AS known_as, cs.appearance AS appearance, cs.description AS description,
+                mo.name AS name, s.title AS story_title
+         FROM character_sheets cs JOIN memory_objects mo ON mo.id = cs.object_id JOIN stories s ON s.id = cs.story_id
+         WHERE cs.is_player = 1 AND cs.story_id <> ? AND trim(mo.name) <> ''
+         ORDER BY cs.updated_at DESC LIMIT 1`,
+      )
+      .get<Record<string, string>>(exclude);
+    if (!r) return { none: true };
+    return { name: r.name, pronouns: r.pronouns ?? '', knownAs: r.known_as ?? '', appearance: r.appearance ?? '', description: r.description ?? '', storyTitle: r.story_title ?? '' };
+  });
+
   // ---- Scenario variable definitions ----
 
   server.get('/api/stories/:id/variables/defs', async (req, reply) => {

@@ -262,6 +262,7 @@ export class TurnPipeline {
       const request = (last.meta.request ?? {}) as RunOptions;
       const replay: ReplayInput = {
         direction: (last.meta.direction as DirectionResult | undefined) ?? NO_DIRECTION,
+        presentOrder: Array.isArray(last.meta.presentNpcIds) ? (last.meta.presentNpcIds as string[]) : undefined,
         characterReplies,
         editedProse: narration,
         originalBlock: last.meta.block,
@@ -290,6 +291,7 @@ export class TurnPipeline {
       db: d.db, stories: d.stories, memory: d.memory, sheets: d.sheets, variables: d.variables, thoughts: d.thoughts, names: d.names, ties: d.ties, met: d.met,
       agents: d.agents, threads: d.threads, registry: d.registry, threadLog: d.threadLog, jobs: d.jobs, events: d.events,
       verbosityOverride: d.verbosityOverride,
+      rng: d.rng,
     };
   }
 

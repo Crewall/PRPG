@@ -16,7 +16,7 @@
     "id": "round",
     "group": "Playing",
     "title": "What a round is",
-    "body": "Minds engine: after your message, the characters who matter this round decide at the same time, each with its own mind, saying exactly what they say and briefly what they try. Then the narrator resolves everything and writes what you read. Each character is told only what it perceived, and the exact words it heard."
+    "body": "Minds engine: after your message, the characters who matter this round decide at the same time, each with its own mind, saying exactly what they say and briefly what they try. Then the narrator resolves everything and writes what you read. Each character is told only what it perceived, and the exact words it heard. The characters come in a new order every round, so the scene doesn't go round the same circle."
   },
   {
     "id": "who-decides",
@@ -73,7 +73,7 @@
     "id": "player-character",
     "group": "Characters",
     "title": "Your character",
-    "body": "Name, pronouns and appearance are what the others perceive of you, so they can tell you apart from everyone else. \"Who you are\" is for the narrator only. Tap 🎭 to edit. If you skip it, the narrator creates your character from the premise (you can change it afterwards); it only ever fills in what is empty."
+    "body": "Name, pronouns and appearance are what the others perceive of you, so they can tell you apart from everyone else. \"Who you are\" is for the narrator only. Tap 🎭 to edit. If you skip it, the narrator creates your character from the premise (you can change it afterwards); it only ever fills in what is empty. A new story's form starts filled in with the character you played last: change anything, or tap Start blank."
   },
   {
     "id": "profile",
