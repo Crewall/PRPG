@@ -38,6 +38,7 @@ export const SeedReply = z.unknown().transform((raw) => {
         ...(t.confidence !== undefined ? { confidence: t.confidence } : {}),
         ...(typeof t.hope === 'string' ? { hope: t.hope } : {}),
         ...(typeof t.horizon === 'string' ? { horizon: t.horizon } : {}),
+        ...(typeof t.basis === 'string' || typeof t.basis === 'number' ? { basis: t.basis } : {}),
       })),
   };
 });

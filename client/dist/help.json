@@ -82,6 +82,13 @@
     "body": "The description is private: who the character is, their voice, drives and secrets. Only that character's own mind and the narrator read it. Appearance and pronouns are public: everyone present sees them, along with any public variables (\"visibly: wounded\"). Places and things have a public line too (\"Kael's rented room\")."
   },
   {
+    "id": "nature",
+    "group": "Sheets",
+    "title": "Nature",
+    "body": "A character's traits in a few short phrases, written when their mind is: the one or two that define them most come with synonyms so they weigh more. Their mind reads it in its own prompt and again at the end of every round (\"Stay yourself: …\"), so a kind character stays kind even when the room turns suspicious; the narrator sees it too. Edit it on their Sheet (advanced mode).",
+    "example": "warm, kind-hearted, gentle with everyone; slow to think ill of anyone; curious about strangers"
+  },
+  {
     "id": "names",
     "group": "Sheets",
     "title": "Names: who knows whom",
@@ -126,8 +133,15 @@
     "id": "thoughts",
     "group": "Sheets",
     "title": "Thoughts: agenda, opinions, feelings, notes",
-    "body": "Characters keep their own memory as short thoughts they write themselves, only when something matters to them. Each has a kind: agenda (what they are after; at most 3, always on their mind), opinion (what they think of someone), feeling (love, fear, guilt, a grudge) or note (a fact, a promise, a secret). Each has an importance from 1 to 10: unimportant ones fade as story time passes without them coming up (Story options → Minds engine sets how fast); 8–10 never fade, 9–10 are always on their mind. A character can revise a thought (the old one is kept) or hold mixed opinions of the same person. The narrator sees each present character's agenda and opinions or feelings of 7+; everything else is private. In advanced mode, a character's Sheet shows them all, grouped by person, and lets you edit, add, forget or restore any.",
+    "body": "Characters keep their own memory as short thoughts they write themselves, only when something matters to them. Kinds: agenda (what they are after; at most 3, always on their mind), opinion (what they think of someone, and why), feeling (love, fear, guilt, a grudge), note (a fact, a promise, a secret) and expectation (what they foresee; see Expectations). Each has an importance from 1 to 10. A thought fades as story time and rounds pass without anything bringing it up again; someone merely being in the room doesn't count (Story options → Minds engine sets how fast). 8–10 never fade; 9–10 are always on their mind. Views of people stay in proportion: in play an opinion of someone stops at 7, and above that grows by at most one point per scene; a revision raises it by at most 2. The narrator sees each present character's agenda and opinions or feelings of 7+; everything else is private. In advanced mode, a character's Sheet shows them all and lets you edit, add, forget or restore any.",
     "example": "t12 · Day 2, 19:40 · opinion of #agnes, 7/10 [file] She reads the file, not me."
+  },
+  {
+    "id": "expectations",
+    "group": "Sheets",
+    "title": "Expectations",
+    "body": "What a character foresees: what will happen next, how someone will behave. Each has how sure they are (1–10; low means they don't really know or care), whether they hope for it, fear it or just foresee it, a horizon (soon, today, later) and, often, the opinion it comes from. Every round the character says which came true or didn't, as they see it. Being right strengthens the view behind it a little; being wrong weakens it more, and the character is told (surprise, relief, disappointment), so suspicions can be corrected instead of growing forever. Expectations expire with their horizon.",
+    "example": "t14 · expectation about #kael · fear, 6/10 sure, matters 5, soon: He will dodge the question about the ledger."
   },
   {
     "id": "advanced",

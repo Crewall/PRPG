@@ -129,12 +129,21 @@ describe('nature', () => {
     h = mindsHarness();
     await h.opening();
     h.script.seeder.push(
-      JSON.stringify({ description: 'Marta runs the inn.', nature: 'warm, kind-hearted, gentle with everyone;\\nslow to think ill of anyone' }),
+      JSON.stringify({
+        description: 'Marta runs the inn.',
+        nature: 'warm, kind-hearted, gentle with everyone;\\nslow to think ill of anyone',
+        thoughts: [
+          { kind: 'opinion', about: '#kael', importance: 4, text: 'The stranger looks tired.' },
+          { kind: 'expectation', about: '#kael', confidence: 6, hope: 'hope', horizon: 'soon', basis: 't1', text: 'He will pay honestly.' },
+        ],
+      }),
       JSON.stringify({ description: 'Tom drinks.' }),
     );
     await h.app.worker.drain();
     expect(h.app.sheets.get(h.idOf('Marta'))!.nature).toBe('warm, kind-hearted, gentle with everyone; slow to think ill of anyone');
     expect(h.app.sheets.get(h.idOf('Tom'))!.nature).toBe('');
+    const [op, ex] = h.app.thoughts.list(h.storyId, h.idOf('Marta'));
+    expect(ex.basis).toBe(op.id); // the seeder's expectation keeps its basis
 
     // Tom has a mind but no nature: the next round asks for one.
     h.script.characters['Marta'] = [JSON.stringify({ say: '' })];

@@ -62,7 +62,9 @@ supplies. It runs as a local web server, light enough for **Android via Termux**
   hold a value per pair of characters (trust, affection) and are set up in a guided editor; advanced mode shows
   each character's full sheet. Your words and actions keep the order you typed them; a character says as much as
   the moment's focus on them allows (⚡⚡ gives one the floor); ↶ Revert undoes the last regenerate, Edit, remove
-  or edit, and editing the last reply updates what every character knows.
+  or edit, and editing the last reply updates what every character knows. Characters keep a short nature (their
+  traits) in view every round, hold views of people in proportion, and foresee what comes next: when they turn out
+  wrong, they are surprised and rethink.
 
 ## Running it
 

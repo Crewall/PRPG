@@ -358,7 +358,7 @@ export function mindSheet(ctx, owner, people) {
         } }, 'Add')));
 
     fill(box,
-      h('div', { class: 'sub' }, `Importance fades one point per ${data.fadeHours} in-story hours a thought doesn't come up; agenda, pinned and 8–10 never fade. Tap a thought to edit it.`),
+      h('div', { class: 'sub' }, `Importance fades one point per ${data.fadeHours} in-story hours or ${data.fadeRounds} rounds a thought doesn't come up (someone just being there doesn't count); agenda, pinned and 8–10 never fade. Tap a thought to edit it.`),
       group('Agenda', `${agenda.length}/3 · always on their mind`, agenda.map(row)),
       group('People', 'opinions and feelings, by person', [...aboutGroups].sort((a, b) => Math.max(...b[1].map((t) => t.current ?? t.importance)) - Math.max(...a[1].map((t) => t.current ?? t.importance)))
         .flatMap(([oid, list]) => [personHead(oid, list), ...list.sort(byCur).map(row)])),

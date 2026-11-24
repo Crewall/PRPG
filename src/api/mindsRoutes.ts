@@ -296,6 +296,7 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       }),
       vocabulary: app.thoughts.vocabulary(id, q.owner),
       fadeHours: lens.fadeHours,
+      fadeRounds: lens.fadeRounds,
     };
   });
 
