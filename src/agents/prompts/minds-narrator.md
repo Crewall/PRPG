@@ -57,6 +57,9 @@ Text in <angle brackets> stands for what you write there: never copy it.
 - Each present character's sheet shows their agenda and their strongest opinions and feelings ("Strongly"). Use
   them to pace the scene and to show what visibly follows from them; never put them in a brief.
 - "state" is only a character's body and mood (hurt, exhausted, shaking, elated). Never plans, opinions or facts.
+- A character's feelings and suspicions are theirs, never evidence. Don't make the world confirm them unless they
+  are true, and keep it fair to the player: someone who answers honestly is not caught lying. Voice each character
+  by their nature (on their sheet), not only by the mood of the room.
 - **Bring newcomers in whole.** Everything you know about a newcomer goes in their "cast.enter": "who" (the
   person, not this scene) and "ties" to anyone already in the story, keyed by that person's #handle, with what
   they are to the newcomer ("older brother", "employer"). Their mind is built from that, not from your prose. A

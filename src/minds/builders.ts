@@ -9,7 +9,7 @@ import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { STATE_KEY, appliesTo, canSee, holdsRelation, relationHolder, relationParts, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
-import { NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
+import { EXPECTATION_SHOWN, NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
@@ -66,6 +66,8 @@ export interface PreparedCall {
   pendingIds: string[];
   /** Thoughts shown in this round message (marked recalled on commit). */
   recalledIds: string[];
+  /** Thoughts that came up because of something that happened (renewed on commit, docs/11 §5.7). */
+  renewIds?: string[];
 }
 
 /** A present character's declaration this round, as the narrator receives it. */
@@ -159,20 +161,29 @@ function visibleInThread(deps: ThreadDeps, t: Thought, w: ThreadWindow): boolean
  * visible in the thread, plus the tagged thoughts the active tags evoke. The
  * active set gets the owner's own tags found in `perceived` text added first.
  */
-function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number, present?: Set<string>) {
+function chooseThoughts(deps: ThreadDeps, storyId: string, owner: string, window: ThreadWindow, active: Set<string>, perceived: string, budget: number, present?: Set<string>, events?: Set<string>) {
   const lens = thoughtLens(deps, storyId);
   const all = deps.thoughts.list(storyId, owner);
   const vocabulary = deps.thoughts.vocabulary(storyId, owner).map((v) => v.tag);
-  for (const t of tagsMentioned(perceived, vocabulary)) active.add(t);
+  // What happened this round: the narrator's tags and evoke (`events`, given), and the owner's topics named in what
+  // it perceived. A #handle named in a brief is just someone being there, not an event (docs/11 §5.7).
+  const happened = new Set(events ?? []);
+  for (const t of tagsMentioned(perceived, vocabulary)) {
+    active.add(t);
+    if (!t.startsWith('#')) happened.add(t);
+  }
   const shown = new Set(all.filter((t) => visibleInThread(deps, t, window)).map((t) => t.id));
   // Always on their mind (docs/11 §5.9): the agenda first, then pinned and 9–10 thoughts; each once per window.
   const always = all.filter(alwaysOn).sort((a, b) => Number(b.kind === 'agenda') - Number(a.kind === 'agenda') || a.seq - b.seq);
   const pinnedNew = always.filter((t) => !shown.has(t.id));
   const recalled = selectRecall(all, active, shown, budget, { current: lens.current, present });
-  // Already in the thread and relevant again this round: it came up again, so it is renewed (docs/11 §5.7).
+  // Already in the thread and relevant again this round.
   const cameUp = all.filter((t) => shown.has(t.id) && !alwaysOn(t) && (t.tags.some((g) => active.has(g)) || (!!t.about && !!present?.has(t.about))));
+  // Renewed only when something that happened touches it, not because its subject is in the room (docs/11 §5.7).
+  const renew = [...recalled, ...cameUp].filter((t) => t.tags.some((g) => happened.has(g)));
   const pinnedTokens = always.filter((t) => t.kind !== 'agenda').reduce((n, t) => n + estimateTokens(lens.render(t)), 0);
-  return { pinnedNew, recalled, cameUp, pinnedTokens, vocabulary, render: lens.render };
+  const expectations = all.filter((t) => t.kind === 'expectation' && (t.confidence ?? 5) >= EXPECTATION_SHOWN).sort((a, b) => a.seq - b.seq);
+  return { pinnedNew, recalled, cameUp, renew, expectations, pinnedTokens, vocabulary, render: lens.render };
 }
 
 /** "health 7/10 (fine) · mood "wary"" for one holder, filtered for a viewer. */
@@ -281,7 +292,8 @@ function whoYouAre(deps: ThreadDeps, storyId: string, objectId: string): string 
     || (sheet?.concept.trim() ? `${sheet.concept.trim()}\n(More about you is still being written: stay true to this, and fill in the rest the way this person would be.)` : '')
     || '(Not written yet: improvise a personality that fits the story so far, and stay consistent with it.)';
   const ties = tieLines(deps, storyId, objectId);
-  return ties.length ? `${core}\n\nYour people (how you know them):\n${ties.join('\n')}` : core;
+  const nature = sheet?.nature.trim() ? `\n\nYour nature: ${sheet.nature.trim()}` : '';
+  return `${core}${nature}${ties.length ? `\n\nYour people (how you know them):\n${ties.join('\n')}` : ''}`;
 }
 
 /** "Not applied" notes for the character's own proposals from its last reply (docs/11 §4.6). */
@@ -344,7 +356,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (here.location) active.add(`#${here.location.handle}`);
   const perceived = [...pending.map((p) => p.content), input.now ?? ''].join('\n');
   const presentIds = new Set(here.present.map((p) => deps.memory.findByHandle(storyId, p.handle)?.id).filter((x): x is string => !!x));
-  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300, presentIds);
+  const chosen = chooseThoughts(deps, storyId, objectId, threadWindow(deps, recap, log), active, perceived, settings?.thoughtRecallTokens ?? 300, presentIds, new Set(input.situationTags ?? []));
   const recalled = chosen.recalled;
 
   const parts: string[] = [];
@@ -362,7 +374,13 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
   if (agenda.length) parts.push(`Your agenda:\n${agenda.map(chosen.render).join('\n')}`);
   if (always.length) parts.push(`Always on your mind:\n${always.map(chosen.render).join('\n')}`);
   if (recalled.length) parts.push(`You recall:\n${recalled.map(chosen.render).join('\n')}`);
+  // What it foresees (docs/11 §5.11): it says in "outcomes" when one came true or didn't.
+  if (chosen.expectations.length) {
+    parts.push(`Your expectations (if one came true or plainly didn't, say so in "outcomes"):\n${chosen.expectations.map(chosen.render).join('\n')}`);
+  }
   if (chosen.pinnedTokens > (settings?.pinnedTokens ?? 400)) parts.push('Your pinned thoughts are long: unpin or merge some.');
+  // Close to where recent text weighs most: who they are (docs/11 §2.7).
+  if (sheet?.nature.trim()) parts.push(`Stay yourself: ${sheet.nature.trim().replace(/\s+/g, ' ')}`);
   if (input.focusLine) parts.push(input.focusLine);
   parts.push(
     input.conversationWith
@@ -377,6 +395,7 @@ export function buildCharacterCall(deps: ThreadDeps, input: CharacterCallInput):
     roundMessage,
     pendingIds: pending.map((p) => p.id),
     recalledIds: [...chosen.pinnedNew, ...recalled, ...chosen.cameUp].map((t) => t.id),
+    renewIds: chosen.renew.map((t) => t.id),
   };
 }
 
@@ -387,6 +406,7 @@ export function commitCall(deps: ThreadDeps, call: PreparedCall, reply: string, 
     deps.threads.append(call.sessionId, { role: 'assistant', content: reply, turnId });
     deps.threads.markDelivered(call.pendingIds);
     deps.thoughts.markRecalled(call.recalledIds, turnId);
+    if (call.renewIds?.length) deps.thoughts.renew(call.renewIds);
   });
 }
 
@@ -444,6 +464,7 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
   }
   const who = sheet?.description.trim() || sheet?.concept.trim();
   if (full && who) lines.push(`  Who: ${who.replace(/\s+/g, ' ')}`);
+  if (full && sheet?.nature.trim()) lines.push(`  Nature: ${sheet.nature.trim().replace(/\s+/g, ' ')}`);
   const ties = tieSummary(deps, holder.id);
   if (ties.length) lines.push(`  Ties: ${ties.join(', ')}`);
   if (full && !holder.isPlayer) {

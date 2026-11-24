@@ -160,9 +160,9 @@ export function createSnapshotStore(db: Db) {
       db.prepare(`DELETE FROM character_sheets WHERE story_id = ?`).run(storyId);
       for (const s of p.sheets) {
         db.prepare(
-          `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, state, tier_id, seeded, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.concept ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
+          `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, tier_id, seeded, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.concept ?? '', s.nature ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
       }
     }
     if (p.variableValues) {
@@ -183,10 +183,11 @@ export function createSnapshotStore(db: Db) {
       for (const t of p.thoughts) {
         db.prepare(
           `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at,
-                                kind, importance, about, renewed_clock_min, revises, status_turn_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                kind, importance, about, renewed_clock_min, revises, status_turn_id, renewed_turn_index, confidence, hope, horizon, basis)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.created_clock_min ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at,
-          t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.renewed_clock_min ?? t.created_clock_min ?? null, t.revises ?? null, t.status_turn_id ?? null);
+          t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.renewed_clock_min ?? t.created_clock_min ?? null, t.revises ?? null, t.status_turn_id ?? null,
+          t.renewed_turn_index ?? null, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null);
       }
       for (const tt of p.thoughtTags ?? []) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
     }

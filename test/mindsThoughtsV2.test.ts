@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import { mindsHarness, round } from './fixtures/minds.ts';
 import type { MindsHarness } from './fixtures/minds.ts';
 import { registerHttpRoutes } from '../src/api/http.ts';
-import { applyThoughtOps, fadeThoughts, thoughtLens } from '../src/minds/service.ts';
+import { applyThoughtOps, thoughtLens } from '../src/minds/service.ts';
 import { clampImportance, currentImportance, normalizeKind, renderThought } from '../src/minds/thoughts.ts';
 
 // Thoughts v2 (docs/11 §5.6–5.10): kinds, importance, fading, revising, the agenda, and who sees what.
@@ -96,7 +96,7 @@ describe('thoughts v2', () => {
     );
     const [roof] = active(marta());
     const clock0 = h.app.stories.getStory(h.storyId)!.clockMin;
-    expect(currentImportance(roof, clock0 + 90, 1)).toBe(1);
+    expect(currentImportance(roof, { clockMin: clock0 + 90, turnIndex: null, fadeHours: 1, fadeRounds: 12 })).toBe(1);
     quiet();
     h.script.narrator.push(round('Hours pass.', { briefs: {}, time: 150 }));
     await h.play('I sleep.');
@@ -108,20 +108,46 @@ describe('thoughts v2', () => {
     expect(active(marta()).map((t) => t.text)).toContain('The roof leaks by the window.');
   });
 
-  it('a thought that comes up again is renewed and does not fade', async () => {
+  it('a thought renews when something touches it, not because its subject is in the room (docs/11 §5.7)', async () => {
     h = mindsHarness();
     await h.opening();
     const s = h.app.stories.getStory(h.storyId)!.settings.minds;
     h.app.stories.updateStory(h.storyId, { settings: { minds: { ...s, fadeHours: 1 } } });
-    applyThoughtOps(h.app, h.storyId, marta(), { remember: [{ kind: 'opinion', about: '#tom', importance: 2, text: 'Tom is harmless.', tags: [] }] }, 'seed');
-    // Tom is present, so the opinion about him comes up each round Marta acts.
+    applyThoughtOps(
+      h.app,
+      h.storyId,
+      marta(),
+      {
+        remember: [
+          { kind: 'opinion', about: '#tom', importance: 2, text: 'Tom is harmless.', tags: [] },
+          { kind: 'note', importance: 2, text: 'The ledger is behind the flour sacks.', tags: ['ledger'] },
+        ],
+      },
+      'seed',
+    );
+    // Tom is in the room every round; the narrator brings up the ledger every round.
     for (let i = 0; i < 3; i++) {
       quiet();
-      h.script.narrator.push(round('Time passes.', { briefs: {}, time: 50, spotlight: ['#marta'] }));
+      h.script.narrator.push(round('Time passes.', { briefs: {}, time: 50, spotlight: ['#marta'], tags: ['ledger'] }));
       await h.play('I wait.');
     }
-    expect(active(marta()).map((t) => t.text)).toContain('Tom is harmless.');
-    expect(fadeThoughts(h.app, h.storyId, null)).toEqual([]);
+    const texts = active(marta()).map((t) => t.text);
+    expect(texts).toContain('The ledger is behind the flour sacks.');
+    expect(texts).not.toContain('Tom is harmless.');
+  });
+
+  it('fading also counts rounds: a long talk cools down even though the clock barely moves', async () => {
+    h = mindsHarness();
+    await h.opening();
+    const s = h.app.stories.getStory(h.storyId)!.settings.minds;
+    h.app.stories.updateStory(h.storyId, { settings: { minds: { ...s, fadeRounds: 2 } } });
+    applyThoughtOps(h.app, h.storyId, marta(), { remember: [{ kind: 'opinion', about: '#kael', importance: 2, text: 'He seems shifty.', tags: [] }] }, 'self');
+    for (let i = 0; i < 4; i++) {
+      quiet();
+      h.script.narrator.push(round('A minute passes.', { briefs: {}, time: 1 }));
+      await h.play('"Go on."');
+    }
+    expect(active(marta()).map((t) => t.text)).not.toContain('He seems shifty.');
   });
 
   it('the narrator sees agendas and strong opinions of the characters present, nothing weaker', async () => {

@@ -104,6 +104,7 @@ export async function openSheetEditor(ctx, objectId) {
   const lookIn = textarea(c.appearance, 2);
   const whoIn = textarea(c.description, 5);
   const conceptIn = textarea(c.concept, 2, { placeholder: 'e.g. a smuggler\'s daughter who wants out of the trade' });
+  const natureIn = textarea(c.nature, 2, { placeholder: 'e.g. warm, kind-hearted, gentle with everyone; slow to think ill of anyone; curious about strangers' });
   const stateIn = input(c.state);
   // Ties: what each other person is to this one. People are listed as the player knows them, unless advanced.
   let people = view.characters;
@@ -132,6 +133,7 @@ export async function openSheetEditor(ctx, objectId) {
   const save = h('button', { class: 'primary', onclick: async () => {
     err.textContent = ''; saved.textContent = '';
     const body = { name: nameIn.value.trim(), pronouns: pronIn.value.trim(), knownAs: knownAsIn.value.trim(), appearance: lookIn.value.trim(), description: whoIn.value.trim(), concept: conceptIn.value.trim(), ties: readTies() };
+    if (!c.isPlayer) body.nature = natureIn.value.trim();
     if (adv && !c.isPlayer) body.playerKnowsName = knowsBox.checked;
     if (adv || c.isPlayer) body.state = stateIn.value.trim();
     if (adv && !c.isPlayer) body.tierId = tierSel.value || null;
@@ -146,6 +148,7 @@ export async function openSheetEditor(ctx, objectId) {
     h('datalist', { id: 'pronoun-list' }, ...['she/her', 'he/him', 'they/them'].map((v) => h('option', { value: v }))),
     row('Appearance', lookIn, 'Public: what anyone sees at a glance.'),
     !c.isPlayer || c.concept ? row('In short', conceptIn, 'Who they are in a sentence or two (the narrator\'s hand-over). Their mind uses it until the description is written.') : null,
+    !c.isPlayer ? row('Nature', natureIn, 'A few traits as short phrases; give the most defining ones a synonym or two so they weigh more. Their mind reads it every round.') : null,
     row(c.isPlayer ? 'Who you are' : 'Description', whoIn, c.isPlayer ? 'Only the narrator reads this.' : 'Private: only this character\'s mind and the narrator read it.'),
     h('div', { class: 'form-row ties-field' }, h('span', { class: 'field-label' }, c.isPlayer ? 'Your people ' : 'Their people ', helpLink('ties')), tiesBox,
       h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => addTieRow() }, '+ Add tie')),
@@ -230,7 +233,21 @@ export async function openSheetEditor(ctx, objectId) {
   modal(`${c.isPlayer ? 'Your character' : `${c.name}'s sheet`}`, profileBox, valuesBox, relationsBox, mindBox);
 }
 
-const KINDS = [['agenda', 'Agenda'], ['opinion', 'Opinion'], ['feeling', 'Feeling'], ['note', 'Note']];
+const KINDS = [['agenda', 'Agenda'], ['opinion', 'Opinion'], ['feeling', 'Feeling'], ['note', 'Note'], ['expectation', 'Expectation']];
+const HOPE_OPTS = [['neutral', 'just foresees it'], ['hope', 'hopes for it'], ['fear', 'fears it']];
+const HORIZON_OPTS = [['soon', 'soon'], ['today', 'today'], ['later', 'later']];
+const STATUS_WORD = { revised: 'replaced', faded: 'faded', revoked: 'forgotten', met: 'came true', missed: 'didn\'t happen', expired: 'expired' };
+
+/** An expectation's extra fields: how sure, hope or fear, horizon (docs/11 §5.11). */
+function expectationFields(t = {}) {
+  const confIn = h('input', { type: 'range', min: '1', max: '10', value: String(t.confidence ?? 5) });
+  const confOut = h('b', {}, String(t.confidence ?? 5));
+  confIn.addEventListener('input', () => { confOut.textContent = confIn.value; });
+  const hopeSel = select(HOPE_OPTS, t.hope ?? 'neutral');
+  const horizonSel = select(HORIZON_OPTS, t.horizon ?? 'soon');
+  const el = h('div', { class: 'row expect-fields', style: 'gap:6px; flex-wrap:wrap; align-items:center' }, h('label', { class: 'sub imp-edit' }, 'how sure ', confIn, ' ', confOut), hopeSel, horizonSel);
+  return { el, read: () => ({ confidence: Number(confIn.value), hope: hopeSel.value, horizon: horizonSel.value }) };
+}
 
 /** An importance as a small 1–10 bar: written, and the current value when it has faded. */
 function importanceBar(t) {
@@ -267,7 +284,8 @@ export function mindSheet(ctx, owner, people) {
         h('span', { class: 'thought-text', title: 'Tap to edit', onclick: () => t.status === 'active' && edit() },
           t.text,
           t.tags.filter((g) => g !== `#${t.aboutHandle}`).length ? h('span', { class: 'sub' }, ` [${t.tags.filter((g) => g !== `#${t.aboutHandle}`).join(', ')}]`) : null,
-          h('span', { class: 'sub' }, ` · t${t.seq} · ${t.source}${t.status === 'revised' ? ' · replaced' : t.status === 'faded' ? ' · faded' : t.status === 'revoked' ? ' · forgotten' : ''}${t.revisesSeq ? ` · revises t${t.revisesSeq}` : ''}`)),
+          t.kind === 'expectation' ? h('span', { class: 'sub' }, ` · ${t.confidence ?? 5}/10 sure${t.hope && t.hope !== 'neutral' ? ` · ${t.hope}` : ''} · ${t.horizon ?? 'soon'}`) : null,
+          h('span', { class: 'sub' }, ` · t${t.seq} · ${t.source}${STATUS_WORD[t.status] ? ` · ${STATUS_WORD[t.status]}` : ''}${t.revisesSeq ? ` · revises t${t.revisesSeq}` : ''}`)),
         t.status === 'active'
           ? h('span', { class: 'thought-actions' },
               h('button', { class: 'ghost small', title: t.pinned ? 'Unpin' : 'Pin: always on their mind', onclick: () => save(t, { pinned: !t.pinned }) }, t.pinned ? '📌' : 'pin'),
@@ -282,11 +300,14 @@ export function mindSheet(ctx, owner, people) {
         impIn.addEventListener('input', () => { impOut.textContent = impIn.value; });
         const textIn = textarea(t.text, 2);
         const tagsIn = input(t.tags.filter((g) => g !== `#${t.aboutHandle}`).join(', '), { placeholder: 'tags, #handles' });
+        const ex = expectationFields(t);
+        const showEx = () => { ex.el.style.display = kindSel.value === 'expectation' ? '' : 'none'; };
+        kindSel.addEventListener('change', showEx); showEx();
         fill(line, h('div', { class: 'thought-form' },
           h('div', { class: 'row', style: 'gap:6px; flex-wrap:wrap; align-items:center' }, kindSel, aboutSel, h('label', { class: 'sub imp-edit' }, 'importance ', impIn, ' ', impOut)),
-          textIn, tagsIn,
+          ex.el, textIn, tagsIn,
           h('div', { class: 'row', style: 'gap:6px' },
-            h('button', { class: 'small primary', onclick: () => save(t, { text: textIn.value.trim() || t.text, kind: kindSel.value, about: aboutSel.value || null, importance: Number(impIn.value), tags: tagsIn.value.split(',').map((x) => x.trim()).filter(Boolean) }) }, 'Save'),
+            h('button', { class: 'small primary', onclick: () => save(t, { text: textIn.value.trim() || t.text, kind: kindSel.value, about: aboutSel.value || null, importance: Number(impIn.value), tags: tagsIn.value.split(',').map((x) => x.trim()).filter(Boolean), ...(kindSel.value === 'expectation' ? ex.read() : {}) }) }, 'Save'),
             h('button', { class: 'small', onclick: () => view() }, 'Cancel'))));
       };
       view();
@@ -296,10 +317,11 @@ export function mindSheet(ctx, owner, people) {
     // Grouping: agenda; per person (opinions, feelings, notes about them); feelings; notes.
     const agenda = active.filter((t) => t.kind === 'agenda').sort((a, b) => a.seq - b.seq);
     const aboutGroups = new Map();
-    for (const t of active.filter((x) => x.kind !== 'agenda' && x.about)) {
+    for (const t of active.filter((x) => x.kind !== 'agenda' && x.kind !== 'expectation' && x.about)) {
       if (!aboutGroups.has(t.about)) aboutGroups.set(t.about, []);
       aboutGroups.get(t.about).push(t);
     }
+    const expectations = active.filter((t) => t.kind === 'expectation').sort((a, b) => a.seq - b.seq);
     const feelings = active.filter((t) => t.kind === 'feeling' && !t.about).sort(byCur);
     const notes = active.filter((t) => (t.kind === 'note' || t.kind === 'opinion') && !t.about).sort(byCur);
     const past = all.filter((t) => t.status !== 'active').sort((a, b) => b.seq - a.seq);
@@ -318,27 +340,32 @@ export function mindSheet(ctx, owner, people) {
     impIn.addEventListener('input', () => { impOut.textContent = impIn.value; });
     const textIn = input('', { placeholder: 'A new thought, first person: a few words to one sentence' });
     const tagsIn = input('', { placeholder: 'tags, #handles' });
+    const addEx = expectationFields();
+    const showAddEx = () => { addEx.el.style.display = kindSel.value === 'expectation' ? '' : 'none'; };
+    kindSel.addEventListener('change', showAddEx); showAddEx();
     const add = h('div', { class: 'thought-add v2' },
       h('div', { class: 'row', style: 'gap:6px; flex-wrap:wrap; align-items:center' }, kindSel, aboutSel, h('label', { class: 'sub imp-edit' }, 'importance ', impIn, ' ', impOut)),
+      addEx.el,
       h('div', { class: 'row', style: 'gap:6px; flex-wrap:wrap' }, textIn, tagsIn,
         h('button', { onclick: async () => {
           err.textContent = '';
           if (!textIn.value.trim()) return;
           try {
-            const r = await api.post(`/api/stories/${ctx.storyId}/thoughts`, { owner, text: textIn.value.trim(), kind: kindSel.value, importance: Number(impIn.value), ...(aboutSel.value ? { about: aboutSel.value } : {}), tags: tagsIn.value.split(',').map((x) => x.trim()).filter(Boolean) });
+            const r = await api.post(`/api/stories/${ctx.storyId}/thoughts`, { owner, text: textIn.value.trim(), kind: kindSel.value, importance: Number(impIn.value), ...(aboutSel.value ? { about: aboutSel.value } : {}), tags: tagsIn.value.split(',').map((x) => x.trim()).filter(Boolean), ...(kindSel.value === 'expectation' ? addEx.read() : {}) });
             if (r.notes?.length) err.textContent = r.notes.join(' ');
             load();
           } catch (e) { err.textContent = e.message; }
         } }, 'Add')));
 
     fill(box,
-      h('div', { class: 'sub' }, `Importance fades one point per ${data.fadeHours} in-story hours a thought doesn't come up; agenda, pinned and 8–10 never fade. Tap a thought to edit it.`),
+      h('div', { class: 'sub' }, `Importance fades one point per ${data.fadeHours} in-story hours or ${data.fadeRounds} rounds a thought doesn't come up (someone just being there doesn't count); agenda, pinned and 8–10 never fade. Tap a thought to edit it.`),
       group('Agenda', `${agenda.length}/3 · always on their mind`, agenda.map(row)),
       group('People', 'opinions and feelings, by person', [...aboutGroups].sort((a, b) => Math.max(...b[1].map((t) => t.current ?? t.importance)) - Math.max(...a[1].map((t) => t.current ?? t.importance)))
         .flatMap(([oid, list]) => [personHead(oid, list), ...list.sort(byCur).map(row)])),
+      group('Expectations', 'what they foresee; they say when one comes true or doesn\'t', expectations.map(row)),
       group('Feelings', '', feelings.map(row)),
       group('Notes', 'facts, events, promises', notes.map(row)),
-      past.length ? h('details', { class: 'mind-past' }, h('summary', { class: 'sub' }, `Faded, replaced and forgotten (${past.length})`), ...past.map(row)) : null,
+      past.length ? h('details', { class: 'mind-past' }, h('summary', { class: 'sub' }, `Past: faded, replaced, forgotten, and expectations that came true or didn't (${past.length})`), ...past.map(row)) : null,
       add, err);
   };
   load();

@@ -118,8 +118,12 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   opts.setStage?.('saving the exchange');
   deps.db.transaction(() => {
     commitCall(deps, call, raw, turn.id);
-    const ops = applyThoughtOps(deps, storyId, partner, { remember: reply.remember, revise: reply.revise, forget: reply.forget }, 'self', turn.id);
-    if (ops.notes.length) queueForCharacter(deps, storyId, partner, `About your memory: ${ops.notes.join(' ')}`, turn.id);
+    const ops = applyThoughtOps(deps, storyId, partner, { remember: reply.remember, revise: reply.revise, forget: reply.forget, outcomes: reply.outcomes }, 'self', turn.id);
+    const after = [
+      ops.outcomes.length ? `How your expectations turned out:\n${ops.outcomes.map((x) => `- ${x}`).join('\n')}` : '',
+      ops.notes.length ? `About your memory: ${ops.notes.join(' ')}` : '',
+    ].filter(Boolean);
+    if (after.length) queueForCharacter(deps, storyId, partner, after.join('\n'), turn.id);
     if (reply.state) applyChanges(deps, storyId, [{ change: { holder: partner, key: STATE_KEY, op: 'set', value: reply.state }, by: 'self', proposer: partner }], turn.id);
     // Names said in the exchange are learned by the one who heard them.
     if (player) {

@@ -256,7 +256,8 @@ and `compacted` for Minds threads.
 | `archive_faded` | when summaries drop details | store the dropped details as facts |
 | `npc_dossier` | promoting a character (classic) | focused single-character sheet + prose portrait |
 | `npc_seed` | new character in NPC Story Mode | personality + opening notes |
-| `minds_seed` | a character the Minds narrator introduces | description, state, starting values, thoughts |
+| `minds_seed` | a character the Minds narrator introduces | description, nature, state, starting values, thoughts |
+| `minds_nature` | a present character seeded before natures existed | its nature (traits) |
 | `minds_compact` | a Minds thread over its threshold after a turn | fold its oldest half into a recap (rewind undoes it) |
 
 Jobs retry 3 times with a growing wait between attempts (15 s, 1 min, 4 min), survive restarts (stuck `running`
@@ -286,7 +287,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 288 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 297 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

@@ -37,7 +37,7 @@ export function agentOf(req: ChatRequest): string {
   if (req.system.includes('You are the **Narrator**')) return 'narrator';
   if (req.system.includes('forgot (or broke)')) return 'distributor';
   if (req.system.includes('edited the prose')) return 'reviser';
-  if (req.system.includes('character designer')) return 'seeder';
+  if (req.system.includes('character designer') || req.system.includes('as their **nature**')) return 'seeder';
   if (req.system.includes('You fold the oldest part')) return 'compactor';
   if (req.system.includes('You decide who is being spoken to')) return 'director';
   const m = req.system.match(/^You are \*\*(.+?)\*\*/);
@@ -94,11 +94,12 @@ export const textOf = (req: ChatRequest) => `${req.system}\n${req.messages.map((
  * (health: self-visible; suspicion: hidden, NPCs only; alarm: world).
  * `opening()` plays round 1, in which the narrator brings in Marta and Tom.
  */
-export function mindsHarness(opts: { player?: boolean } = {}) {
+export function mindsHarness(opts: { player?: boolean; rng?: () => number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'prpg-minds-'));
   const script = emptyScript();
   const seen: { agent: string; req: ChatRequest }[] = [];
-  const app: App = createApp(mindsConfig, { driverFactory: () => dispatchDriver(script, seen), dbPath: join(dir, 'm.db'), startWorker: false });
+  // A fixed random source that keeps the scene order, so rounds are deterministic (the order is shuffled live).
+  const app: App = createApp(mindsConfig, { driverFactory: () => dispatchDriver(script, seen), dbPath: join(dir, 'm.db'), startWorker: false, rng: opts.rng ?? (() => 0.9999) });
   const deps: MindsDeps = { stories: app.stories, memory: app.memory, sheets: app.sheets, variables: app.variables, thoughts: app.thoughts, names: app.names, ties: app.ties, met: app.met };
   const storyId = app.stories.createStory({ title: 'Inn', settings: { engine: 'minds', premise: 'A smugglers’ inn.' } as never }).id;
   app.variables.replaceDefs(

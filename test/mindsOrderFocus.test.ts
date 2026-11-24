@@ -134,3 +134,33 @@ describe('order and focus helpers', () => {
     expect(held.beats.map((b) => b.text)).toEqual(['a b c', 'x y…', 'd…']);
   });
 });
+
+describe('character order', () => {
+  it('changes from round to round (shuffled), and the narrator reads them in that order', async () => {
+    let flip = false;
+    // Alternates between "keep the order" and "swap the two".
+    const h = mindsHarness({ rng: () => ((flip = !flip) ? 0.9999 : 0) });
+    try {
+      await h.opening();
+      const order = () => {
+        const ask = h.requests('narrator').at(-1)!.messages.at(-1)!.content;
+        return [ask.indexOf('#marta (Marta'), ask.indexOf('#tom (Tom')];
+      };
+      for (const tag of ['A', 'B']) {
+        h.script.characters['Marta'] = [JSON.stringify({ say: '' })];
+        h.script.characters['Tom'] = [JSON.stringify({ say: '' })];
+        h.script.narrator.push(round(`Quiet ${tag}.`, { briefs: {} }));
+        await h.play('I wait.');
+      }
+      const turns = [...h.app.stories.recentTurns(h.storyId, 5)].sort((a, b) => a.index - b.index);
+      const orders = turns.slice(1).map((t) => (t.meta.presentNpcIds as string[]).map((oid) => h.app.memory.getObject(oid)!.name).join(','));
+      expect(new Set(orders).size).toBe(2); // two rounds, two different orders
+      const [m, t] = order();
+      expect(m).toBeGreaterThan(0);
+      expect(t).toBeGreaterThan(0);
+      expect(orders.at(-1)!.startsWith('Tom') ? t < m : m < t).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+});

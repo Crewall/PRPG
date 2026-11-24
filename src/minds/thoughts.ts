@@ -19,8 +19,23 @@ export const NEVER_FADES = 8;
 export const ALWAYS_ON = 9;
 /** Opinions and feelings from this current importance are shown to the narrator (docs/11 §5.9). */
 export const NARRATOR_SEES = 7;
+/** Self-written opinions and feelings about someone stop here; above it, +1 per scene (docs/11 §5.7b). */
+export const OPINION_CAP = 7;
+/** A revision raises importance by at most this much (docs/11 §5.7b). */
+export const MAX_RAISE = 2;
+/** Open expectations per character (docs/11 §5.11). */
+export const MAX_EXPECTATIONS = 6;
+/** Expectations from this confidence are shown to their owner each round. */
+export const EXPECTATION_SHOWN = 3;
+/** Rounds after which an unresolved expectation expires, by horizon. */
+export const HORIZON_ROUNDS = { soon: 3, today: 15 } as const;
 
-export const THOUGHT_KINDS = ['agenda', 'opinion', 'feeling', 'note'] as const;
+export const THOUGHT_KINDS = ['agenda', 'opinion', 'feeling', 'note', 'expectation'] as const;
+export const HOPES = ['hope', 'fear', 'neutral'] as const;
+export type Hope = (typeof HOPES)[number];
+export const HORIZONS = ['soon', 'today', 'later'] as const;
+export type Horizon = (typeof HORIZONS)[number];
+export type Outcome = 'met' | 'missed';
 export const ThoughtKind = z.enum(THOUGHT_KINDS);
 export type ThoughtKind = z.infer<typeof ThoughtKind>;
 
@@ -36,7 +51,23 @@ export function normalizeKind(x: unknown): ThoughtKind {
   if (/^(agenda|goal|goals|plan|plans|aim|intent)$/.test(k)) return 'agenda';
   if (/^(opinion|opinions|impression|view|judgement|judgment)$/.test(k)) return 'opinion';
   if (/^(feeling|feelings|emotion)$/.test(k)) return 'feeling';
+  if (/^(expectation|expectations|expect|prediction|guess|hope|fear|foresee)$/.test(k)) return 'expectation';
   return 'note';
+}
+
+/** "fear", "dread" → 'fear'; "want", "wish" → 'hope'; anything else 'neutral'. */
+export function normalizeHope(x: unknown): Hope {
+  const k = String(x ?? '').trim().toLowerCase();
+  if (/^(hope|hopes|want|wish|desire)$/.test(k)) return 'hope';
+  if (/^(fear|fears|dread|worry|afraid)$/.test(k)) return 'fear';
+  return 'neutral';
+}
+
+export function normalizeHorizon(x: unknown): Horizon {
+  const k = String(x ?? '').trim().toLowerCase();
+  if (/^(soon|next|now|immediately)/.test(k)) return 'soon';
+  if (/^(today|tonight|this)/.test(k)) return 'today';
+  return k ? 'later' : 'soon';
 }
 
 export const RememberOp = z.object({
@@ -46,6 +77,12 @@ export const RememberOp = z.object({
   kind: z.unknown().optional(),
   about: z.string().optional(),
   importance: z.unknown().optional(),
+  /** Expectations (docs/11 §5.11). */
+  confidence: z.unknown().optional(),
+  hope: z.unknown().optional(),
+  horizon: z.unknown().optional(),
+  /** The thought it comes from ("t4"). */
+  basis: z.unknown().optional(),
 });
 /** As written by a model, the seeder or the API: only the text is required. */
 export type RememberOp = z.input<typeof RememberOp>;
@@ -59,7 +96,7 @@ export const ReviseOp = z.object({
 });
 export type ReviseOp = z.infer<typeof ReviseOp>;
 
-export type ThoughtStatus = 'active' | 'revoked' | 'revised' | 'faded';
+export type ThoughtStatus = 'active' | 'revoked' | 'revised' | 'faded' | 'met' | 'missed' | 'expired';
 
 export interface Thought {
   id: string;
@@ -83,6 +120,13 @@ export interface Thought {
   renewedClockMin: number | null;
   /** The thought this one replaced. */
   revises: string | null;
+  /** The round it was written, revised or last came up (fading by rounds, docs/11 §5.7). */
+  renewedTurnIndex: number | null;
+  /** Expectations (docs/11 §5.11): how sure 1–10, hope/fear/neutral, horizon, the thought it comes from. */
+  confidence: number | null;
+  hope: Hope | null;
+  horizon: Horizon | null;
+  basis: string | null;
   revokedTurnId: string | null;
   lastRecalledTurnId: string | null;
   recallCount: number;
@@ -105,17 +149,30 @@ export function fades(t: Pick<Thought, 'kind' | 'pinned' | 'importance' | 'owner
   return t.kind !== 'agenda' && !t.pinned && t.importance < NEVER_FADES && t.owner !== 'narrator';
 }
 
-/** Importance now: one point lost per `fadeHours` in-story hours since it was renewed. */
-export function currentImportance(t: Pick<Thought, 'kind' | 'pinned' | 'importance' | 'owner' | 'renewedClockMin' | 'createdClockMin'>, clockMin: number | null | undefined, fadeHours: number): number {
-  if (!fades(t) || clockMin == null || fadeHours <= 0) return t.importance;
-  const since = t.renewedClockMin ?? t.createdClockMin;
-  if (since == null) return t.importance;
-  const lost = Math.floor(Math.max(0, clockMin - since) / (fadeHours * 60));
-  return Math.max(0, t.importance - lost);
+/** Where the story is now, and how fast thoughts fade (docs/11 §5.7). */
+export interface FadeClock {
+  clockMin: number | null | undefined;
+  turnIndex: number | null | undefined;
+  fadeHours: number;
+  fadeRounds: number;
 }
 
-/** Always on its owner's mind (shown once per thread window, like pinned, docs/11 §5.9). */
-export const alwaysOn = (t: Pick<Thought, 'kind' | 'pinned' | 'importance'>) => t.pinned || t.kind === 'agenda' || t.importance >= ALWAYS_ON;
+type Fadable = Pick<Thought, 'kind' | 'pinned' | 'importance' | 'owner' | 'renewedClockMin' | 'createdClockMin'> & Partial<Pick<Thought, 'renewedTurnIndex'>>;
+
+/**
+ * Importance now: the larger loss of one point per `fadeHours` in-story hours and one point per `fadeRounds` rounds
+ * since it was renewed (a long conversation barely moves the clock, docs/11 §5.7).
+ */
+export function currentImportance(t: Fadable, now: FadeClock): number {
+  if (!fades(t)) return t.importance;
+  const since = t.renewedClockMin ?? t.createdClockMin;
+  const byHours = now.clockMin != null && since != null && now.fadeHours > 0 ? Math.floor(Math.max(0, now.clockMin - since) / (now.fadeHours * 60)) : 0;
+  const byRounds = now.turnIndex != null && t.renewedTurnIndex != null && now.fadeRounds > 0 ? Math.floor(Math.max(0, now.turnIndex - t.renewedTurnIndex) / now.fadeRounds) : 0;
+  return Math.max(0, t.importance - Math.max(byHours, byRounds));
+}
+
+/** Always on its owner's mind (shown once per thread window, like pinned, docs/11 §5.9). Expectations have their own list. */
+export const alwaysOn = (t: Pick<Thought, 'kind' | 'pinned' | 'importance'>) => t.kind !== 'expectation' && (t.pinned || t.kind === 'agenda' || t.importance >= ALWAYS_ON);
 
 // ---- Writing ----
 
@@ -125,6 +182,12 @@ export interface PreparedThought {
   pinned: boolean;
   kind: ThoughtKind;
   importance: number;
+  /** Expectations only. */
+  confidence?: number;
+  hope?: Hope;
+  horizon?: Horizon;
+  /** The basis thought's short id ("t4" → 4). */
+  basisSeq?: number;
   /** The #handle (without '#') it is about, checked against the roster. */
   aboutHandle?: string;
   notes: string[];
@@ -167,7 +230,11 @@ export function prepareRemember(op: RememberOp, rosterHandles: Set<string>): Pre
     notes.push(`only the first ${MAX_TAGS} tags were kept`);
     tags.length = MAX_TAGS;
   }
-  return { text: clamped.text, tags, pinned: !!op.pin || (tags.length === 0 && kind === 'note'), kind, importance, ...(aboutHandle ? { aboutHandle } : {}), notes };
+  const expectation =
+    kind === 'expectation'
+      ? { confidence: clampImportance(op.confidence, 5), hope: normalizeHope(op.hope), horizon: normalizeHorizon(op.horizon), ...(parseThoughtHandle(op.basis ?? '') !== undefined ? { basisSeq: parseThoughtHandle(op.basis) } : {}) }
+      : {};
+  return { text: clamped.text, tags, pinned: !!op.pin || (tags.length === 0 && kind === 'note'), kind, importance, ...(aboutHandle ? { aboutHandle } : {}), ...expectation, notes };
 }
 
 // ---- Reading ----
@@ -183,14 +250,18 @@ export interface RenderOpts {
  * "t12 · Day 2, 19:40 · opinion of #agnes, 7/10 [caseworker] She says what the file says." (docs/11 §5.9)
  * Agenda: "t3 · agenda [kettle] Get the kettle." A note: "t9 · Day 1, 08:10 · 5/10 [kettle] …".
  */
-export function renderThought(t: Pick<Thought, 'seq' | 'tags' | 'text'> & Partial<Pick<Thought, 'kind' | 'importance' | 'createdClockMin'>>, opts: RenderOpts = {}): string {
+export function renderThought(t: Pick<Thought, 'seq' | 'tags' | 'text'> & Partial<Pick<Thought, 'kind' | 'importance' | 'createdClockMin' | 'confidence' | 'hope' | 'horizon'>>, opts: RenderOpts = {}): string {
   const when = t.createdClockMin != null ? ` · ${formatGameClock(t.createdClockMin)}` : '';
   const kind = t.kind ?? 'note';
   const imp = opts.current ?? t.importance;
   const about = opts.aboutHandle ? `#${opts.aboutHandle}` : '';
   let label = '';
   if (kind === 'agenda') label = ' · agenda';
-  else if (imp !== undefined) {
+  else if (kind === 'expectation') {
+    const x = t as Partial<Pick<Thought, 'confidence' | 'hope' | 'horizon'>>;
+    const feel = x.hope && x.hope !== 'neutral' ? `${x.hope}, ` : '';
+    label = ` · expectation${about ? ` about ${about}` : ''} · ${feel}${x.confidence ?? 5}/10 sure, matters ${imp ?? 5}${x.horizon ? `, ${x.horizon}` : ''}`;
+  } else if (imp !== undefined) {
     const head = kind === 'opinion' ? `opinion${about ? ` of ${about}` : ''}` : kind === 'feeling' ? `feeling${about ? ` about ${about}` : ''}` : '';
     label = ` · ${head ? `${head}, ` : ''}${imp}/10`;
   }
@@ -214,7 +285,7 @@ export function selectRecall(thoughts: Thought[], activeTags: Set<string>, alrea
   const current = opts.current ?? ((t: Thought) => t.importance);
   const aboutPresent = (t: Thought) => !!t.about && !!opts.present?.has(t.about);
   const candidates = thoughts.filter(
-    (t) => t.status === 'active' && !alwaysOn(t) && !alreadyShown.has(t.id) && current(t) > 0 && (t.tags.some((g) => activeTags.has(g)) || aboutPresent(t)),
+    (t) => t.status === 'active' && t.kind !== 'expectation' && !alwaysOn(t) && !alreadyShown.has(t.id) && current(t) > 0 && (t.tags.some((g) => activeTags.has(g)) || aboutPresent(t)),
   );
   if (!candidates.length) return [];
   const maxSeq = Math.max(...candidates.map((t) => t.seq));

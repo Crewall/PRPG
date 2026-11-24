@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9), opinions kept in proportion (§5.7b), the character's nature (§2.7), expectations (§5.11) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -40,7 +40,9 @@ everyone's "Here:" line and without a #handle, so characters can't tell the play
 in play: the barkeep took the player and the stranger for one person). It is created in one of these ways:
 
 - written by the user: a small form (name, pronouns, appearance, who they are) that opens before a new Minds story
-  starts, and from the 🎭 chip in the Present bar at any time;
+  starts, and from the 🎭 chip in the Present bar at any time. A new story's form starts **filled in from the
+  character you played last** (the most recently updated player sheet of another story: `GET
+  /api/minds/last-player`), with "Start blank" to clear it;
 - carried over from the classic player interview (the story's player object gets a sheet);
 - **by the narrator**, as a fallback: while the story has no player character, or its sheet lacks a name-worthy
   appearance or pronouns, the narrator's round message asks for them and the round block's `player` field
@@ -188,6 +190,21 @@ that needs them instead of living only in the prose.
 - A label is short (≤ 8 words, a leading "my"/"your" and a trailing period dropped) and says what the other person
   is *to the holder*.
 - Data: `character_ties` (story, holder, other, label, turn), covered by rewind and Retry.
+
+### 2.7 Nature: the character's traits (settled with the owner)
+
+The description is long and sits at the top of a long thread, so in a long scene recent rounds drowned it out (a
+kind, trusting character went along with the others' suspicion). The sheet gets a short **nature**: 3–6 traits,
+each a nuanced phrase of a few words rather than a label with a strength ("slow to think ill of anyone", not
+"trusting (strong)"); the one or two most defining traits come with a couple of synonyms or rewordings, so they
+weigh more ("warm, kind-hearted, gentle with everyone").
+
+- Written by the seeder; editable on the sheet ("Nature"). Characters seeded before it existed get one from a small
+  background job that reads their description.
+- **The character** reads it in its system prompt ("Your nature") and, in one line at the end of every round
+  message ("Stay yourself: …"), close to where recent text weighs most.
+- **The narrator** sees it on each present character's sheet, to voice them consistently.
+- It only guides the prompts: no mechanics depend on it (settled).
 
 ## 3. State
 
@@ -498,15 +515,35 @@ same person may stand side by side: that is ambivalence, and the sheet shows the
 
 ### 5.7 Fading (settled with the owner: fade by importance)
 
-- Each thought has `renewed_clock_min`: when it was written, last revised, or last came up: recalled into a round
-  message, restated, or already in the owner's thread and relevant again (its tags are active or its subject is
-  present) in a round the owner acts.
-- Its **current importance** = importance − one point per `minds.fadeHours` in-story hours since it was renewed
-  (default 8 hours, Story options → Minds engine). Agenda items, pinned thoughts and importance 8–10 don't fade.
+- Each thought has `renewed_clock_min` and `renewed_turn_index`: when it was written, last revised or restated, or
+  last **came up because of something that happened**: a topic tag of it was evoked this round (the narrator's
+  tags or `evoke`, or the word appears in what the owner perceived). **A person being present does not renew a
+  thought about them**, nor does seeing it in the thread (settled after a play test: in a long talk with the
+  player, every suspicious opinion about the player stayed fresh and nothing ever cooled).
+- Its **current importance** = importance − the larger of: one point per `minds.fadeHours` in-story hours since it
+  was renewed (default 8), and one point per `minds.fadeRounds` rounds since it was renewed (default 12; a
+  conversation moves the clock a minute per exchange, so hours alone never cool a long talk). Agenda items,
+  pinned thoughts and importance 8–10 don't fade.
 - At 0 the thought **fades**: status `faded`. It is no longer recalled or shown to its owner; it stays in the sheet
   under "Faded", where the user can restore it (renewed now). Fading runs at the end of every round, in the same
   transaction as the rest, so rewind restores it.
 - The narrator's notes don't fade.
+
+### 5.7b Keeping opinions in proportion (settled with the owner)
+
+A play test's characters went from slight distrust to total hatred in one long, peaceful talk: each round they saw
+their own suspicion and wrote it again a little stronger. For what a character writes in play (`source: self`;
+not the seeder, not the user), opinions and feelings **about someone** are held in proportion:
+
+- **Capped at 7.** Above 7, the ceiling rises by **at most 1 per scene**: the highest a character held about that
+  person before the current scene began (or from its seed), + 1. A long scene can't climb past it.
+- **A revision raises importance by at most 2.**
+- The character prompt: an opinion names what happened that made you think so; first impressions are 3–5; a
+  guess (they didn't answer, they seem evasive) is an expectation (§5.11), not an opinion; a question left
+  unanswered is not proof of anything; don't take on someone's view just because they say it out loud; ask one or
+  two questions at a time.
+- The narrator prompt: a character's feelings are theirs, never evidence; don't make the world confirm them
+  unless they are true, and keep it fair to the player.
 
 ### 5.8 Revising
 
@@ -531,6 +568,34 @@ becomes `revised` (kept as history: the sheet shows "was: …"), a new one takes
   people present and tied, deep feelings the story or the hand-over implies, and key notes.
 - **The compactor's** recap keeps what the high-importance thoughts point to; the recap lists the always-on
   thoughts (agenda, pinned, 9–10) in full.
+
+### 5.11 Expectations (settled with the owner)
+
+Beliefs used to be confirmable but never surprised. An **expectation** is what a character foresees: what will
+happen next, how someone will behave. When it comes true it reinforces the view behind it; when it doesn't, the
+character is surprised, and the view weakens. Guesses live here instead of in opinions.
+
+- **A thought of kind `expectation`** (same store, tags, `about`, fading), with:
+  - `confidence` 1–10: how sure; 1–2 = no idea, maybe doesn't care (not shown to the character each round);
+  - `hope`: `hope` (wants it) · `fear` (dreads it) · `neutral` (just foresees it);
+  - `importance`: how much it matters to them;
+  - `horizon`: `soon` (the next few rounds) · `today` · `later`;
+  - `basis`: optionally the opinion (or other thought) it comes from (`"t4"`).
+- **Each round** the character's round message lists its open expectations (confidence 3+), and the reply may say
+  how they turned out: `"outcomes": { "t14": "met", "t9": "missed" }`. **The character judges** (settled: its own
+  nature and alignment colour what counts as fulfilled, which is good roleplay).
+- **Effects** (the app; lopsided on purpose, so beliefs correct themselves):
+  - **met**: the basis thought +1 importance (within the caps of §5.7b) and renewed; a hope that came true or a
+    fear that did is noted to the character;
+  - **missed**: the basis thought −2 importance, and the next round message says so: "Surprise: you expected (t14)
+    …; it didn't happen. Rethink t4 if you see it differently." A fear that didn't come true reads as relief, a
+    hope that didn't as disappointment.
+  - closed expectations keep their outcome (`met`, `missed`) in the sheet's history.
+- **Horizon:** `soon` expires after 3 rounds, `today` after 15 rounds or when the in-story day changes, `later`
+  fades by importance like any thought; expired ones close without effect.
+- At most 6 open expectations per character (the oldest least important one closes as expired).
+- The seeder may write one or two; the sheet shows them in their own group, with confidence, hope/fear and
+  horizon, all editable.
 
 ### 5.10 The character sheet (advanced mode; settled with the owner)
 
@@ -566,7 +631,7 @@ Normal mode keeps the public card for others and your own character's sheet.
 As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
 (`id, story_id, key, sort, def_json`), because the shape differs per type. Later migrations: `013-minds-ties.sql`
 (`character_sheets.concept`, `character_ties`), `014-minds-thoughts-v2.sql` (`thoughts.kind`, `importance`,
-`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`); relation values
+`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`), `016-undo-slot.sql`, `017-minds-expectations-nature.sql` (`character_sheets.nature`; `thoughts.renewed_turn_index`, `confidence`, `hope`, `horizon`, `basis`); relation values
 use `variable_values.holder = "<from>><to>"`. Handles are stored without the `#`
 (`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 

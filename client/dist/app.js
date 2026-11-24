@@ -341,13 +341,14 @@ async function renderPlay(storyId) {
       npcNumIn('notesTokens', 'private-notes length (tokens)', 'How much of each major character\'s private notes is kept (they rewrite these each round they act).', 50, 4000));
 
     // Minds engine budgets (docs/10 §8.4, §12).
-    const minds = { ...(s.minds || {}) };
+    // (Not named `minds`: that would hide the minds module, and "⚙ Scenario variables…" below needs it.)
+    const mset = { ...(s.minds || {}) };
     const mindsNumIn = (key, label, hint, min, max) => {
-      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(minds[key] ?? ''), style: 'width:7em' });
+      const inp = h('input', { type: 'number', min: String(min), max: String(max), value: String(mset[key] ?? ''), style: 'width:7em' });
       inp.addEventListener('change', async () => {
-        const v = Math.max(min, Math.min(max, Math.round(Number(inp.value)) || minds[key]));
-        inp.value = String(v); minds[key] = v;
-        await patchSettings({ minds: { ...minds } });
+        const v = Math.max(min, Math.min(max, Math.round(Number(inp.value)) || mset[key]));
+        inp.value = String(v); mset[key] = v;
+        await patchSettings({ minds: { ...mset } });
       });
       return h('label', { class: 'opt-row', title: hint }, inp, h('span', {}, label));
     };
@@ -361,11 +362,12 @@ async function renderPlay(storyId) {
       mindsNumIn('characterLogTokens', 'compact a character thread after (tokens)', 'When a character\'s thread grows past this, its oldest half is folded into a first-person recap (a light model does it after the round). Lower = cheaper calls, more summarised memory.', 1000, 128000),
       mindsNumIn('narratorLogTokens', 'compact the narrator thread after (tokens)', 'The same for the narrator\'s thread: its oldest half becomes "the story so far".', 2000, 512000),
       mindsNumIn('characterVerbosity', 'character verbosity (1–5)', 'How much characters say and do, for every focus: the one with the floor, the ones you speak to, the rest of the room, the background. 3 is the default; 1 halves everything, 5 doubles it.', 1, 5),
+      mindsNumIn('fadeRounds', 'thoughts fade: one point per (rounds)', 'A thought also loses one point for every this many rounds it doesn\'t come up, so a long conversation (which barely moves the clock) cools down too.', 1, 200),
       mindsNumIn('fadeHours', 'thoughts fade: one point per (in-story hours)', 'A thought loses one point of importance for every this many in-story hours it doesn\'t come up; at 0 it fades from the character\'s mind (you can restore it on their sheet). Agenda items and thoughts of importance 8–10 never fade.', 1, 720),
       (() => {
         const cb = h('input', { type: 'checkbox' });
-        cb.checked = !!minds.nameKnowledge;
-        cb.addEventListener('change', async () => { minds.nameKnowledge = cb.checked; await patchSettings({ minds: { ...minds } }); refreshSceneHeader(); });
+        cb.checked = !!mset.nameKnowledge;
+        cb.addEventListener('change', async () => { mset.nameKnowledge = cb.checked; await patchSettings({ minds: { ...mset } }); refreshSceneHeader(); });
         return h('label', { class: 'opt-row', title: 'On: nobody knows a stranger\'s name until they hear it; people are known by how they look. Off: everyone knows every name (older stories).' },
           cb, h('span', {}, 'names are learned (strangers stay unnamed) '), helpLink('names'));
       })());
@@ -485,6 +487,18 @@ async function renderPlay(storyId) {
             save)));
       document.body.append(modal);
       nameIn.focus();
+      // A new story starts from the character you played last (you can change anything, or start blank).
+      if (!pc) {
+        api.get(`/api/minds/last-player?exclude=${encodeURIComponent(storyId)}`).then((last) => {
+          if (!last || last.none || nameIn.value || lookIn.value) return;
+          nameIn.value = last.name || ''; pronIn.value = last.pronouns || ''; knownIn.value = last.knownAs || '';
+          lookIn.value = last.appearance || ''; whoIn.value = last.description || '';
+          const note = h('div', { class: 'sub prefill-note' },
+            `Filled in from your last character${last.storyTitle ? ` (in "${last.storyTitle}")` : ''}: change anything. `,
+            h('button', { class: 'link', onclick: () => { for (const el of [nameIn, pronIn, knownIn, lookIn, whoIn]) el.value = ''; note.remove(); nameIn.focus(); } }, 'Start blank'));
+          modal.querySelector('h3')?.after(note);
+        }).catch(() => {});
+      }
     });
   }
 
@@ -903,16 +917,16 @@ async function renderPlay(storyId) {
     });
   }
   async function deleteMessage(bubble, turnId, field) {
-    const minds = story.settings?.engine === 'minds';
+    const isMinds = story.settings?.engine === 'minds';
     // The last exchange in a Minds story: really undone, as if it never happened (↶ Revert brings it back).
-    if (minds && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+    if (isMinds && lastTurn?.id === turnId && lastTurn.status === 'complete') {
       if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
       if (!confirm('Remove the last exchange?\n\nEverything it changed (memories, thoughts, variables) is undone too. You can bring it back with ↶ Revert.')) return;
       try { await api.post(`/api/stories/${storyId}/rewind`, { turnId, action: 'remove' }); await redrawTranscript(); renderDrawer(); refreshSceneHeader(); }
       catch (e) { alert('remove failed: ' + e.message); }
       return;
     }
-    const msg = minds
+    const msg = isMinds
       ? 'Remove this message from the transcript?\n\nThe characters still remember it (only the last exchange can be undone completely). ↶ Revert brings it back.'
       : 'Delete this message? Memory is unaffected; later story flow may shift.';
     if (!confirm(msg)) return;

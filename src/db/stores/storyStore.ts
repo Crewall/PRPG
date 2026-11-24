@@ -61,6 +61,7 @@ function rowToScene(r: Row): Scene {
     activeNpcIds: JSON.parse((r.active_npc_ids as string) || '[]'),
     itemHandles: JSON.parse((r.items_json as string) || '[]'),
     status: r.status as Scene['status'],
+    createdAt: r.created_at as number,
   };
 }
 

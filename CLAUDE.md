@@ -40,11 +40,13 @@ is right.
     - event order (ordered beats for the player and characters), focus tiers for how much each character says
       (`src/minds/focus.ts`), one-step Revert after regenerate/Edit/remove/edit (`undo_slots`), and ✎ on the last
       reply re-committing the round (`TurnPipeline.editReply`);
+    - opinions kept in proportion (no renewal by presence, fading by rounds, a ceiling of 7 rising one per scene),
+      the character's nature (traits as nuanced phrases), expectations that can be met or missed;
     - overload handling: real waits on 429/503, a fallback model per tier, job backoff, re-seeding;
   - shared: rewind/edit and ↻ regenerate on every reply (failed attempts are dropped before the next turn), the premise randomizer, the
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
-  - 288 passing tests.
+  - 297 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases, a reload-on-update check (doc 10 §14).
 

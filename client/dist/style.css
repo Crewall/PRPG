@@ -408,6 +408,7 @@ td.vis.hidden { color: #ff8a8a; }
 .kind-chip.agenda { border-color: #c9a227; color: #e0c35a; }
 .kind-chip.opinion { border-color: #4f8fd6; color: #8ab8ee; }
 .kind-chip.feeling { border-color: #c2578a; color: #e58db6; }
+.kind-chip.expectation { border-color: #3f9e8f; color: #7fd1c3; }
 .imp { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .imp-bar { width: 40px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; display: inline-block; }
 .imp-fill { display: block; height: 100%; background: var(--accent, #7aa2ff); }

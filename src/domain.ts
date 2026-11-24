@@ -91,6 +91,8 @@ export const StorySettings = z.object({
       characterVerbosity: z.number().int().min(1).max(5).default(3),
       // Thoughts fade: one point of importance per this many in-story hours without coming up (docs/11 §5.7).
       fadeHours: z.number().positive().default(8),
+      // …and one point per this many rounds (a long conversation barely moves the clock; docs/11 §5.7).
+      fadeRounds: z.number().int().positive().default(12),
       narratorSeesThoughts: z.boolean().default(false),
       playerSpeechHeardImmediately: z.boolean().default(true),
       // Names: who knows whom (docs/11 §2.5). New stories turn it on; older ones keep names common knowledge.
@@ -175,6 +177,7 @@ export interface Scene {
   /** Minds engine: roster handles of items in view (the narrator's scene.items). */
   itemHandles: string[];
   status: SceneStatus;
+  createdAt?: number;
 }
 
 export interface Turn {
