@@ -107,6 +107,38 @@ export function seedContext(deps: RoundDeps, storyId: string, objectId: string):
   ].join('\n\n');
 }
 
+/**
+ * minds_nature (docs/11 §2.7): a character seeded before natures existed gets one, read from its description and
+ * the narrator's hand-over. Never overwrites one already there.
+ */
+export function createMindsNatureHandler(deps: RoundDeps): JobHandler {
+  return async (job: Job) => {
+    const storyId = job.storyId!;
+    const objectId = job.payload.objectId as string;
+    const story = deps.stories.getStory(storyId);
+    const obj = deps.memory.getObject(objectId);
+    const sheet = deps.sheets.get(objectId);
+    if (!story || !obj || !sheet || sheet.nature.trim() || !(sheet.description.trim() || sheet.concept.trim())) return;
+    const bound = deps.registry.getForRole('seeder', story.settings.roles.seeder);
+    const session = deps.agents.ensureSession(storyId, 'seeder', bound.name, objectId);
+    const user = [
+      `${obj.name}${sheet.pronouns ? ` (${sheet.pronouns})` : ''}`,
+      sheet.concept.trim() ? `Who they are (the narrator's hand-over): ${sheet.concept.trim()}` : '',
+      sheet.description.trim() ? `Their description:\n${sheet.description.trim()}` : '',
+      'Write their nature. Reply as JSON.',
+    ].filter(Boolean).join('\n\n');
+    const reply = await new MindAgent({ session, bound, threadLog: deps.threadLog, storyId }).seed(
+      { system: renderPrompt('minds-nature', {}), messages: [{ role: 'user', content: user }] },
+      { maxTokens: 400 },
+    );
+    const nature = clampWords(unescapeText(reply.nature).replace(/\s*\n\s*/g, ' '), 60).text;
+    const now = deps.sheets.get(objectId);
+    if (!nature || !now || now.nature.trim()) return;
+    deps.sheets.upsert(storyId, objectId, { nature });
+    deps.events.emit({ t: 'minds.updated', storyId, objectIds: [objectId] });
+  };
+}
+
 export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
   return async (job: Job) => {
     const storyId = job.storyId!;
@@ -143,6 +175,7 @@ export function createMindsSeedHandler(deps: RoundDeps): JobHandler {
     deps.db.transaction(() => {
       deps.sheets.upsert(storyId, objectId, {
         ...(description && (force || !now.description.trim()) ? { description } : {}),
+        ...(reply.nature && (force || !now.nature.trim()) ? { nature: clampWords(unescapeText(reply.nature).replace(/\s*\n\s*/g, ' '), 60).text } : {}),
         ...(reply.appearance && !now.appearance.trim() ? { appearance: unescapeText(reply.appearance) } : {}),
         ...(reply.pronouns && !now.pronouns.trim() ? { pronouns: reply.pronouns } : {}),
         seeded: true,

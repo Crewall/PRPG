@@ -17,6 +17,7 @@ export const SeedReply = z.unknown().transform((raw) => {
   const thoughts = Array.isArray(r.thoughts) ? r.thoughts : [];
   return {
     description: str(r.description),
+    nature: str(r.nature),
     appearance: str(r.appearance),
     pronouns: str(r.pronouns).slice(0, 40),
     state: str(r.state),
@@ -34,6 +35,9 @@ export const SeedReply = z.unknown().transform((raw) => {
         ...(typeof t.kind === 'string' ? { kind: t.kind } : {}),
         ...(typeof t.about === 'string' && t.about.trim() ? { about: t.about } : {}),
         ...(typeof t.importance === 'number' || typeof t.importance === 'string' ? { importance: t.importance } : {}),
+        ...(t.confidence !== undefined ? { confidence: t.confidence } : {}),
+        ...(typeof t.hope === 'string' ? { hope: t.hope } : {}),
+        ...(typeof t.horizon === 'string' ? { horizon: t.horizon } : {}),
       })),
   };
 });

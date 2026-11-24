@@ -37,7 +37,7 @@ export function agentOf(req: ChatRequest): string {
   if (req.system.includes('You are the **Narrator**')) return 'narrator';
   if (req.system.includes('forgot (or broke)')) return 'distributor';
   if (req.system.includes('edited the prose')) return 'reviser';
-  if (req.system.includes('character designer')) return 'seeder';
+  if (req.system.includes('character designer') || req.system.includes('as their **nature**')) return 'seeder';
   if (req.system.includes('You fold the oldest part')) return 'compactor';
   if (req.system.includes('You decide who is being spoken to')) return 'director';
   const m = req.system.match(/^You are \*\*(.+?)\*\*/);

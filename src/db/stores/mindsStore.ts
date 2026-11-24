@@ -21,6 +21,8 @@ export interface CharacterSheet {
   knownAs: string;
   /** The narrator's hand-over: who they are, why here (docs/11 §2.3). Canon for the seeder. */
   concept: string;
+  /** 3–6 traits as nuanced phrases (docs/11 §2.7). */
+  nature: string;
   state: string;
   tierId: string | null;
   seeded: boolean;
@@ -37,6 +39,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   pronouns: (r.pronouns as string) ?? '',
   knownAs: (r.known_as as string) ?? '',
   concept: (r.concept as string) ?? '',
+  nature: (r.nature as string) ?? '',
   state: r.state as string,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
@@ -44,7 +47,7 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'nature' | 'state' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -68,18 +71,19 @@ export function createSheetStore(db: Db) {
         pronouns: patch.pronouns ?? prev?.pronouns ?? '',
         knownAs: patch.knownAs ?? prev?.knownAs ?? '',
         concept: patch.concept ?? prev?.concept ?? '',
+        nature: patch.nature ?? prev?.nature ?? '',
         state: patch.state ?? prev?.state ?? '',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
            appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, concept = excluded.concept,
-           state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           nature = excluded.nature, state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.nature, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 
@@ -247,6 +251,11 @@ function rowToThought(r: Row, tags: string[]): Thought {
     createdClockMin: r.created_clock_min == null ? null : Number(r.created_clock_min),
     renewedClockMin: r.renewed_clock_min == null ? (r.created_clock_min == null ? null : Number(r.created_clock_min)) : Number(r.renewed_clock_min),
     revises: (r.revises as string) ?? null,
+    renewedTurnIndex: r.renewed_turn_index == null ? null : Number(r.renewed_turn_index),
+    confidence: r.confidence == null ? null : Number(r.confidence),
+    hope: (r.hope as Thought['hope']) ?? null,
+    horizon: (r.horizon as Thought['horizon']) ?? null,
+    basis: (r.basis as string) ?? null,
     revokedTurnId: (r.revoked_turn_id as string) ?? null,
     lastRecalledTurnId: (r.last_recalled_turn_id as string) ?? null,
     recallCount: r.recall_count as number,
@@ -292,7 +301,21 @@ export function createThoughtStore(db: Db) {
     insert(
       storyId: string,
       owner: string,
-      t: { text: string; tags: string[]; pinned: boolean; source: Thought['source']; clockMin?: number | null; kind?: Thought['kind']; importance?: number; about?: string | null; revises?: string | null },
+      t: {
+        text: string;
+        tags: string[];
+        pinned: boolean;
+        source: Thought['source'];
+        clockMin?: number | null;
+        kind?: Thought['kind'];
+        importance?: number;
+        about?: string | null;
+        revises?: string | null;
+        confidence?: number | null;
+        hope?: Thought['hope'];
+        horizon?: Thought['horizon'];
+        basis?: string | null;
+      },
       turnId: string | null,
     ): Thought {
       const now = Date.now();
@@ -300,9 +323,11 @@ export function createThoughtStore(db: Db) {
       const seq = (db.prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM thoughts WHERE story_id = ? AND owner = ?`).get<{ m: number }>(storyId, owner)!.m ?? 0) + 1;
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, renewed_clock_min, kind, importance, about, revises, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, t.clockMin ?? null, t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.revises ?? null, now, now);
+          `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, renewed_clock_min, kind, importance, about, revises,
+                                 renewed_turn_index, confidence, hope, horizon, basis, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT idx FROM turns WHERE id = ?), (SELECT MAX(idx) FROM turns WHERE story_id = ?)), ?, ?, ?, ?, ?, ?)`,
+        ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, t.clockMin ?? null, t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.revises ?? null,
+          turnId, storyId, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, now, now);
         for (const tag of t.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tid, tag);
       });
       return store.get(tid)!;
@@ -318,10 +343,16 @@ export function createThoughtStore(db: Db) {
     },
 
     /** Edit a thought in place (the user, in advanced mode). */
-    update(thoughtId: string, patch: { text?: string; kind?: Thought['kind']; importance?: number; about?: string | null; tags?: string[] }): void {
+    update(
+      thoughtId: string,
+      patch: { text?: string; kind?: Thought['kind']; importance?: number; about?: string | null; tags?: string[]; confidence?: number | null; hope?: Thought['hope']; horizon?: Thought['horizon'] },
+    ): void {
       const sets: string[] = [];
       const args: (string | number | null)[] = [];
       if (patch.text !== undefined) (sets.push('text = ?'), args.push(patch.text));
+      if (patch.confidence !== undefined) (sets.push('confidence = ?'), args.push(patch.confidence));
+      if (patch.hope !== undefined) (sets.push('hope = ?'), args.push(patch.hope));
+      if (patch.horizon !== undefined) (sets.push('horizon = ?'), args.push(patch.horizon));
       if (patch.kind !== undefined) (sets.push('kind = ?'), args.push(patch.kind));
       if (patch.importance !== undefined) (sets.push('importance = ?'), args.push(patch.importance));
       if (patch.about !== undefined) (sets.push('about = ?'), args.push(patch.about));
@@ -334,23 +365,24 @@ export function createThoughtStore(db: Db) {
       });
     },
 
-    /** It came up again: fading starts over from this in-story time (docs/11 §5.7). */
-    renew(thoughtIds: string[], clockMin: number | null): void {
-      if (clockMin == null) return;
-      for (const tid of thoughtIds) db.prepare(`UPDATE thoughts SET renewed_clock_min = ? WHERE id = ?`).run(clockMin, tid);
+    /** It came up again: fading starts over from now, the story's in-story time and round (docs/11 §5.7). */
+    renew(thoughtIds: string[], clockMin?: number | null): void {
+      for (const tid of thoughtIds) {
+        db.prepare(
+          `UPDATE thoughts SET renewed_clock_min = COALESCE(?, (SELECT clock_min FROM stories WHERE stories.id = thoughts.story_id)),
+             renewed_turn_index = COALESCE((SELECT MAX(idx) FROM turns WHERE turns.story_id = thoughts.story_id), renewed_turn_index) WHERE id = ?`,
+        ).run(clockMin ?? null, tid);
+      }
     },
 
     setPinned(thoughtId: string, pinned: boolean): void {
       db.prepare(`UPDATE thoughts SET pinned = ?, updated_at = ? WHERE id = ?`).run(pinned ? 1 : 0, Date.now(), thoughtId);
     },
 
-    /** Shown to its owner this round: recalled, and renewed at the story's current in-story time. */
+    /** Shown to its owner this round. (Being shown doesn't renew it: only something happening does, docs/11 §5.7.) */
     markRecalled(thoughtIds: string[], turnId: string | null): void {
       for (const tid of thoughtIds) {
-        db.prepare(
-          `UPDATE thoughts SET last_recalled_turn_id = ?, recall_count = recall_count + 1,
-             renewed_clock_min = (SELECT clock_min FROM stories WHERE stories.id = thoughts.story_id) WHERE id = ?`,
-        ).run(turnId, tid);
+        db.prepare(`UPDATE thoughts SET last_recalled_turn_id = ?, recall_count = recall_count + 1 WHERE id = ?`).run(turnId, tid);
       }
     },
 

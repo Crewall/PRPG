@@ -19,6 +19,10 @@ as a complete person.
   Identity, personality, voice and manner of speaking, drives and fears, background, their people, and anything
   they know about themselves that others don't (secrets welcome if the story hints at one). Identity only: what
   is true of them on any day. This scene, this room and what just happened go in "state" and "thoughts", not here.
+- "nature": 3–6 traits that make {{name}} who they are, each a short nuanced phrase of a few words, not a label
+  with a strength ("slow to think ill of anyone", not "trusting (strong)"). Give the one or two most defining
+  traits a couple of synonyms or rewordings so they weigh more ("warm, kind-hearted, gentle with everyone").
+  One line, comma-separated, at most 50 words.
 - "appearance": one or two lines anyone would notice at a glance (keep the established one if given).
 - "pronouns": how others refer to them ("she/her", "he/him", "they/them", …), as the story established.
 - "state": one sentence, their physical and emotional condition right now (body and mood only; plans, views of
@@ -32,8 +36,11 @@ as a complete person.
   - an "opinion" of each person who matters to them here (present or tied), with "about": their #handle;
   - "feeling" for a deep feeling the story or the hand-over implies (love, fear, guilt, a grudge), with "about"
     when it is about someone;
-  - "note" for key facts they know (a promise, a secret, what they came for).
-  Importance: 1–3 a passing detail, 4–6 matters for now, 7–8 strong, 9–10 defining. Use 9–10 sparingly. Write
+  - "note" for key facts they know (a promise, a secret, what they came for);
+  - optionally one or two "expectation"s: what they foresee next, with "confidence" (1–10), "hope" ("hope",
+    "fear" or "neutral") and "horizon" ("soon", "today" or "later").
+  Importance: 1–3 a passing detail, 4–6 matters for now, 7–8 strong, 9–10 defining. Use 9–10 sparingly. First
+  impressions of people just met are mild (3–5). Write
   people as their #handles; use a name only if {{name}} knows it.
 - "ties": only if the story shows how {{name}} is related to someone present or named, and that tie is not in
   "Their people" yet: {"#handle": "what they are to {{name}}"} ("older brother", "employer", "old rival").
@@ -45,6 +52,7 @@ Plain text in every field: no markdown, no escaped characters.
 {
   "description": "…",
   "appearance": "…",
+  "nature": "…",
   "pronouns": "…",
   "state": "…",
   "values": {},

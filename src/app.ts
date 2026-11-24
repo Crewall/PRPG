@@ -25,7 +25,7 @@ import { JobWorker } from './orchestrator/postTurn.ts';
 import { createScribeStoryHandler, createNpcSeedHandler } from './orchestrator/handlers.ts';
 import { createScribeMemoryHandler, createMemoryMaintenanceHandler, createArchiveFadedHandler, createNpcDossierHandler } from './orchestrator/memoryHandlers.ts';
 import { EventBus } from './util/events.ts';
-import { createMindsSeedHandler } from './minds/seed.ts';
+import { createMindsNatureHandler, createMindsSeedHandler } from './minds/seed.ts';
 import { createMindsCompactHandler } from './minds/compaction.ts';
 
 // The wired application: stores + registry + orchestrator + job worker. Built
@@ -112,6 +112,7 @@ export function createApp(config: Config, opts: { driverFactory?: DriverFactory;
   worker.register('npc_seed', createNpcSeedHandler(handlerDeps));
   const mindsJobDeps = { ...handlerDeps, sheets, variables, thoughts, names, ties, met, threads, verbosityOverride: () => settingsService.verbosityOverride() };
   worker.register('minds_seed', createMindsSeedHandler(mindsJobDeps));
+  worker.register('minds_nature', createMindsNatureHandler(mindsJobDeps));
   worker.register('minds_compact', createMindsCompactHandler(mindsJobDeps));
 
   if (opts.startWorker !== false) worker.start();

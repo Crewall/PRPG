@@ -390,11 +390,13 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   deps.db.transaction(() => {
     // 5a. Character threads (replies byte-exact) and their memory operations.
     const memoryNotes = new Map<string, string[]>();
+    const outcomeNotes = new Map<string, string[]>();
     for (const r of results) {
       if (!r.call || !r.reply || r.raw === undefined) continue;
       commitCall(deps, r.call, r.raw, turn.id);
-      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, revise: r.reply.revise, forget: r.reply.forget }, 'self', turn.id);
+      const ops = applyThoughtOps(deps, storyId, r.objectId, { remember: r.reply.remember, revise: r.reply.revise, forget: r.reply.forget, outcomes: r.reply.outcomes }, 'self', turn.id);
       if (ops.notes.length) memoryNotes.set(r.objectId, ops.notes);
+      if (ops.outcomes.length) outcomeNotes.set(r.objectId, ops.outcomes);
       changedIds.add(r.objectId);
     }
 
@@ -604,6 +606,8 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       const brief = briefs.get(oid);
       const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
+      const turnedOut = outcomeNotes.get(oid);
+      if (turnedOut?.length) parts.push(`How your expectations turned out:\n${turnedOut.map((x) => `- ${x}`).join('\n')}`);
       const notes = memoryNotes.get(oid);
       if (notes?.length) parts.push(`About your memory: ${notes.join(' ')}`);
       queueForCharacter(deps, storyId, oid, parts.join('\n'), turn.id);
@@ -630,6 +634,15 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
         .prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'minds_seed' AND status IN ('pending','running') AND json_extract(payload_json, '$.objectId') = ?`)
         .get<{ n: number }>(oid)!.n;
       if (!waiting) deps.jobs.enqueue('minds_seed', { storyId, turnId: turn.id, payload: { objectId: oid } });
+    }
+    // A character written before natures existed gets one (docs/11 §2.7).
+    for (const oid of presentIds) {
+      const sheet = deps.sheets.get(oid);
+      if (!sheet || !sheet.seeded || sheet.nature.trim() || seedQueue.includes(oid)) continue;
+      const waiting = deps.db
+        .prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'minds_nature' AND status IN ('pending','running') AND json_extract(payload_json, '$.objectId') = ?`)
+        .get<{ n: number }>(oid)!.n;
+      if (!waiting) deps.jobs.enqueue('minds_nature', { storyId, turnId: turn.id, payload: { objectId: oid } });
     }
     // Threads that grew past their threshold get folded after the round (docs/10 §8.4).
     queueCompactions(deps, storyId, [nCall.sessionId, ...results.filter((r) => r.call && r.reply).map((r) => r.call!.sessionId)], turn.id);

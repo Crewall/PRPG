@@ -145,7 +145,14 @@ const Remember = z.object({
   kind: z.string().optional(),
   about: z.string().optional(),
   importance: z.union([z.number(), z.string()]).optional(),
+  /** Expectations (docs/11 §5.11). */
+  confidence: z.union([z.number(), z.string()]).optional(),
+  hope: z.string().optional(),
+  horizon: z.string().optional(),
+  basis: z.union([z.string(), z.number()]).optional(),
 });
+/** How expectations turned out: { "t14": "met" | "missed" } (docs/11 §5.11). */
+const Outcomes = z.record(z.string(), z.unknown()).default({});
 const Revise = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
   text: z.string().optional(),
@@ -186,6 +193,7 @@ const CharacterReplyShape = {
   remember: listOf(Remember),
   revise: listOf(Revise),
   forget: listOf(Forget),
+  outcomes: Outcomes,
 };
 export type CharacterReply = Omit<z.infer<z.ZodObject<typeof CharacterReplyShape>>, 'beats'> & { beats: Beat[] };
 
@@ -212,14 +220,19 @@ export const CharacterReplyWire = z.object({
   remember: z
     .array(
       z.object({
-        kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(),
+        kind: z.enum(['agenda', 'opinion', 'feeling', 'note', 'expectation']).optional(),
         about: z.string().optional(),
         importance: z.number().optional(),
+        confidence: z.number().optional(),
+        hope: z.enum(['hope', 'fear', 'neutral']).optional(),
+        horizon: z.enum(['soon', 'today', 'later']).optional(),
+        basis: z.string().optional(),
         text: z.string(),
         tags: z.array(z.string()),
       }),
     )
     .optional(),
+  outcomes: z.record(z.string(), z.enum(['met', 'missed'])).optional(),
   revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
 });
@@ -361,6 +374,7 @@ const DialogueReplyShape = {
   remember: listOf(Remember),
   revise: listOf(Revise),
   forget: listOf(Forget),
+  outcomes: Outcomes,
   act: Str.optional(),
 };
 export type DialogueReply = z.infer<z.ZodObject<typeof DialogueReplyShape>>;
@@ -385,8 +399,9 @@ export const DialogueReplyWire = z.object({
   gesture: z.string().optional(),
   state: z.string().optional(),
   remember: z
-    .array(z.object({ kind: z.enum(['agenda', 'opinion', 'feeling', 'note']).optional(), about: z.string().optional(), importance: z.number().optional(), text: z.string(), tags: z.array(z.string()) }))
+    .array(z.object({ kind: z.enum(['agenda', 'opinion', 'feeling', 'note', 'expectation']).optional(), about: z.string().optional(), importance: z.number().optional(), confidence: z.number().optional(), hope: z.enum(['hope', 'fear', 'neutral']).optional(), horizon: z.enum(['soon', 'today', 'later']).optional(), basis: z.string().optional(), text: z.string(), tags: z.array(z.string()) }))
     .optional(),
+  outcomes: z.record(z.string(), z.enum(['met', 'missed'])).optional(),
   revise: z.array(z.object({ id: z.string(), text: z.string().optional(), importance: z.number().optional() })).optional(),
   forget: z.array(z.string()).optional(),
   act: z.string().optional(),

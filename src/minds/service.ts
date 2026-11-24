@@ -5,6 +5,10 @@ import type { SheetStore, ThoughtStore, VariableStore, CharacterSheet, SheetPatc
 import { REL, STATE_KEY, appliesTo, canSee, defaultValue, relationHolder, renderValue, runPipeline, splitFinalId } from './variables.ts';
 import type { ChangeOutcome, HolderInfo, Proposal, VariableDef, VariableValue, Viewer } from './variables.ts';
 import {
+  HORIZON_ROUNDS,
+  MAX_EXPECTATIONS,
+  MAX_RAISE,
+  OPINION_CAP,
   MAX_AGENDA,
   MAX_FORGET_PER_REPLY,
   MAX_REMEMBER_PER_REPLY,
@@ -13,6 +17,8 @@ import {
   currentImportance,
   fades,
   normalizeKind,
+  normalizeHope,
+  normalizeHorizon,
   parseThoughtHandle,
   prepareRemember,
   renderThought,
@@ -116,24 +122,42 @@ export interface ThoughtOpsResult {
   revised: Thought[];
   /** Plain-language notes for the owner's next round message ("Not kept: …"). */
   notes: string[];
+  /** How expectations turned out, for the owner's next round message ("Surprise: …", docs/11 §5.11). */
+  outcomes: string[];
 }
 
 /** How thoughts read right now: current importance (fading applied) and the rendered line (docs/11 §5.7, §5.9). */
 export function thoughtLens(deps: MindsDeps, storyId: string) {
   const story = deps.stories.getStory(storyId);
   const fadeHours = story?.settings.minds.fadeHours ?? 8;
+  const fadeRounds = story?.settings.minds.fadeRounds ?? 12;
   const clock = story?.clockMin ?? null;
-  const current = (t: Thought) => currentImportance(t, clock, fadeHours);
+  const turnIndex = deps.stories.lastTurn(storyId)?.index ?? null;
+  const current = (t: Thought) => currentImportance(t, { clockMin: clock, turnIndex, fadeHours, fadeRounds });
   const aboutHandle = (t: Thought) => (t.about ? (deps.memory.getObject(t.about)?.handle ?? null) : null);
   const render = (t: Thought) => renderThought(t, { aboutHandle: aboutHandle(t), current: current(t) });
-  return { current, aboutHandle, render, clock, fadeHours };
+  return { current, aboutHandle, render, clock, turnIndex, fadeHours, fadeRounds };
 }
 
-/** Thoughts whose current importance reached 0 fade (docs/11 §5.7). Run once per round, after the clock moved. */
+/**
+ * End of round (docs/11 §5.7, §5.11): thoughts whose current importance reached 0 fade; expectations past their
+ * horizon expire. Run once per round, after the clock moved.
+ */
 export function fadeThoughts(deps: MindsDeps, storyId: string, turnId: string | null): Thought[] {
-  const { current } = thoughtLens(deps, storyId);
+  const { current, clock, turnIndex } = thoughtLens(deps, storyId);
+  const createdIndex = (t: Thought) => (t.createdTurnId ? deps.stories.getTurn(t.createdTurnId)?.index : undefined);
   const faded: Thought[] = [];
   for (const t of deps.thoughts.listActiveForStory(storyId)) {
+    if (t.kind === 'expectation' && t.horizon !== 'later') {
+      const born = createdIndex(t) ?? t.renewedTurnIndex ?? undefined;
+      const rounds = born !== undefined && turnIndex != null ? turnIndex - born : 0;
+      const newDay = t.createdClockMin != null && clock != null && Math.floor(clock / 1440) > Math.floor(t.createdClockMin / 1440);
+      if ((t.horizon === 'soon' && rounds >= HORIZON_ROUNDS.soon) || (t.horizon === 'today' && (rounds >= HORIZON_ROUNDS.today || newDay))) {
+        deps.thoughts.setStatus(t.id, 'expired', turnId);
+        faded.push({ ...t, status: 'expired' });
+      }
+      continue;
+    }
     if (!fades(t) || current(t) > 0) continue;
     deps.thoughts.setStatus(t.id, 'faded', turnId);
     faded.push({ ...t, status: 'faded' });
@@ -142,22 +166,39 @@ export function fadeThoughts(deps: MindsDeps, storyId: string, turnId: string | 
 }
 
 /**
- * Apply an owner's remember / revise / forget operations (docs/11 §5.3, §5.6–5.8). For the owner's own replies
- * (`source: 'self'`) the per-reply caps apply; the active-thought and agenda caps always do. Restating a thought
- * word for word renews it instead of adding a copy.
+ * The most a character may rate an opinion or feeling about `about` in play (docs/11 §5.7b): 7, or — when it
+ * already held a stronger one before this scene (or from its seed) — that + 1.
+ */
+export function opinionCeiling(deps: MindsDeps, storyId: string, owner: string, about: string): number {
+  const sceneId = deps.stories.getStory(storyId)?.currentSceneId ?? null;
+  const sceneStart = sceneId ? (deps.stories.getScene(sceneId)?.createdAt ?? 0) : 0;
+  let baseline = 0;
+  for (const t of deps.thoughts.list(storyId, owner, { includeRevoked: true })) {
+    if (t.about !== about || (t.kind !== 'opinion' && t.kind !== 'feeling') || t.status === 'revoked') continue;
+    const turn = t.createdTurnId ? deps.stories.getTurn(t.createdTurnId) : undefined;
+    const before = t.source === 'seed' || t.source === 'user' || (turn ? turn.sceneId !== sceneId : t.createdAt < sceneStart);
+    if (before) baseline = Math.max(baseline, t.importance);
+  }
+  return Math.min(10, Math.max(OPINION_CAP, baseline + 1));
+}
+
+/**
+ * Apply an owner's remember / revise / forget / outcomes operations (docs/11 §5.3, §5.6–5.8, §5.11). For the
+ * owner's own replies (`source: 'self'`) the per-reply caps and the opinion ceilings apply; the active-thought,
+ * agenda and expectation caps always do. Restating a thought word for word renews it instead of adding a copy.
  */
 export function applyThoughtOps(
   deps: MindsDeps,
   storyId: string,
   owner: string,
-  ops: { remember?: RememberOp[]; forget?: unknown[]; revise?: ReviseOp[] },
+  ops: { remember?: RememberOp[]; forget?: unknown[]; revise?: ReviseOp[]; outcomes?: Record<string, unknown> },
   source: Thought['source'],
   turnId: string | null = null,
 ): ThoughtOpsResult {
   const story = deps.stories.getStory(storyId);
   const clock = story?.clockMin ?? null;
   const maxActive = story?.settings.minds.maxActiveThoughts ?? 80;
-  const result: ThoughtOpsResult = { added: [], revoked: [], revised: [], notes: [] };
+  const result: ThoughtOpsResult = { added: [], revoked: [], revised: [], notes: [], outcomes: [] };
   const remember = ops.remember ?? [];
   const forget = ops.forget ?? [];
   const revise = ops.revise ?? [];
@@ -165,12 +206,22 @@ export function applyThoughtOps(
   const handles = deps.memory.listHandles(storyId);
   const objectOf = (handle: string | undefined) => (handle ? (deps.memory.findByHandle(storyId, handle)?.id ?? null) : null);
   const agendaCount = () => deps.thoughts.list(storyId, owner).filter((t) => t.kind === 'agenda').length;
+  const bySeq = (h: unknown) => {
+    const seq = parseThoughtHandle(h);
+    return seq === undefined ? undefined : deps.thoughts.bySeq(storyId, owner, seq);
+  };
+  /** In proportion (docs/11 §5.7b): what the owner writes in play about someone stays under its ceiling. */
+  const held = (kind: Thought['kind'], about: string | null, importance: number, from?: number): number => {
+    if (!selfCaps || !about || (kind !== 'opinion' && kind !== 'feeling')) return importance;
+    let v = Math.min(importance, opinionCeiling(deps, storyId, owner, about));
+    if (from !== undefined) v = Math.min(v, Math.max(from, from + MAX_RAISE));
+    return v;
+  };
 
   const forgetList = selfCaps && forget.length > MAX_FORGET_PER_REPLY ? forget.slice(0, MAX_FORGET_PER_REPLY) : forget;
   if (forgetList.length < forget.length) result.notes.push(`Only ${MAX_FORGET_PER_REPLY} thoughts can be forgotten at once; the rest were kept.`);
   for (const h of forgetList) {
-    const seq = parseThoughtHandle(h);
-    const t = seq === undefined ? undefined : deps.thoughts.bySeq(storyId, owner, seq);
+    const t = bySeq(h);
     if (!t) {
       result.notes.push(`Not forgotten: you have no thought ${String(h)}.`);
       continue;
@@ -180,12 +231,36 @@ export function applyThoughtOps(
     result.revoked.push({ ...t, status: 'revoked' });
   }
 
+  // How expectations turned out, as the owner judges it (docs/11 §5.11). Lopsided on purpose: a miss weighs more.
+  for (const [h, raw] of Object.entries(ops.outcomes ?? {})) {
+    const outcome = String(raw ?? '').trim().toLowerCase();
+    if (outcome !== 'met' && outcome !== 'missed') continue;
+    const e = bySeq(h);
+    if (!e || e.kind !== 'expectation' || e.status !== 'active') continue;
+    deps.thoughts.setStatus(e.id, outcome, turnId);
+    const basis = e.basis ? deps.thoughts.get(e.basis) : undefined;
+    const live = basis && basis.status === 'active' ? basis : undefined;
+    const ref = live ? ` (t${live.seq})` : '';
+    if (outcome === 'met') {
+      if (live) {
+        deps.thoughts.update(live.id, { importance: held(live.kind, live.about, Math.min(10, live.importance + 1), live.importance) });
+        deps.thoughts.renew([live.id], clock);
+      }
+      result.outcomes.push(
+        e.hope === 'hope' ? `It came true, as you hoped (t${e.seq}): ${e.text}` : e.hope === 'fear' ? `What you feared happened (t${e.seq}): ${e.text}${live ? ` It weighs more on t${live.seq} now.` : ''}` : `As you expected (t${e.seq}): ${e.text}${live ? ` That bears out t${live.seq}.` : ''}`,
+      );
+    } else {
+      if (live) deps.thoughts.update(live.id, { importance: Math.max(1, live.importance - 2) });
+      const head = e.hope === 'fear' ? 'Relief: what you feared didn’t happen' : e.hope === 'hope' ? 'Disappointment: what you hoped for didn’t happen' : 'Surprise: you expected otherwise';
+      result.outcomes.push(`${head} (t${e.seq}: ${e.text}).${live ? ` Rethink t${live.seq}${ref ? '' : ''} if you see it differently now.` : ''}`);
+    }
+  }
+
   // Revise: the old thought is kept as history; a new one takes its place (docs/11 §5.8).
   const reviseList = selfCaps && revise.length > MAX_REVISE_PER_REPLY ? revise.slice(0, MAX_REVISE_PER_REPLY) : revise;
   if (reviseList.length < revise.length) result.notes.push(`Only ${MAX_REVISE_PER_REPLY} thoughts can be revised at once; the rest were kept as they were.`);
   for (const op of reviseList) {
-    const seq = parseThoughtHandle(op.id);
-    const old = seq === undefined ? undefined : deps.thoughts.bySeq(storyId, owner, seq);
+    const old = bySeq(op.id);
     if (!old || old.status !== 'active') {
       result.notes.push(`Not revised: you have no thought ${String(op.id)} in mind.`);
       continue;
@@ -198,15 +273,24 @@ export function applyThoughtOps(
         kind: op.kind ?? old.kind,
         about: old.about ? (deps.memory.getObject(old.about)?.handle ?? undefined) : undefined,
         importance: op.importance ?? old.importance,
+        confidence: old.confidence ?? undefined,
+        hope: old.hope ?? undefined,
+        horizon: old.horizon ?? undefined,
       },
       handles,
     );
     if (!prepared) continue;
+    const about = objectOf(prepared.aboutHandle) ?? old.about;
+    const importance = held(prepared.kind, about, prepared.importance, old.importance);
+    if (importance < prepared.importance) result.notes.push(`t${old.seq}: kept at ${importance}/10 (a view of someone grows a little at a time).`);
     deps.thoughts.setStatus(old.id, 'revised', turnId);
     const t = deps.thoughts.insert(
       storyId,
       owner,
-      { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance: prepared.importance, about: objectOf(prepared.aboutHandle) ?? old.about, revises: old.id },
+      {
+        text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance, about, revises: old.id,
+        confidence: prepared.confidence ?? null, hope: prepared.hope ?? null, horizon: prepared.horizon ?? null, basis: old.basis,
+      },
       turnId,
     );
     result.revised.push(t);
@@ -231,10 +315,25 @@ export function applyThoughtOps(
       result.notes.push(`Not kept: you already hold ${maxActive} thoughts. Forget or merge some first.`);
       break;
     }
+    if (prepared.kind === 'expectation') {
+      // At most a few open expectations: the least important, oldest one gives way.
+      const open = deps.thoughts.list(storyId, owner).filter((t) => t.kind === 'expectation');
+      if (open.length >= MAX_EXPECTATIONS) {
+        const out = [...open].sort((a, b) => a.importance - b.importance || a.seq - b.seq)[0];
+        deps.thoughts.setStatus(out.id, 'expired', turnId);
+      }
+    }
+    const about = objectOf(prepared.aboutHandle);
+    const importance = held(prepared.kind, about, prepared.importance);
+    if (importance < prepared.importance) result.notes.push(`"${prepared.text}" kept at ${importance}/10: a view of someone grows a little at a time.`);
+    const basis = prepared.basisSeq !== undefined ? deps.thoughts.bySeq(storyId, owner, prepared.basisSeq)?.id ?? null : null;
     const t = deps.thoughts.insert(
       storyId,
       owner,
-      { text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance: prepared.importance, about: objectOf(prepared.aboutHandle) },
+      {
+        text: prepared.text, tags: prepared.tags, pinned: prepared.pinned, source, clockMin: clock, kind: prepared.kind, importance, about,
+        confidence: prepared.confidence ?? null, hope: prepared.hope ?? null, horizon: prepared.horizon ?? null, basis,
+      },
       turnId,
     );
     existing.set(prepared.text.toLowerCase(), t);
@@ -244,12 +343,12 @@ export function applyThoughtOps(
   return result;
 }
 
-/** A user's edit of one thought (advanced mode): text, kind, importance, about, tags. */
+/** A user's edit of one thought (advanced mode): text, kind, importance, about, tags; an expectation's confidence, hope, horizon. */
 export function editThought(
   deps: MindsDeps,
   storyId: string,
   t: Thought,
-  patch: { text?: string; kind?: string; importance?: unknown; about?: string | null; tags?: string[] },
+  patch: { text?: string; kind?: string; importance?: unknown; about?: string | null; tags?: string[]; confidence?: unknown; hope?: unknown; horizon?: unknown },
 ): void {
   const about =
     patch.about === undefined ? undefined : patch.about === null || !patch.about.trim() ? null : (deps.sheets.get(patch.about) ? patch.about : deps.memory.findByHandle(storyId, patch.about)?.id ?? null);
@@ -266,6 +365,9 @@ export function editThought(
     ...(patch.importance !== undefined ? { importance: clampImportance(patch.importance, t.importance) } : {}),
     ...(about !== undefined ? { about } : {}),
     ...(tags ? { tags } : {}),
+    ...(patch.confidence !== undefined ? { confidence: clampImportance(patch.confidence, t.confidence ?? 5) } : {}),
+    ...(patch.hope !== undefined ? { hope: normalizeHope(patch.hope) } : {}),
+    ...(patch.horizon !== undefined ? { horizon: normalizeHorizon(patch.horizon) } : {}),
   });
 }
 
@@ -335,6 +437,8 @@ export interface CharacterView {
   description?: string;
   /** The narrator's hand-over: who they are, until (and besides) the description (docs/11 §2.3). */
   concept?: string;
+  /** Their traits as nuanced phrases (docs/11 §2.7). */
+  nature?: string;
   state?: string;
   /** How they are related to others, from their side (docs/11 §2.6): own sheet only, or advanced. */
   ties?: TieView[];
@@ -422,7 +526,7 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
       knownAs: sheet.knownAs,
       nameKnown: viewer.kind === 'player' ? known : true,
       ...(viewer.kind === 'advanced' ? { realName: obj.name, playerKnowsName: known } : {}),
-      ...(own ? { description: sheet.description, concept: sheet.concept, state: sheet.state, ties: tieViews(deps, sheet.objectId) } : {}),
+      ...(own ? { description: sheet.description, concept: sheet.concept, nature: sheet.nature, state: sheet.state, ties: tieViews(deps, sheet.objectId) } : {}),
       ...(own ? { relations: relationViews(deps, storyId, defs, holders, sheet.objectId, viewer) } : {}),
       ...(viewer.kind === 'advanced' ? { tierId: sheet.tierId } : {}),
       seeded: sheet.seeded,

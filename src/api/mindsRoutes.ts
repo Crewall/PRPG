@@ -5,7 +5,7 @@ import { VariableDef, STATE_KEY, VarOpKind, normalizeAppliesTo, relationParts, v
 import type { Viewer } from '../minds/variables.ts';
 import { SCENARIO_TEMPLATES } from '../minds/templates.ts';
 import { applyChanges, applyThoughtOps, createCharacter, editThought, mindsView, thoughtLens, updateSheet } from '../minds/service.ts';
-import { THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
+import { HOPES, HORIZONS, THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
 import { setTie } from '../minds/ties.ts';
@@ -165,6 +165,8 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     knownAs: z.string().max(60).optional(),
     /** The narrator's hand-over: who they are (docs/11 §2.3). */
     concept: z.string().optional(),
+    /** Their nature: 3–6 traits as nuanced phrases (docs/11 §2.7). */
+    nature: z.string().max(600).optional(),
     /** Ties from this character's side, keyed by the other's object id or #handle; "" removes one (docs/11 §2.6). */
     ties: z.record(z.string(), z.string().max(120)).optional(),
     /** Advanced: whether the player knows this character's name (docs/11 §2.5). */
@@ -222,6 +224,7 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     if (name) app.memory.updateObject(oid, { name });
     if (ties) setTies(id, oid, ties);
     if (patch.concept !== undefined) patch.concept = patch.concept.trim();
+    if (patch.nature !== undefined) patch.nature = patch.nature.trim();
     if (playerKnowsName !== undefined) {
       const pc = app.sheets.player(id)?.objectId;
       if (pc && pc !== oid) {
@@ -309,6 +312,10 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
         importance: z.number().int().min(1).max(10).optional(),
         /** The object id or #handle it is about. */
         about: z.string().optional(),
+        /** Expectations (docs/11 §5.11). */
+        confidence: z.number().int().min(1).max(10).optional(),
+        hope: z.enum(HOPES).optional(),
+        horizon: z.enum(HORIZONS).optional(),
       })
       .safeParse(req.body);
     if (!body.success || !isOwner(id, body.data.owner)) {
@@ -388,6 +395,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
         /** An object id or #handle; null clears it. */
         about: z.string().nullable().optional(),
         tags: z.array(z.string()).optional(),
+        confidence: z.number().int().min(1).max(10).optional(),
+        hope: z.enum(HOPES).optional(),
+        horizon: z.enum(HORIZONS).optional(),
       })
       .parse(req.body ?? {});
     if (body.revoked && t.status === 'active') app.thoughts.revoke(tid, null);
@@ -396,9 +406,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
     }
     if (body.pinned !== undefined) app.thoughts.setPinned(tid, body.pinned);
-    const { text, kind, importance, about, tags } = body;
-    if ([text, kind, importance, about, tags].some((x) => x !== undefined)) {
-      editThought(deps, t.storyId, t, { text, kind, importance, about, tags });
+    const { text, kind, importance, about, tags, confidence, hope, horizon } = body;
+    if ([text, kind, importance, about, tags, confidence, hope, horizon].some((x) => x !== undefined)) {
+      editThought(deps, t.storyId, t, { text, kind, importance, about, tags, confidence, hope, horizon });
       // An edit is the user deciding it matters now: it starts fading from here.
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
     }
