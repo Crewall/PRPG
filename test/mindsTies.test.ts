@@ -200,3 +200,45 @@ describe('tie labels', () => {
     expect(cleanTieLabel('one two three four five six seven eight nine ten').split(' ')).toHaveLength(8);
   });
 });
+
+describe('adding a character by hand', () => {
+  it('joins the scene, is announced to the narrator, gets a mind written, ties both ways', async () => {
+    const h = mindsHarness();
+    try {
+      await h.opening();
+      const server = Fastify();
+      await registerHttpRoutes(server, h.app);
+      const kael = h.app.sheets.player(h.storyId)!.objectId;
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/stories/${h.storyId}/minds`,
+        payload: { name: 'Brenna', pronouns: 'she/her', appearance: 'Red hair, soot on her arms.', concept: 'The village smith; owes Kael a favour.', nature: 'blunt, plain-spoken', here: true, playerKnowsName: true, ties: { [kael]: 'old friend' } },
+      });
+      expect(res.statusCode).toBe(201);
+      const brenna = res.json().objectId as string;
+      const scene = h.app.stories.getScene(h.app.stories.getStory(h.storyId)!.currentSceneId!)!;
+      expect(scene.activeNpcIds).toContain(brenna);
+      expect(h.app.sheets.get(brenna)!.nature).toBe('blunt, plain-spoken');
+      expect(h.app.names.knows(kael, brenna)).toBe(true);
+      expect(h.app.ties.of(brenna).map((t) => t.label)).toEqual(['old friend']);
+      expect(h.app.db.prepare(`SELECT count(*) AS n FROM jobs WHERE type = 'minds_seed' AND json_extract(payload_json, '$.objectId') = ?`).get<{ n: number }>(brenna)!.n).toBe(1);
+
+      // Next round: she is called (first appearance) and the narrator is asked to bring her in.
+      h.script.characters['Marta'] = [JSON.stringify({ say: '' })];
+      h.script.characters['Tom'] = [JSON.stringify({ say: '' })];
+      h.script.characters['Brenna'] = [JSON.stringify({ say: 'Kael! Still owe you that drink.' })];
+      h.script.narrator.push(round('Brenna shoulders in from the rain.', { briefs: {} }));
+      await h.play('I wait.');
+      const nar = h.requests('narrator').at(-1)!.messages.at(-1)!.content;
+      expect(nar).toContain('Note: the player added a character who is here now: #brenna Brenna (she/her) — Red hair, soot on her arms.');
+      expect(nar).toContain('Who they are: The village smith; owes Kael a favour.');
+      expect(h.requests('character:Brenna').at(-1)!.messages.at(-1)!.content).toContain('You have just arrived');
+
+      const dup = await server.inject({ method: 'POST', url: `/api/stories/${h.storyId}/minds`, payload: { name: 'Brenna' } });
+      expect(dup.statusCode).toBe(409);
+      await server.close();
+    } finally {
+      h.close();
+    }
+  });
+});

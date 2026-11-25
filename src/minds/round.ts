@@ -28,6 +28,8 @@ import { openDialogueTurns, renderTranscript } from './dialogue.ts';
 import { NO_DIRECTION, resolveDirection } from './director.ts';
 import type { DirectionResult } from './director.ts';
 import { queueCompactions } from './compaction.ts';
+import { awarenessNote, normalizeAwareness } from './presence.ts';
+import type { Awareness } from './presence.ts';
 
 // One normal round of the Minds engine (docs/10 §5): characters declare (in
 // parallel) → the narrator writes prose + a round block (streamed; the block
@@ -230,9 +232,13 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     ? [...opts.replay.presentOrder.filter((x) => inScene.includes(x)), ...inScene.filter((x) => !opts.replay!.presentOrder!.includes(x))]
     : shuffled(inScene, deps.rng);
   for (const oid of presentIds) if (!deps.sheets.get(oid)) deps.sheets.upsert(storyId, oid, {});
+  // Who can perceive (docs/10 §5.1f): someone asleep or unconscious at the start of the round is never called,
+  // hears nothing and gets no brief.
+  const awarenessAtStart = new Map<string, Awareness>(presentIds.map((oid) => [oid, deps.sheets.get(oid)?.awareness ?? 'awake']));
+  const awakeIds = presentIds.filter((oid) => awarenessAtStart.get(oid) === 'awake');
 
   // ---- 1. Who acts (docs/10 §5.1) ----
-  const candidates: GateCandidate[] = presentIds.map((oid) => {
+  const candidates: GateCandidate[] = awakeIds.map((oid) => {
     const obj = deps.memory.getObject(oid)!;
     return { id: oid, name: obj.name, aliases: obj.aliases, handle: obj.handle ?? deps.memory.ensureHandle(oid)! };
   });
@@ -259,7 +265,7 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
   const gate = dialogue.length
     ? { called: [] as string[], idle: presentIds, reasons: {} as Record<string, string> } // the wrap-up calls nobody
     : directed
-      ? directedGate(presentIds, direction, forcedSet, spotlight, mset.maxCharactersPerRound)
+      ? directedGate(awakeIds, direction, forcedSet, spotlight, mset.maxCharactersPerRound)
       : chooseCallers({
           present: candidates,
           playerText: `${decl.say}\n${decl.do}`,
@@ -351,7 +357,11 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       ? `The player character's sheet lacks ${[!playerSheet.appearance.trim() && 'an appearance', !playerSheet.pronouns.trim() && 'pronouns'].filter(Boolean).join(' and ')}: add ${!playerSheet.appearance.trim() && !playerSheet.pronouns.trim() ? 'them' : 'it'} in the block's "player" field, from what the story has established.`
       : undefined;
   if (playerAsk) context = context ? `${context}\n\n${playerAsk}` : playerAsk;
-  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, situationTags: lastBlock.tags, context });
+  // The order the narrator tells them in: whoever the player spoke to answers first, the rest in this round's order.
+  const acting = declarations.filter((d) => d.status !== 'idle').map((d) => d.objectId);
+  const spokenTo = direction.all ? [] : direction.to;
+  const order = [...acting.filter((x) => spokenTo.includes(x)), ...acting.filter((x) => !spokenTo.includes(x))];
+  const nCall = buildNarratorCall(deps, { storyId, player: { ...decl, ...(playerTo ? { to: playerTo } : {}) }, presentIds, declarations, order, situationTags: lastBlock.tags, context });
   const narrator = new Storyteller({ session: deps.agents.getSession(nCall.sessionId)!, bound: narratorBound, threadLog: deps.threadLog, storyId });
   const narratorText = opts.replay
     ? await replayNarration(deps, story, turn, nCall.roundMessage, opts.replay, signal)
@@ -449,6 +459,14 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
       }
       const sheet = deps.sheets.get(oid);
       if (sheet && !sheet.seeded && !sheet.description.trim()) seedQueue.push(oid);
+    }
+    // Who falls asleep, passes out or wakes (docs/10 §5.1f), once newcomers exist.
+    for (const [key, raw] of Object.entries(block.awareness)) {
+      const oid = resolveKey(deps, storyId, key, playerId);
+      const to = normalizeAwareness(raw);
+      if (!oid || oid === 'world' || oid === playerId || !deps.sheets.get(oid)) blockProblems.push(`awareness: unknown '${key}'`);
+      else if (!to) blockProblems.push(`awareness: '${raw}' for ${key} is not awake, asleep or unconscious`);
+      else deps.sheets.upsert(storyId, oid, { awareness: to });
     }
     // Once everyone has entered (two newcomers may be family): their ties, whom they already know by name, and
     // who already knows theirs (docs/11 §2.5, §2.6).
@@ -593,29 +611,49 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     if (namesOn(deps, storyId)) {
       for (const sp of speeches) {
         const speaker = sp.from === 'player' ? playerId : sp.from;
-        learnFromSpeech(deps, storyId, [...presentIds, playerId].filter((x) => x && x !== speaker), sp.say, turn.id);
+        learnFromSpeech(deps, storyId, [...awakeIds, playerId].filter((x) => x && x !== speaker), sp.say, turn.id);
       }
       if (playerId) learnFromSpeech(deps, storyId, [playerId], prose, turn.id);
     }
     const speakerLabel = (hearer: string, from: string) => (from === 'player' ? (playerId ? labelFor(deps, storyId, hearer, playerId) : 'The player character') : labelFor(deps, storyId, hearer, from));
     const heardPlayerAlready = new Set(heardNow ? results.filter((r) => r.reply).map((r) => r.objectId) : []);
+    const awarenessNow = (oid: string): Awareness => deps.sheets.get(oid)?.awareness ?? 'awake';
+    const sleptThrough: string[] = [];
     for (const oid of presentIds) {
+      const was = awarenessAtStart.get(oid) ?? 'awake';
+      const now = awarenessNow(oid);
+      const brief = briefs.get(oid);
+      if (was !== 'awake') {
+        // Asleep or unconscious all round: nothing reaches them. Woken by the block: they slept through what was
+        // said, and notice what their brief says as they come to (docs/10 §5.1f).
+        if (now === 'awake') queueForCharacter(deps, storyId, oid, [awarenessNote(was, now), ...(brief ? [maskUnknownNames(deps, storyId, oid, brief)] : [])].join('\n'), turn.id);
+        else if (brief) sleptThrough.push(oid);
+        continue;
+      }
       const heard = speeches
         .filter((s) => s.from !== oid && !(s.from === 'player' && heardPlayerAlready.has(oid)))
         .map((s) => `- ${speakerLabel(oid, s.from)}${s.to ? ` (to ${s.to})` : ''}: ${s.line}`);
-      const brief = briefs.get(oid);
       const parts = [brief ? maskUnknownNames(deps, storyId, oid, brief) : 'Nothing notable changes for you.'];
       if (heard.length) parts.push(`Heard:\n${heard.join('\n')}`);
       const turnedOut = outcomeNotes.get(oid);
       if (turnedOut?.length) parts.push(`How your expectations turned out:\n${turnedOut.map((x) => `- ${x}`).join('\n')}`);
       const notes = memoryNotes.get(oid);
       if (notes?.length) parts.push(`About your memory: ${notes.join(' ')}`);
+      // They lived through the round, then fell asleep or passed out.
+      if (now !== 'awake') parts.push(`Then ${awarenessNote('awake', now).replace(/^You/, 'you')}`);
       queueForCharacter(deps, storyId, oid, parts.join('\n'), turn.id);
+    }
+    if (sleptThrough.length) {
+      const who = sleptThrough.map((oid) => `#${deps.memory.getObject(oid)?.handle ?? '?'}`).join(', ');
+      blockProblems.push(`briefs: for someone not awake (${who})`);
+      queueForNarrator(deps, storyId, `Note: ${who} ${sleptThrough.length > 1 ? 'are' : 'is'} not awake, so your brief was dropped: they perceive nothing. If something wakes them, set "awareness": "awake" for them in the block, with a brief of what they notice as they come to.`, turn.id);
     }
     for (const oid of entered) {
       const loc = current().locationObjectId ? deps.memory.getObject(current().locationObjectId!)?.name : undefined;
       const brief = briefs.get(oid);
-      queueForCharacter(deps, storyId, oid, brief ? maskUnknownNames(deps, storyId, oid, brief) : `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
+      const now = awarenessNow(oid);
+      if (now !== 'awake') queueForCharacter(deps, storyId, oid, `You are here${loc ? ` at ${loc}` : ''}, ${now}.`, turn.id);
+      else queueForCharacter(deps, storyId, oid, brief ? maskUnknownNames(deps, storyId, oid, brief) : `You have just arrived${loc ? ` at ${loc}` : ''}.`, turn.id);
     }
 
     // 5f. The narrator's thread, the clock, the turn.

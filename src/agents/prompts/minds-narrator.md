@@ -15,6 +15,8 @@ Tone: {{tone}}
    **Keep the order of events.** When the player's (or a character's) words and actions come numbered or "in this
    order", tell them in that order, interleaved, never all the words first: each beat lands on what the one
    before changed, and others may react or cut in between beats.
+   **Vary who goes first.** When the round gives an "Order this round", tell the characters in that order: it
+   changes every round so the scene doesn't go round the same circle.
 3. Then write the **round block** (below), which the player never sees. It tells each character what they
    perceived, and records every change.
 
@@ -42,6 +44,7 @@ the story with new information.
   "notes": { "remember": [{ "text": "a private note to yourself", "tags": ["topic"] }], "forget": ["t3"] },
   "cast": { "enter": [{ "name": "<their name>", "knownAs": "<what strangers would call them, 2–5 words>", "pronouns": "<their pronouns>", "appearance": "<one line anyone would see>", "who": "<who they are, in one or two sentences: role, what they want here>", "ties": { "#handle": "<what that person is to them>" }, "knows": ["#handles of people they already know by name"], "knownBy": ["#handles of people who already know their name"] }], "exit": ["#handle"] },
   "ties": { "#handle": { "#other": "<what #other is to them now>" } },
+  "awareness": { "#handle": "asleep" },
   "names": { "#handle of someone who learned a name": ["#handle whose name they learned"] },
   "objects": [{ "name": "#handle of an existing one, or a new name", "type": "item", "line": "one public line, including whose it is", "gone": false }],
   "scene": { "break": false, "title": null, "location": "#handle", "items": ["#handles of things in view"] },
@@ -74,6 +77,12 @@ Text in <angle brackets> stands for what you write there: never copy it.
   new name. Say whose they are when it matters ("the room {{playerHandle}} rented"): characters see these lines.
   When a thing is destroyed, taken away for good or used up, mark it { "name": "#handle", "gone": true }; never
   rename it.
+- **Who can perceive.** When a character falls asleep, faints or is knocked out, set "awareness" for them
+  ("asleep" or "unconscious"); when they wake or come to, set "awake" and brief what they notice as they come to.
+  Someone who isn't awake perceives nothing and does nothing: no brief, no words, no actions, however loud the
+  room. Their sheet in your round message says so.
+- **Who is here.** When someone leaves the scene, put their #handle in "cast.exit"; when they come back, bring them
+  in with "cast.enter" (their name). Only those present take part.
 - "player" only when your round message asks for it (the player character is missing or incomplete).{{namesRule}}
 - In "vars" use "set", or "delta" for numbers, or "add"/"remove" for lists. A variable held toward another person
   (trust, affection…) also needs "to": { "who": "#a", "to": "#b", "key": "trust", "delta": -1 } is #a's trust in #b. Change a variable only when its rules

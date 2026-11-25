@@ -3,6 +3,7 @@ import { id } from '../../util/id.ts';
 import { VariableDef } from '../../minds/variables.ts';
 import type { ChangeOutcome, VariableValue } from '../../minds/variables.ts';
 import type { Thought } from '../../minds/thoughts.ts';
+import type { Awareness } from '../../minds/presence.ts';
 
 // Storage for the Minds engine (docs/11 §7): character sheets, scenario
 // variables (definitions, values, change log) and self-written thoughts.
@@ -24,6 +25,8 @@ export interface CharacterSheet {
   /** 3–6 traits as nuanced phrases (docs/11 §2.7). */
   nature: string;
   state: string;
+  /** Whether they can perceive (docs/10 §5.1f). */
+  awareness: Awareness;
   tierId: string | null;
   seeded: boolean;
   createdAt: number;
@@ -41,13 +44,14 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   concept: (r.concept as string) ?? '',
   nature: (r.nature as string) ?? '',
   state: r.state as string,
+  awareness: ((r.awareness as string) || 'awake') as Awareness,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
   createdAt: r.created_at as number,
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'nature' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'nature' | 'state' | 'awareness' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -73,17 +77,18 @@ export function createSheetStore(db: Db) {
         concept: patch.concept ?? prev?.concept ?? '',
         nature: patch.nature ?? prev?.nature ?? '',
         state: patch.state ?? prev?.state ?? '',
+        awareness: patch.awareness ?? prev?.awareness ?? 'awake',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, awareness, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
            appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, concept = excluded.concept,
-           nature = excluded.nature, state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.nature, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           nature = excluded.nature, state = excluded.state, awareness = excluded.awareness, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.nature, next.state, next.awareness, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 
@@ -256,6 +261,8 @@ function rowToThought(r: Row, tags: string[]): Thought {
     hope: (r.hope as Thought['hope']) ?? null,
     horizon: (r.horizon as Thought['horizon']) ?? null,
     basis: (r.basis as string) ?? null,
+    userEditedAt: r.user_edited_at == null ? null : Number(r.user_edited_at),
+    formerText: (r.former_text as string) ?? null,
     revokedTurnId: (r.revoked_turn_id as string) ?? null,
     lastRecalledTurnId: (r.last_recalled_turn_id as string) ?? null,
     recallCount: r.recall_count as number,
@@ -324,13 +331,18 @@ export function createThoughtStore(db: Db) {
       db.transaction(() => {
         db.prepare(
           `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, renewed_clock_min, kind, importance, about, revises,
-                                 renewed_turn_index, confidence, hope, horizon, basis, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT idx FROM turns WHERE id = ?), (SELECT MAX(idx) FROM turns WHERE story_id = ?)), ?, ?, ?, ?, ?, ?)`,
+                                 renewed_turn_index, confidence, hope, horizon, basis, user_edited_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT idx FROM turns WHERE id = ?), (SELECT MAX(idx) FROM turns WHERE story_id = ?)), ?, ?, ?, ?, ?, ?, ?)`,
         ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, t.clockMin ?? null, t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.revises ?? null,
-          turnId, storyId, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, now, now);
+          turnId, storyId, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, t.source === 'user' ? now : null, now, now);
         for (const tag of t.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tid, tag);
       });
       return store.get(tid)!;
+    },
+
+    /** Changed by hand just now (docs/11 §5.10c): always later than any earlier mark, so a rewind can tell. */
+    markHandEdited(thoughtId: string): void {
+      db.prepare(`UPDATE thoughts SET user_edited_at = MAX(COALESCE(user_edited_at, 0) + 1, ?) WHERE id = ?`).run(Date.now(), thoughtId);
     },
 
     revoke(thoughtId: string, turnId: string | null): void {
@@ -349,7 +361,8 @@ export function createThoughtStore(db: Db) {
     ): void {
       const sets: string[] = [];
       const args: (string | number | null)[] = [];
-      if (patch.text !== undefined) (sets.push('text = ?'), args.push(patch.text));
+      // The old wording is kept when the text changes (SET reads the row as it was before the update).
+      if (patch.text !== undefined) (sets.push('former_text = CASE WHEN text <> ? THEN text ELSE former_text END, text = ?'), args.push(patch.text, patch.text));
       if (patch.confidence !== undefined) (sets.push('confidence = ?'), args.push(patch.confidence));
       if (patch.hope !== undefined) (sets.push('hope = ?'), args.push(patch.hope));
       if (patch.horizon !== undefined) (sets.push('horizon = ?'), args.push(patch.horizon));

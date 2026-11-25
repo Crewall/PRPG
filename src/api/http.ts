@@ -19,6 +19,7 @@ import { defaultPrompt, renderPrompt } from '../agents/prompts.ts';
 import { callJson } from '../llm/jsonCall.ts';
 import { rollSeeds, parseSeeds, defaultSeedsText } from '../util/seeds.ts';
 import { anthropicDriver } from '../llm/anthropicDriver.ts';
+import { createVersionInfo } from '../util/version.ts';
 import { openaiDriver } from '../llm/openaiDriver.ts';
 
 const CreateStoryBody = z.object({
@@ -44,6 +45,10 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
     providers: Object.keys(app.settingsService.effective().connections),
     profiles: registry.listProfiles(),
   }));
+
+  // The version check (docs/10 §11.2): is the server running the code on disk, and which client files are there now.
+  const version = createVersionInfo();
+  server.get('/api/system/version', async () => version.now());
 
   server.get('/api/system/models', async () => {
     const eff = app.settingsService.effective();

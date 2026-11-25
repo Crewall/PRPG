@@ -1,6 +1,6 @@
 # 11 — Character sheets: description, state, variables, thoughts
 
-**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9), opinions kept in proportion (§5.7b), the character's nature (§2.7), expectations (§5.11) and the full character sheet (§5.10) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
+**Status: built (milestones M2, M4, M6 and M7 of doc 10)**, seeding, recaps after compaction, the public profile (§2.4), the guaranteed player character (§2.1), names that are learned (§2.5), the narrator's hand-over and ties (§2.3, §2.6), relation variables (§4.9), the guided scenario editor (§4.8), thoughts v2 with kinds, importance and fading (§5.6–5.9), opinions kept in proportion (§5.7b), the character's nature (§2.7), expectations (§5.11), the full character sheet (§5.10), hand edits that stick (§5.10c) and adding a character during play (§2.2) included; the compactor does not propose thought merges yet (doc 10 §14). Part of the Minds engine ([doc 10](10-minds-engine.md)). This doc defines what a
 character *is* in data, who may see and change each part, and how its self-written memory works.
 
 ---
@@ -42,7 +42,8 @@ in play: the barkeep took the player and the stranger for one person). It is cre
 - written by the user: a small form (name, pronouns, appearance, who they are) that opens before a new Minds story
   starts, and from the 🎭 chip in the Present bar at any time. A new story's form starts **filled in from the
   character you played last** (the most recently updated player sheet of another story: `GET
-  /api/minds/last-player`), with "Start blank" to clear it;
+  /api/minds/last-player`; when the server has none or doesn't answer, the last character typed in this form on
+  this device, kept in browser storage), with "Start blank" to clear it;
 - carried over from the classic player interview (the story's player object gets a sheet);
 - **by the narrator**, as a fallback: while the story has no player character, or its sheet lacks a name-worthy
   appearance or pronouns, the narrator's round message asks for them and the round block's `player` field
@@ -56,6 +57,13 @@ prose is its POV.
 
 The scenario can list characters up front, with full sheets. They join the scene when the narrator brings them in
 (`cast.enter` with a matching name or handle) or when the user adds them.
+
+**Adding a character during play** (Cast tab → "+ Add character"): name, pronouns, appearance, known-as, "in short"
+(the hand-over), nature and description (all but the name optional), and optionally a tie each way with the player
+character. They get a mind like anyone the narrator brings in: a seed job writes what was left empty and never
+overwrites what the user wrote. "Here now" (default on) adds them to the scene, tells them they have just arrived,
+and asks the narrator, in its next round message, to bring them in. A name already in the story is refused.
+`POST /api/stories/:id/minds` with `here`, `playerKnowsName`, `ties`, `concept`, `nature`.
 
 ### 2.3 New characters during play (seeding)
 
@@ -616,6 +624,28 @@ place.
 
 Normal mode keeps the public card for others and your own character's sheet.
 
+### 5.10c Hand edits stick (settled after a play test)
+
+The play test: an agenda or thought forgotten (×) on the sheet came back, word for word, a round or a ↻ later. Two
+causes. The mind's thread still held it (an agenda is shown once per window, its own earlier replies wrote it), so
+the character, never told, wrote it again with `remember`; and a rewind (↻, Edit, Revert) restored the saved state,
+which had the thought as it was before the hand edit.
+
+- **The mind is told.** Forgetting, restoring or editing a thought by hand queues a note for its owner's next
+  round (only once it has a thread): `You have let go of t3 (agenda): "…" It is no longer on your mind; don't take
+  it up again unless something new brings it back.` · `t3 is on your mind again: …` · `Your thought t3 has changed
+  (it said: "…"). It now reads: …`. A save that changes nothing visible tells it nothing.
+- **Not written back word for word.** A `remember` (from the mind, the compactor or the seeder) with the exact text
+  of a thought forgotten by hand is not kept; the mind gets "You let go of "…"; it stays forgotten." The wording a
+  thought had before your last edit (`former_text`) counts as restating the edited thought, so the old wording
+  renews it instead of coming back as a second thought. You can still add the same text yourself.
+- **A rewind keeps your hand edits.** A thought changed, forgotten, restored, pinned or added by hand carries
+  `user_edited_at`. When a rewind restores a saved state, a thought whose hand edit is newer than the saved copy
+  (or that the saved state doesn't have) keeps its current version, unless its owner is no longer in the story.
+  Hand edits aren't part of a turn, so ↻ and Revert don't undo them.
+- Data: `018-thought-hand-edits.sql` (`thoughts.user_edited_at`, `thoughts.former_text`). Tests:
+  `test/mindsHandEdits.test.ts`.
+
 ## 6. Roster and handles
 
 - Every roster object (`memory_objects`) gets a **handle**, unique within the story: `#` + a slug of the name
@@ -631,7 +661,7 @@ Normal mode keeps the public card for others and your own character's sheet.
 As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
 (`id, story_id, key, sort, def_json`), because the shape differs per type. Later migrations: `013-minds-ties.sql`
 (`character_sheets.concept`, `character_ties`), `014-minds-thoughts-v2.sql` (`thoughts.kind`, `importance`,
-`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`), `016-undo-slot.sql`, `017-minds-expectations-nature.sql` (`character_sheets.nature`; `thoughts.renewed_turn_index`, `confidence`, `hope`, `horizon`, `basis`); relation values
+`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`), `016-undo-slot.sql`, `017-minds-expectations-nature.sql` (`character_sheets.nature`; `thoughts.renewed_turn_index`, `confidence`, `hope`, `horizon`, `basis`), `018-thought-hand-edits.sql` (`thoughts.user_edited_at`, `former_text`, §5.10c), `019-minds-awareness.sql` (`character_sheets.awareness`, doc 10 §5.1f); relation values
 use `variable_values.holder = "<from>><to>"`. Handles are stored without the `#`
 (`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 

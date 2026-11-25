@@ -6,6 +6,11 @@
 import { h, api } from './ui.js';
 import { openHelp, helpLink, firstRunHint } from './help.js';
 import * as minds from './minds.js';
+import './back.js'; // Android back closes the top dialog or the side panel
+import { checkVersion, versionInfo } from './version.js'; // reload / restart after an update
+
+/** The last character typed in the player form on this device (docs/11 §2.1): the prefill when the server has none. */
+const LAST_PC_KEY = 'prpg.lastPlayer';
 
 const app = document.getElementById('app');
 // Clipboard copy that also works on plain-http LAN/Termux, where the async
@@ -466,6 +471,7 @@ async function renderPlay(storyId) {
         try {
           if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
           else await api.post(`/api/stories/${storyId}/minds`, { ...body, isPlayer: true });
+          try { localStorage.setItem(LAST_PC_KEY, JSON.stringify(body)); } catch {}
           close('saved');
           refreshSceneHeader();
         } catch (e) { err.textContent = e.message; }
@@ -485,12 +491,16 @@ async function renderPlay(storyId) {
             pc ? null : h('button', { class: 'ghost', title: 'The narrator creates your character from the premise; you can edit it later from the 🎭 chip.', onclick: () => close('skipped') }, 'Let the narrator decide'),
             pc ? h('button', { class: 'ghost', onclick: () => close('cancelled') }, 'Cancel') : null,
             save)));
+      // Android back: leave the form without starting the story (the 🎭 chip opens it again).
+      modal.backClose = () => close('cancelled');
       document.body.append(modal);
       nameIn.focus();
       // A new story starts from the character you played last (you can change anything, or start blank).
       if (!pc) {
-        api.get(`/api/minds/last-player?exclude=${encodeURIComponent(storyId)}`).then((last) => {
-          if (!last || last.none || nameIn.value || lookIn.value) return;
+        const local = () => { try { return JSON.parse(localStorage.getItem(LAST_PC_KEY) || 'null'); } catch { return null; } };
+        api.get(`/api/minds/last-player?exclude=${encodeURIComponent(storyId)}`).catch(() => null).then((fromServer) => {
+          const last = fromServer && !fromServer.none ? fromServer : local();
+          if (!last || !last.name || nameIn.value || lookIn.value) return;
           nameIn.value = last.name || ''; pronIn.value = last.pronouns || ''; knownIn.value = last.knownAs || '';
           lookIn.value = last.appearance || ''; whoIn.value = last.description || '';
           const note = h('div', { class: 'sub prefill-note' },
@@ -501,6 +511,7 @@ async function renderPlay(storyId) {
       }
     });
   }
+
 
   async function refreshSceneHeader() {
     // Minds engine: the scene's present characters, each its own mind (tooltip: what you can see of them).
@@ -519,7 +530,7 @@ async function renderPlay(storyId) {
           : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
           ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) || floor.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
-              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${marks(c.objectId)}`))
+              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.awareness === 'asleep' ? '💤 ' : c.awareness === 'unconscious' ? '😵 ' : ''}${c.name}${marks(c.objectId)}`))
           : [h('span', { class: 'sub' }, 'nobody else here yet')]),
         h('span', { class: 'spacer' }),
         h('button', { class: `chip adv${advanced ? ' on' : ''}`, title: 'Advanced mode: see and edit everything (spoilers)', onclick: () => setAdvanced(!advanced) }, advanced ? '🔍 Advanced: on' : '🔍 Advanced'),
@@ -1088,7 +1099,7 @@ async function renderPlay(storyId) {
     if (story.settings?.engine === 'minds') {
       let hasPc = true;
       try { hasPc = (await api.get(`/api/stories/${storyId}/minds`)).characters.some((c) => c.isPlayer); } catch {}
-      if (!hasPc) await showPlayerForm(null);
+      if (!hasPc && (await showPlayerForm(null)) === 'cancelled') return; // backed out: the story waits for you
       if (turnCount > 0 || busy || !wsOpen()) return;
     }
     showStage('the storyteller opens the story…');
@@ -1524,6 +1535,8 @@ async function renderPlay(storyId) {
     }
     const healthRow = row('server', 'checking…');
     rows.push(healthRow);
+    const v = versionInfo();
+    if (v) rows.push(row('version', `${v.commit || 'unknown'}${v.startedAt ? ` · server started ${new Date(v.startedAt).toLocaleString()}` : ''}${v.restartNeeded ? ' · restart needed' : ''}`));
     const reconnectBtn = h('button', { class: 'small' }, 'Reconnect now');
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
@@ -1540,6 +1553,7 @@ async function renderPlay(storyId) {
       const j = r.ok ? await r.json() : null;
       healthRow.lastChild.textContent = r.ok ? `✓ reachable (providers: ${(j?.providers || []).join(', ') || 'none'})` : `✗ HTTP ${r.status}`;
     } catch (e) { healthRow.lastChild.textContent = '✗ unreachable — is the PRPG server running? (' + e.message + ')'; }
+    checkVersion();
   });
 
   function onWsMessage(ev) {
@@ -1683,6 +1697,9 @@ const newSettingsId = (p) => p + Math.random().toString(36).slice(2, 8);
 const capsForPreset = (preset) => (preset === 'deepseek' || preset === 'openrouter' ? { sampling: true, reasoning: 'toggle', json: 'json_object' } : { sampling: true, reasoning: 'none', json: 'json_object' });
 const opt = (value, label, current) => h('option', { value, ...(value === current ? { selected: true } : {}) }, label);
 const mini = (label, el) => h('div', { class: 'mini' }, h('span', { class: 'sub' }, label), el);
+// A settings box's header: its name and its own buttons on one line, a short note under them.
+const blockHead = (title, note, ...buttons) =>
+  h('div', { class: 'block-head' }, h('div', { class: 'block-title' }, title, h('span', { style: 'flex:1' }), ...buttons), note ? h('div', { class: 'sub' }, note) : null);
 
 async function renderSettings() {
   app.replaceChildren(topbar(h('button', { class: 'ghost small', onclick: () => (location.hash = '/') }, '← Home')), h('div', { class: 'scroll' }, h('div', { class: 'container' }, h('div', { class: 'empty' }, 'Loading…'))));
@@ -1721,7 +1738,8 @@ async function renderSettings() {
       const used = rolesOnTier(t.id);
       const m = st.models.find((x) => x.id === t.modelId);
       const c = m && conn(m.providerId);
-      const label = h('input', { value: t.label, placeholder: 'tier name', oninput: (e) => (t.label = e.target.value) });
+      const title = h('b', {}, t.label || 'Unnamed tier');
+      const label = h('input', { value: t.label, placeholder: 'tier name', oninput: (e) => { t.label = e.target.value; title.textContent = t.label || 'Unnamed tier'; } });
       const model = h('select', { onchange: (e) => { t.modelId = e.target.value; paint(); } }, opt('', '— pick a model —', t.modelId), ...st.models.map((x) => opt(x.id, modelName(x), t.modelId)));
       const maxT = h('input', { type: 'number', min: '1', step: '1', value: t.maxTokens, oninput: (e) => (t.maxTokens = parseInt(e.target.value, 10) || 1) });
       const temp = h('input', { type: 'number', min: '0', max: '2', step: '0.1', placeholder: '—', value: t.temperature ?? '', title: 'Empty = not sent (some models reject it)', oninput: (e) => { const v = e.target.value.trim(); t.temperature = v === '' ? undefined : parseFloat(v); } });
@@ -1739,7 +1757,10 @@ async function renderSettings() {
         m && m.caps.reasoning === 'none' && t.reasoning !== 'default' ? ' · this model has no reasoning switch' : '',
         m && m.caps.reasoning === 'always' && t.reasoning === 'off' ? ' · this model always reasons, so "off" is ignored' : '',
         m && t.effort && m.caps.efforts && !m.caps.efforts.includes(t.effort) ? ` · effort "${t.effort}" isn't offered by this model (only ${m.caps.efforts.join(', ')}), so its default is used` : '');
-      return h('div', { class: 'tier-block' }, h('div', { class: 'tier-row' }, label, model, mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb), rm), info);
+      return h('div', { class: 'set-block' },
+        blockHead(title, m ? modelName(m) : 'no model', rm),
+        h('div', { class: 'tier-row' }, mini('name', label), mini('model', model), mini('max tokens', maxT), mini('temperature', temp), mini('reasoning', reasoning), mini('effort', effort), mini('if busy, use', fb)),
+        info);
     });
     const add = h('button', { class: 'small', onclick: () => { st.tiers.push({ id: newSettingsId('t'), label: 'New tier', modelId: st.models[0]?.id || '', maxTokens: 2048, reasoning: 'default' }); paint(); } }, '+ Add tier');
     const suggest = h('button', { class: 'small', title: 'DeepSeek for every tier: v4-pro for Heavy, flash with reasoning off for Medium and Light', onclick: applySuggestedSetup }, 'Use suggested DeepSeek setup');
@@ -1759,9 +1780,11 @@ async function renderSettings() {
     const rows = st.models.map((m) => {
       const inUse = st.tiers.some((t) => t.modelId === m.id);
       const c = conn(m.providerId);
-      const label = h('input', { value: m.label, placeholder: 'label', oninput: (e) => (m.label = e.target.value) });
+      const titleOf = () => m.label || m.model || 'New model';
+      const title = h('b', {}, titleOf());
+      const label = h('input', { value: m.label, placeholder: 'label', oninput: (e) => { m.label = e.target.value; title.textContent = titleOf(); } });
       const provider = h('select', { onchange: (e) => { m.providerId = e.target.value; paint(); } }, ...st.connections.map((x) => opt(x.id, x.label, m.providerId)));
-      const model = h('input', { value: m.model, list: 'ml-' + m.providerId, placeholder: 'model id', oninput: (e) => (m.model = e.target.value),
+      const model = h('input', { value: m.model, list: 'ml-' + m.providerId, placeholder: 'model id', oninput: (e) => { m.model = e.target.value; title.textContent = titleOf(); },
         onchange: () => { const known = (modelLists[m.providerId] || []).find((x) => x.id === m.model); if (known) { m.caps = { ...known.caps }; if (!m.label) m.label = known.name; paint(); } } });
       const testRes = h('span', { class: 'sub' });
       const test = h('button', { class: 'link', onclick: async () => {
@@ -1774,11 +1797,14 @@ async function renderSettings() {
       const json = h('select', { onchange: (e) => (m.caps.json = e.target.value) }, opt('json_object', 'JSON mode', m.caps.json), opt('schema', 'structured outputs', m.caps.json), opt('prompt', 'prompt only', m.caps.json));
       const reasoning = h('select', { onchange: (e) => (m.caps.reasoning = e.target.value) }, opt('toggle', 'switchable', m.caps.reasoning), opt('always', 'always on', m.caps.reasoning), opt('none', 'none', m.caps.reasoning));
       const sampling = h('input', { type: 'checkbox', ...(m.caps.sampling ? { checked: true } : {}), onchange: (e) => (m.caps.sampling = e.target.checked) });
-      return h('div', { class: 'model-block' },
-        h('div', { class: 'model-row' }, label, provider, model, test, rm),
+      const tiersOn = st.tiers.filter((t) => t.modelId === m.id).map((t) => t.label || 'a tier');
+      return h('div', { class: 'set-block' },
+        blockHead(title, tiersOn.length ? `used by ${tiersOn.join(', ')}` : 'not used by a tier', test, rm),
+        testRes,
+        h('div', { class: 'model-row' }, mini('label', label), mini('provider', provider), mini('model id', model)),
         h('div', { class: 'caps-row sub' }, h('span', {}, 'JSON:'), json, h('span', {}, 'reasoning:'), reasoning,
           m.caps.efforts ? h('span', { title: 'Effort levels this model accepts (from the provider)' }, `efforts: ${m.caps.efforts.join(' / ')}`) : null,
-          h('label', { class: 'inline' }, sampling, ' accepts temperature'), testRes));
+          h('label', { class: 'inline' }, sampling, ' accepts temperature')));
     });
     const lists = Object.entries(modelLists).map(([cid, list]) => h('datalist', { id: 'ml-' + cid }, ...list.map((x) => h('option', { value: x.id }, x.name))));
     const add = h('button', { class: 'small', disabled: !st.connections.length, onclick: () => { const c = st.connections[0]; st.models.push({ id: newSettingsId('m'), label: '', providerId: c.id, model: '', caps: capsForPreset(c.preset) }); paint(); } }, '+ Add model');
@@ -1836,7 +1862,7 @@ async function renderSettings() {
       } }, 'Check limits');
       const reqs = usage[c.id] || 0;
       const rm = h('button', { class: 'link', disabled: used, title: used ? 'Models use this provider' : '', onclick: () => { st.connections = st.connections.filter((x) => x !== c); paint(); } }, 'remove');
-      return h('div', { class: 'conn-block' },
+      return h('div', { class: 'set-block' },
         h('div', { class: 'conn-head' }, preset, label, rm),
         h('label', {}, 'Base URL'), baseUrl, h('label', {}, 'API key'), apiKey,
         h('div', { class: 'row', style: 'margin-top:8px; gap:8px; flex-wrap:wrap; align-items:center' }, test, list, limits, h('span', { class: 'sub' }, `${reqs} request${reqs === 1 ? '' : 's'} today`)),

@@ -312,6 +312,8 @@ const RoundBlockShape = {
   names: z.record(z.string(), z.array(Str)).default({}),
   /** Ties set or changed: { "#holder": { "#other": "what other is to holder", "#x": "" removes } } (docs/11 §2.6). */
   ties: z.record(z.string(), z.record(z.string(), Str)).default({}),
+  /** Who falls asleep, passes out or wakes: { "#handle": "asleep" | "unconscious" | "awake" } (docs/10 §5.1f). */
+  awareness: z.record(z.string(), Str).default({}),
 };
 export type RoundBlock = z.infer<z.ZodObject<typeof RoundBlockShape>>;
 

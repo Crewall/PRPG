@@ -78,17 +78,21 @@ src/
     thoughts.ts         kinds and importance, remember/revise preparation, fading, recall selection, tag mentions
     places.ts           places and things: matching the narrator's names to what exists, the narrator's list
     focus.ts            how much each character says: focus tiers, limits, holding a reply to them
+    presence.ts         who can perceive: awake / asleep / unconscious, the notes for waking and falling asleep
     text.ts             handles, tag normalization, word limits
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
     builders.ts         character / narrator prompts and round messages; commit; POV preview
   agents/mindAgent.ts   Minds agents: declare and converse (raw reply kept), distribute, seed, compact
   memory/               classic engine: object views, disclosure rules, FTS retrieval, near-duplicate detection
-  util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases
+  util/                 ids, logger, token estimate (chars/4), event bus, game clock, seed phrases, version (the
+                        version check: running code vs the files on disk)
   data/story-seeds.txt  premise randomizer seed phrases
 client/dist/            index.html, style.css and ES modules (no build): app.js (home, play view, settings),
                         ui.js (shared DOM/API helpers), minds.js (Minds cards, sheet and scenario editors, Cast and
-                        POV tabs), help.js + help.json (the help panel's entries)
+                        POV tabs), help.js + help.json (the help panel's entries), back.js
+                        (Android/browser Back closes the top dialog or the side panel first), version.js (the update
+                        banner: reload the page or restart the server)
 test/                   Vitest; fake/replay LLM drivers in test/fixtures/drivers.ts — no API key needed
 scripts/                smoke.ts (live provider check), migrate.ts, termux-install.sh
 ```
@@ -153,6 +157,7 @@ server refuses (409) rather than undo the wrong turns.
    or described, a reply to who just spoke) or the director (Light tier). With a direction, those spoken to act
    (plus who'd react, the spotlight, forced ones); without one, the gate picks: forced, the narrator's spotlight,
    first appearance, mentioned by the player, acted last round (capped). Everyone hears where the words went.
+   Someone asleep or unconscious is never called, hears nothing and gets no brief (doc 10 §5.1f).
 3. Called characters declare in parallel, each on its own **persistent thread** (Medium tier): their pending
    briefs, the player's words "right now", their sheet, recalled thoughts. Replies are stored byte-exact.
 4. The narrator (Heavy tier) streams the prose; the fenced round block that follows is never shown. A missing
@@ -210,9 +215,9 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `jobs` | background work queue (`not_before`: backoff between attempts) |
 | `settings` | runtime settings (`runtimeConfig`), seeded from `config.json` on first boot |
 | `rules` | unused (the overseer was never built) |
-| `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, player flag, tier override |
+| `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, awareness (awake / asleep / unconscious), player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
-| `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded |
+| `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded; hand edits marked (`user_edited_at`, kept across rewinds) |
 | `character_met` | Minds: pairs of characters who have met (relation variables exist for them) |
 | `undo_slots` | one Revert step per story: the full state saved before a regenerate, Edit, remove or edit |
 | `name_knowledge` | Minds: who knows whose name (viewer → subject) |
@@ -274,6 +279,7 @@ jobs are requeued on boot), and report failures on the bus (shown as one quiet l
 - **Settings:** config (masked keys) for connections / models / tiers / roles, per-connection test, model listing
   (with caps from OpenRouter metadata), OpenRouter credits and free-model limits, requests today, prompts, seeds,
   style.
+- **System:** health, models, `version` (the running commit; whether the code on disk differs, docs/10 §11.2).
 - **Debug:** thread log per story/turn, the Threads view (`/calls`: one row per agent call, request and response
   paired, whose mind, turn and game time, cache, errors; `src/api/callsView.ts`), agent sessions.
 
@@ -287,7 +293,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 297 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 312 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

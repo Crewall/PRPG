@@ -127,6 +127,10 @@ export interface Thought {
   hope: Hope | null;
   horizon: Horizon | null;
   basis: string | null;
+  /** When it was last changed by hand (advanced mode), or null (docs/11 §5.10c). */
+  userEditedAt: number | null;
+  /** Its wording before the last hand edit of the text. */
+  formerText: string | null;
   revokedTurnId: string | null;
   lastRecalledTurnId: string | null;
   recallCount: number;

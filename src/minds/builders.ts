@@ -9,7 +9,7 @@ import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { STATE_KEY, appliesTo, canSee, holdsRelation, relationHolder, relationParts, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
-import { EXPECTATION_SHOWN, NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
+import { EXPECTATION_SHOWN, NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned, thoughtHandle } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
@@ -40,7 +40,7 @@ export interface ThreadDeps extends MindsDeps {
 export interface HereInfo {
   location?: { handle: string; name: string; line?: string };
   /** Others present, the player character included: their public profile. */
-  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string; nameKnown?: boolean }[];
+  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string; nameKnown?: boolean; awareness?: 'asleep' | 'unconscious' }[];
   items: { handle: string; name: string; line?: string }[];
 }
 
@@ -91,6 +91,8 @@ export interface NarratorCallInput {
   /** Present characters (not the player), in scene order. */
   presentIds: string[];
   declarations: Declaration[];
+  /** The characters who act, in the order the narrator should tell them (docs/10 §5.1): new every round. */
+  order?: string[];
   situationTags?: string[];
   /** Extra context for this round, e.g. a conversation that just ended (dialogue wrap-up). */
   context?: string;
@@ -327,7 +329,7 @@ export function renderHere(here: HereInfo): string {
     const who = p.nameKnown === false
       ? `${h(p.handle)}, name unknown to you${p.pronouns ? ` (${p.pronouns})` : ''}`
       : `${h(p.handle)} ${p.name}${p.pronouns ? ` (${p.pronouns})` : ''}`;
-    lines.push(`- ${who}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
+    lines.push(`- ${who}${p.awareness ? ` (${p.awareness})` : ''}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
   }
   const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
   if (items.length) lines.push(`In view: ${items.map((i) => `${h(i.handle)}${i.line ? ` (${i.name} — ${i.line})` : ''}`).join(', ')}`);
@@ -484,6 +486,9 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
     if (strong.length) lines.push(`  Strongly: ${strong.join(' · ')}`);
   }
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
+  if (sheet && sheet.awareness !== 'awake') {
+    lines.push(`  ${sheet.awareness === 'asleep' ? 'Asleep' : 'Unconscious'}: perceives nothing and can't act. If something wakes them, set "awareness": "awake" for them in the block and brief what they notice as they come to.`);
+  }
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);
   const toward = relationLine(deps, storyId, defs, holdersFor(deps, storyId), holder.id, others, { kind: 'narrator' });
@@ -542,6 +547,9 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
       return lines.join('\n');
     });
     parts.push(`Characters present:\n${blocks.join('\n')}`);
+    // Said outright, or the narrator falls back on the order of its own earlier rounds (settled after a play test).
+    const acting = (input.order ?? []).filter((oid) => present.includes(oid));
+    if (acting.length >= 2) parts.push(`Order this round: ${acting.map((oid) => h(holders.get(oid)?.handle)).join(' → ')}. Tell what they say and do in this order; a quick reaction may still cut in.`);
   }
 
   // Places and things with their #handles, so the block reuses them instead of naming them afresh (docs/10 §5.1d).
@@ -581,6 +589,29 @@ export function queueForNarrator(deps: ThreadDeps, storyId: string, text: string
   deps.threads.append(narratorSession(deps, storyId), { role: 'user', content: text, kind: 'pending', turnId });
 }
 
+/**
+ * A thought changed by hand (advanced mode, docs/11 §5.10c), told to its mind with its next round. Its thread still
+ * holds the old version (an agenda is shown once per window), so untold it would go on acting on it, or write it back.
+ */
+export function tellOfHandEdit(deps: ThreadDeps, before: Thought, after: Thought, change: 'forgot' | 'restored' | 'edited'): void {
+  const session = deps.agents
+    .listSessions(before.storyId)
+    .find((s) => (before.owner === NARRATOR_OWNER ? s.role === 'narrator' : s.role === 'character' && s.npcObjectId === before.owner));
+  if (!session || !deps.threads.log(session.id).length) return; // it hasn't seen its thoughts yet: its next round shows them as they are
+  const lens = thoughtLens(deps, before.storyId);
+  const handle = thoughtHandle(before);
+  const visible = (t: Thought) => JSON.stringify([t.text, t.kind, t.importance, t.about, [...t.tags].sort(), t.confidence, t.hope, t.horizon]);
+  const text =
+    change === 'forgot'
+      ? `You have let go of ${handle} (${before.kind}): "${before.text}" It is no longer on your mind; don't take it up again unless something new brings it back.`
+      : change === 'restored'
+        ? `${handle} is on your mind again: ${lens.render(after)}`
+        : visible(before) === visible(after)
+          ? ''
+          : `Your thought ${handle} has changed${after.formerText && after.formerText !== before.formerText ? ` (it said: "${after.formerText}")` : ''}. It now reads: ${lens.render(after)}`;
+  if (text) deps.threads.append(session.id, { role: 'user', content: text, kind: 'pending', turnId: null });
+}
+
 /** The "Here:" line inputs from the current scene (until the round tracks location and items, M4). */
 export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories'] }, storyId: string, objectId: string): HereInfo {
   const story = deps.stories.getStory(storyId);
@@ -610,6 +641,8 @@ export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories']
           appearance: sheet?.appearance ?? '',
           ...(sheet?.pronouns ? { pronouns: sheet.pronouns } : {}),
           ...(visibly ? { visibly } : {}),
+          // Anyone present can see someone is asleep or out cold (docs/10 §5.1f).
+          ...(sheet && sheet.awareness !== 'awake' ? { awareness: sheet.awareness } : {}),
         };
       })
       .filter((x): x is HereInfo['present'][number] => !!x),

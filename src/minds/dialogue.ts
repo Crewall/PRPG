@@ -83,6 +83,7 @@ export async function runDialogueExchange(deps: RoundDeps, story: Story, turn: T
   if (!sheet || sheet.storyId !== storyId || sheet.isPlayer || !scene?.activeNpcIds.includes(partner)) {
     throw new Error('that character is not here to talk to');
   }
+  if (sheet.awareness !== 'awake') throw new Error(`${deps.memory.getObject(partner)?.name ?? 'they'} is ${sheet.awareness}: wake them first`);
 
   const decl = parsePlayerInput(playerInput);
   // The partner hears the player as it knows them (their name only once learned; docs/11 §2.5).

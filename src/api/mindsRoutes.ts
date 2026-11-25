@@ -8,8 +8,9 @@ import { applyChanges, applyThoughtOps, createCharacter, editThought, mindsView,
 import { HOPES, HORIZONS, THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
+import { AWARENESS, awarenessNote } from '../minds/presence.ts';
 import { setTie } from '../minds/ties.ts';
-import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, NARRATOR_OWNER } from '../minds/builders.ts';
+import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, queueForCharacter, queueForNarrator, tellOfHandEdit, NARRATOR_OWNER } from '../minds/builders.ts';
 import type { ThreadDeps } from '../minds/builders.ts';
 
 // Minds engine data layer API (docs/10 §11, docs/11): scenario variables,
@@ -173,6 +174,10 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     playerKnowsName: z.boolean().optional(),
     state: z.string().optional(),
     tierId: z.string().nullable().optional(),
+    /** In the current scene or not (docs/10 §5.1f). */
+    here: z.boolean().optional(),
+    /** awake | asleep | unconscious (docs/10 §5.1f). */
+    awareness: z.enum(AWARENESS).optional(),
   });
   const checkLengths = (id: string, b: z.infer<typeof SheetBody>): string | undefined => {
     const max = app.stories.getStory(id)!.settings.minds.descriptionMaxWords;
@@ -185,7 +190,9 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
   server.post('/api/stories/:id/minds', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!storyOr404(id, reply)) return { error: 'story not found' };
-    const body = SheetBody.extend({ name: z.string().min(1) }).safeParse(req.body);
+    // `here`: added by the player during play (docs/11 §2.2): they join the scene now, the narrator is told to bring
+    // them in, and a mind is written for them like for anyone the narrator brings in.
+    const body = SheetBody.extend({ name: z.string().min(1), here: z.boolean().optional() }).safeParse(req.body);
     if (!body.success) {
       reply.code(400);
       return { error: 'a character needs a name' };
@@ -195,12 +202,26 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const { playerKnowsName: _known, ties, concept, ...fields } = body.data;
-    const sheet = createCharacter(deps, id, { ...fields, name: body.data.name });
-    if (concept !== undefined) updateSheet(deps, id, sheet.objectId, { concept: concept.trim() });
-    if (ties) setTies(id, sheet.objectId, ties);
+    const { playerKnowsName, ties, concept, nature, here, ...fields } = body.data;
+    if (app.memory.findByName(id, body.data.name.trim())) {
+      reply.code(409);
+      return { error: `there is already someone called ${body.data.name.trim()} in this story` };
+    }
+    const sheet = createCharacter(deps, id, { ...fields, name: body.data.name.trim() });
+    const oid = sheet.objectId;
+    if (concept !== undefined || nature !== undefined) updateSheet(deps, id, oid, { ...(concept !== undefined ? { concept: concept.trim() } : {}), ...(nature !== undefined ? { nature: nature.trim() } : {}) });
+    if (ties) setTies(id, oid, ties);
+    const pc = app.sheets.player(id)?.objectId;
+    if (playerKnowsName && pc && pc !== oid) app.names.learn(id, pc, oid, null);
+    if (!fields.isPlayer && app.stories.getStory(id)?.settings.engine === 'minds') {
+      const story = app.stories.getStory(id)!;
+      const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+      if (here && scene) setHere(id, oid, true, 'added');
+      // Their mind, written like for anyone the narrator brings in; what the player wrote is never overwritten.
+      app.jobs.enqueue('minds_seed', { storyId: id, payload: { objectId: oid } });
+    }
     reply.code(201);
-    return { ...(app.sheets.get(sheet.objectId) ?? sheet), handle: app.memory.getObject(sheet.objectId)?.handle ?? null };
+    return { ...(app.sheets.get(oid) ?? sheet), handle: app.memory.getObject(oid)?.handle ?? null };
   });
 
   server.patch('/api/stories/:id/minds/:oid', async (req, reply) => {
@@ -220,7 +241,13 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const { state, name, playerKnowsName, ties, ...patch } = body.data;
+    const { state, name, playerKnowsName, ties, here, awareness, ...patch } = body.data;
+    if ((here === false || awareness) && app.sheets.get(oid)!.isPlayer) {
+      reply.code(400);
+      return { error: 'your character is always here and awake' };
+    }
+    if (here !== undefined) setHere(id, oid, here);
+    if (awareness) setAwareness(id, oid, awareness);
     if (name) app.memory.updateObject(oid, { name });
     if (ties) setTies(id, oid, ties);
     if (patch.concept !== undefined) patch.concept = patch.concept.trim();
@@ -236,6 +263,46 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     if (state !== undefined) applyChanges(deps, id, [{ change: { holder: oid, key: STATE_KEY, op: 'set', value: state }, by: 'user' }]);
     return updateSheet(deps, id, oid, patch);
   });
+
+  // ---- Here or not, awake or not, by hand (docs/10 §5.1f) ----
+
+  const placeName = (storyId: string) => {
+    const story = app.stories.getStory(storyId)!;
+    const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+    return { scene, loc: scene?.locationObjectId ? app.memory.getObject(scene.locationObjectId)?.name : undefined };
+  };
+  /** Into or out of the current scene, telling the character and the narrator. */
+  function setHere(storyId: string, oid: string, here: boolean, why: 'added' | 'moved' = 'moved'): void {
+    const { scene, loc } = placeName(storyId);
+    if (!scene || scene.activeNpcIds.includes(oid) === here) return;
+    const obj = app.memory.getObject(oid)!;
+    const sheet = app.sheets.get(oid)!;
+    if (here) {
+      app.stories.addActiveNpc(scene.id, oid);
+      queueForCharacter(threadDeps, storyId, oid, `You have just arrived${loc ? ` at ${loc}` : ''}.`, null);
+      const who = `#${obj.handle} ${obj.name}${sheet.pronouns ? ` (${sheet.pronouns})` : ''}${sheet.appearance ? ` — ${sheet.appearance}` : ''}`;
+      queueForNarrator(
+        threadDeps,
+        storyId,
+        why === 'added'
+          ? `Note: the player added a character who is here now: ${who}.${sheet.concept ? ` Who they are: ${sheet.concept}.` : ''} Bring them in naturally in your next prose, and give them a brief.`
+          : `Note: #${obj.handle} (${obj.name}) is here now (the player brought them into the scene). Bring them in naturally in your next prose, and give them a brief.`,
+        null,
+      );
+    } else {
+      app.stories.removeActiveNpc(scene.id, oid);
+      queueForCharacter(threadDeps, storyId, oid, `You are no longer ${loc ? `at ${loc}` : 'here'}: you have gone elsewhere.`, null);
+      queueForNarrator(threadDeps, storyId, `Note: #${obj.handle} is no longer here (the player moved them out of the scene). Don't bring them back unless the story does.`, null);
+    }
+  }
+  /** Asleep, unconscious or awake, telling the character and the narrator. */
+  function setAwareness(storyId: string, oid: string, to: (typeof AWARENESS)[number]): void {
+    const from = app.sheets.get(oid)!.awareness;
+    if (from === to) return;
+    app.sheets.upsert(storyId, oid, { awareness: to });
+    queueForCharacter(threadDeps, storyId, oid, awarenessNote(from, to), null);
+    queueForNarrator(threadDeps, storyId, `Note: #${app.memory.getObject(oid)?.handle} is now ${to} (set by the player).`, null);
+  }
 
   // ---- Values and the change log ----
 
@@ -401,10 +468,16 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
         horizon: z.enum(HORIZONS).optional(),
       })
       .parse(req.body ?? {});
-    if (body.revoked && t.status === 'active') app.thoughts.revoke(tid, null);
+    // Every change here is by hand (docs/11 §5.10c): marked, so a rewind keeps it, and told to the mind.
+    let change: 'forgot' | 'restored' | 'edited' | undefined;
+    if (body.revoked && t.status === 'active') {
+      app.thoughts.revoke(tid, null);
+      change = 'forgot';
+    }
     if (body.restore && t.status !== 'active') {
       app.thoughts.setStatus(tid, 'active', null);
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+      change = 'restored';
     }
     if (body.pinned !== undefined) app.thoughts.setPinned(tid, body.pinned);
     const { text, kind, importance, about, tags, confidence, hope, horizon } = body;
@@ -412,7 +485,11 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       editThought(deps, t.storyId, t, { text, kind, importance, about, tags, confidence, hope, horizon });
       // An edit is the user deciding it matters now: it starts fading from here.
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+      change ??= 'edited';
     }
-    return app.thoughts.get(tid);
+    if (change || body.pinned !== undefined) app.thoughts.markHandEdited(tid);
+    const after = app.thoughts.get(tid)!;
+    if (change) tellOfHandEdit(threadDeps, t, after, change);
+    return after;
   });
 }

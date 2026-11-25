@@ -46,9 +46,15 @@ is right.
   - shared: rewind/edit and ↻ regenerate on every reply (failed attempts are dropped before the next turn), the premise randomizer, the
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
-  - 297 passing tests.
+  - adding a major character by hand during play (a mind, seeded; the narrator brings them in), and Back on
+    Android closing the top dialog or side panel first (`client/dist/back.js`); hand edits of thoughts that stick
+    (the mind is told, a forgotten thought isn't written back, rewinds keep them); the version check (a banner:
+    reload the page or restart the server after an update; `src/util/version.ts`, `client/dist/version.js`); who is
+    here and who can perceive (a Here switch on the card; asleep / unconscious characters hear nothing, get no
+    brief and are never called; `src/minds/presence.ts`);
+  - 312 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
-  dialogue mode, referee + dice for special cases, a reload-on-update check (doc 10 §14).
+  dialogue mode, referee + dice for special cases (doc 10 §14).
 
   Build order: doc 10 §13. M1–M8 are done. Next: M9 (delete the legacy engines) only on the owner's go-ahead.
 - **Provider focus: DeepSeek and OpenRouter.** Claude/Anthropic is low priority; its driver is known broken on
