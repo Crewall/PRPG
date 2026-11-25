@@ -227,5 +227,12 @@
     "group": "Settings",
     "title": "Cache hits",
     "body": "Minds threads only ever grow at the end, so each request starts with the previous one, which providers serve from their cache at a fraction of the price. The Threads view shows the cache share of each call; a compaction costs one miss for that thread."
+  },
+  {
+    "id": "updates",
+    "group": "Settings",
+    "title": "After an update",
+    "body": "After you update PRPG (git pull), two things can still run the old version: the server, until you restart it, and an open page, until you reload it. A banner at the top tells you which: restart the server (in Termux: Ctrl+C, then npm start), or reload the page. Tap the connection dot to see which version the server runs and when it started.",
+    "example": "PRPG was updated. Reload the page to use the new version.  [Reload]"
   }
 ]

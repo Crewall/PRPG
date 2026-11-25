@@ -655,6 +655,28 @@ Rules:
 - **First run:** a dismissible one-line hint on the first story ("New here? Tap ? for how to play") remembered in
   browser storage.
 
+### 11.2 Updates: the version check (settled after a play test)
+
+The play test: after an update, features that were in it seemed missing (the player form's prefill). Two things
+lag behind the files on disk: an open tab keeps running the scripts it loaded (pages switch inside one tab, so it
+may run for days), and the server keeps the code it started with until it is restarted (a new page asking an old
+server for a new endpoint got "not found", which the form ignored).
+
+- `GET /api/system/version` → `{ commit, commitOnDisk, startedAt, client, restartNeeded }`
+  (`src/util/version.ts`): at startup the server fingerprints its code (`src/`: paths, sizes, modification times)
+  and reads the git commit from `.git` (no git binary needed); on request it fingerprints `src/` and
+  `client/dist/` as they are now. `restartNeeded`: the code on disk is not what it runs.
+- The page (`client/dist/version.js`) asks on load, every 3 minutes, when the tab becomes visible again and when
+  the network comes back. A banner at the top says what to do:
+  - **restart:** "PRPG was updated (to <commit>), but the server is still running the old code. Restart it (in
+    Termux: Ctrl+C, then npm start), then reload this page." with Reload;
+  - **reload:** "PRPG was updated. Reload the page to use the new version." when the client files changed since
+    the page loaded, or the server now runs another commit.
+  - × hides it until the next update. A server too old to answer shows nothing.
+- The connection details (tap the dot) show the running commit and when the server started.
+- The player form also keeps a copy of the last character typed on this device, used when the server has none to
+  offer or doesn't answer (doc 11 §2.1).
+
 ## 12. Data model summary
 
 Sheets, variables and thoughts are in doc 11 §7. Threads reuse the existing session tables:
@@ -694,8 +716,6 @@ Each milestone is committed on its own and keeps the existing engines working.
 
 - **Branching:** ↻ regenerates a reply (an earlier one takes the later turns with it); keeping the replaced attempts
   as alternatives to switch between (per turn, with their snapshots) is later.
-- A version check: the page notices the server was updated and offers to reload (an open tab keeps running the
-  old scripts after an update).
 - Converting a legacy story to Minds properly (characters → sheets, memory facts → descriptions and thoughts, the
   transcript → a narrator recap); today a switch keeps the transcript and the minds start fresh.
 - The character interviewer for Minds: draft the player's sheet in ≤ 3 questions (doc 11 §2.1); today the player

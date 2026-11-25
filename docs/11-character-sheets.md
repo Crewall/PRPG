@@ -42,7 +42,8 @@ in play: the barkeep took the player and the stranger for one person). It is cre
 - written by the user: a small form (name, pronouns, appearance, who they are) that opens before a new Minds story
   starts, and from the 🎭 chip in the Present bar at any time. A new story's form starts **filled in from the
   character you played last** (the most recently updated player sheet of another story: `GET
-  /api/minds/last-player`), with "Start blank" to clear it;
+  /api/minds/last-player`; when the server has none or doesn't answer, the last character typed in this form on
+  this device, kept in browser storage), with "Start blank" to clear it;
 - carried over from the classic player interview (the story's player object gets a sheet);
 - **by the narrator**, as a fallback: while the story has no player character, or its sheet lacks a name-worthy
   appearance or pronouns, the narrator's round message asks for them and the round block's `player` field

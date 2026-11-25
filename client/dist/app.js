@@ -7,6 +7,10 @@ import { h, api } from './ui.js';
 import { openHelp, helpLink, firstRunHint } from './help.js';
 import * as minds from './minds.js';
 import './back.js'; // Android back closes the top dialog or the side panel
+import { checkVersion, versionInfo } from './version.js'; // reload / restart after an update
+
+/** The last character typed in the player form on this device (docs/11 §2.1): the prefill when the server has none. */
+const LAST_PC_KEY = 'prpg.lastPlayer';
 
 const app = document.getElementById('app');
 // Clipboard copy that also works on plain-http LAN/Termux, where the async
@@ -467,6 +471,7 @@ async function renderPlay(storyId) {
         try {
           if (pc) await api.patch(`/api/stories/${storyId}/minds/${pc.objectId}`, body);
           else await api.post(`/api/stories/${storyId}/minds`, { ...body, isPlayer: true });
+          try { localStorage.setItem(LAST_PC_KEY, JSON.stringify(body)); } catch {}
           close('saved');
           refreshSceneHeader();
         } catch (e) { err.textContent = e.message; }
@@ -492,8 +497,10 @@ async function renderPlay(storyId) {
       nameIn.focus();
       // A new story starts from the character you played last (you can change anything, or start blank).
       if (!pc) {
-        api.get(`/api/minds/last-player?exclude=${encodeURIComponent(storyId)}`).then((last) => {
-          if (!last || last.none || nameIn.value || lookIn.value) return;
+        const local = () => { try { return JSON.parse(localStorage.getItem(LAST_PC_KEY) || 'null'); } catch { return null; } };
+        api.get(`/api/minds/last-player?exclude=${encodeURIComponent(storyId)}`).catch(() => null).then((fromServer) => {
+          const last = fromServer && !fromServer.none ? fromServer : local();
+          if (!last || !last.name || nameIn.value || lookIn.value) return;
           nameIn.value = last.name || ''; pronIn.value = last.pronouns || ''; knownIn.value = last.knownAs || '';
           lookIn.value = last.appearance || ''; whoIn.value = last.description || '';
           const note = h('div', { class: 'sub prefill-note' },
@@ -504,6 +511,7 @@ async function renderPlay(storyId) {
       }
     });
   }
+
 
   async function refreshSceneHeader() {
     // Minds engine: the scene's present characters, each its own mind (tooltip: what you can see of them).
@@ -1527,6 +1535,8 @@ async function renderPlay(storyId) {
     }
     const healthRow = row('server', 'checking…');
     rows.push(healthRow);
+    const v = versionInfo();
+    if (v) rows.push(row('version', `${v.commit || 'unknown'}${v.startedAt ? ` · server started ${new Date(v.startedAt).toLocaleString()}` : ''}${v.restartNeeded ? ' · restart needed' : ''}`));
     const reconnectBtn = h('button', { class: 'small' }, 'Reconnect now');
     const modal = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target.classList.contains('modal-bg')) modal.remove(); } },
       h('div', { class: 'modal' },
@@ -1543,6 +1553,7 @@ async function renderPlay(storyId) {
       const j = r.ok ? await r.json() : null;
       healthRow.lastChild.textContent = r.ok ? `✓ reachable (providers: ${(j?.providers || []).join(', ') || 'none'})` : `✗ HTTP ${r.status}`;
     } catch (e) { healthRow.lastChild.textContent = '✗ unreachable — is the PRPG server running? (' + e.message + ')'; }
+    checkVersion();
   });
 
   function onWsMessage(ev) {

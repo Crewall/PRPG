@@ -466,3 +466,9 @@ table.vars.rel td { padding: 2px 6px; white-space: nowrap; }
 /* ---- Revert (docs/10 §10a) ---- */
 .undo-bar { display: flex; justify-content: center; padding: 4px 12px; }
 .undo-bar button { font-size: 13px; }
+
+/* The version check (docs/10 §11.2): reload the page, or restart the server, after an update. */
+.update-banner { position: fixed; top: 8px; left: 8px; right: 8px; max-width: 760px; margin: 0 auto; z-index: 1000;
+  display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--accent); box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 14px; }
+.update-banner > span { flex: 1; }
