@@ -213,7 +213,7 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `rules` | unused (the overseer was never built) |
 | `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
-| `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded |
+| `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded; hand edits marked (`user_edited_at`, kept across rewinds) |
 | `character_met` | Minds: pairs of characters who have met (relation variables exist for them) |
 | `undo_slots` | one Revert step per story: the full state saved before a regenerate, Edit, remove or edit |
 | `name_knowledge` | Minds: who knows whose name (viewer → subject) |
@@ -288,7 +288,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 299 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 302 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

@@ -9,7 +9,7 @@ import { HOPES, HORIZONS, THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
 import { setTie } from '../minds/ties.ts';
-import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, queueForCharacter, queueForNarrator, NARRATOR_OWNER } from '../minds/builders.ts';
+import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, queueForCharacter, queueForNarrator, tellOfHandEdit, NARRATOR_OWNER } from '../minds/builders.ts';
 import type { ThreadDeps } from '../minds/builders.ts';
 
 // Minds engine data layer API (docs/10 §11, docs/11): scenario variables,
@@ -430,10 +430,16 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
         horizon: z.enum(HORIZONS).optional(),
       })
       .parse(req.body ?? {});
-    if (body.revoked && t.status === 'active') app.thoughts.revoke(tid, null);
+    // Every change here is by hand (docs/11 §5.10c): marked, so a rewind keeps it, and told to the mind.
+    let change: 'forgot' | 'restored' | 'edited' | undefined;
+    if (body.revoked && t.status === 'active') {
+      app.thoughts.revoke(tid, null);
+      change = 'forgot';
+    }
     if (body.restore && t.status !== 'active') {
       app.thoughts.setStatus(tid, 'active', null);
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+      change = 'restored';
     }
     if (body.pinned !== undefined) app.thoughts.setPinned(tid, body.pinned);
     const { text, kind, importance, about, tags, confidence, hope, horizon } = body;
@@ -441,7 +447,11 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       editThought(deps, t.storyId, t, { text, kind, importance, about, tags, confidence, hope, horizon });
       // An edit is the user deciding it matters now: it starts fading from here.
       app.thoughts.renew([tid], app.stories.getStory(t.storyId)?.clockMin ?? null);
+      change ??= 'edited';
     }
-    return app.thoughts.get(tid);
+    if (change || body.pinned !== undefined) app.thoughts.markHandEdited(tid);
+    const after = app.thoughts.get(tid)!;
+    if (change) tellOfHandEdit(threadDeps, t, after, change);
+    return after;
   });
 }

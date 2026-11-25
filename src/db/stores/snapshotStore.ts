@@ -179,17 +179,34 @@ export function createSnapshotStore(db: Db) {
       }
     }
     if (p.thoughts) {
+      // Your hand edits aren't part of a turn (docs/11 §5.10c): a thought changed, forgotten or added by hand after
+      // this state was saved keeps the hand edit.
+      const handEdited = db.prepare(`SELECT * FROM thoughts WHERE story_id = ? AND user_edited_at IS NOT NULL`).all<Row>(storyId);
+      const handTags = handEdited.length
+        ? db.prepare(`SELECT tt.* FROM thought_tags tt JOIN thoughts t ON t.id = tt.thought_id WHERE t.story_id = ? AND t.user_edited_at IS NOT NULL`).all<Row>(storyId)
+        : [];
       db.prepare(`DELETE FROM thoughts WHERE story_id = ?`).run(storyId); // cascades thought_tags
-      for (const t of p.thoughts) {
+      const insertThought = (t: Row) =>
         db.prepare(
           `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, revoked_turn_id, last_recalled_turn_id, recall_count, created_at, updated_at,
-                                kind, importance, about, renewed_clock_min, revises, status_turn_id, renewed_turn_index, confidence, hope, horizon, basis)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                kind, importance, about, renewed_clock_min, revises, status_turn_id, renewed_turn_index, confidence, hope, horizon, basis, user_edited_at, former_text)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(t.id, t.story_id, t.owner, t.seq, t.text, t.pinned, t.status, t.source, t.created_turn_id ?? null, t.created_clock_min ?? null, t.revoked_turn_id ?? null, t.last_recalled_turn_id ?? null, t.recall_count, t.created_at, t.updated_at,
           t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.renewed_clock_min ?? t.created_clock_min ?? null, t.revises ?? null, t.status_turn_id ?? null,
-          t.renewed_turn_index ?? null, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null);
-      }
+          t.renewed_turn_index ?? null, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, t.user_edited_at ?? null, t.former_text ?? null);
+      for (const t of p.thoughts) insertThought(t);
       for (const tt of p.thoughtTags ?? []) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
+      const saved = new Map(p.thoughts.map((t) => [t.id as string, t]));
+      for (const r of handEdited) {
+        const s = saved.get(r.id as string);
+        if (s && Number(s.user_edited_at ?? 0) >= Number(r.user_edited_at)) continue; // the saved copy already has it
+        // Its owner must still be in the story, and its number free (it always is, short of a clash we skip).
+        if (r.owner !== 'narrator' && !db.prepare(`SELECT 1 FROM character_sheets WHERE object_id = ? AND story_id = ?`).get(r.owner, storyId)) continue;
+        if (db.prepare(`SELECT 1 FROM thoughts WHERE story_id = ? AND owner = ? AND seq = ? AND id <> ?`).get(storyId, r.owner, r.seq, r.id)) continue;
+        db.prepare(`DELETE FROM thoughts WHERE id = ?`).run(r.id);
+        insertThought(r);
+        for (const tt of handTags) if (tt.thought_id === r.id) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tt.thought_id, tt.tag);
+      }
     }
     if (p.names) {
       db.prepare(`DELETE FROM name_knowledge WHERE story_id = ?`).run(storyId);

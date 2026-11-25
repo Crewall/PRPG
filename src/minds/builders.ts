@@ -9,7 +9,7 @@ import { estimateTokens } from '../util/tokens.ts';
 import { VERBOSITY_STYLE } from '../orchestrator/contextBuilder.ts';
 import { STATE_KEY, appliesTo, canSee, holdsRelation, relationHolder, relationParts, renderRange, renderValue } from './variables.ts';
 import type { HolderInfo, VariableDef, Viewer } from './variables.ts';
-import { EXPECTATION_SHOWN, NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned } from './thoughts.ts';
+import { EXPECTATION_SHOWN, NARRATOR_SEES, alwaysOn, selectRecall, tagsMentioned, thoughtHandle } from './thoughts.ts';
 import { clampWords } from './text.ts';
 import { knowsName, knownNames, namesOn } from './names.ts';
 import { tieLines, tieSummary } from './ties.ts';
@@ -584,6 +584,29 @@ export function buildNarratorCall(deps: ThreadDeps, input: NarratorCallInput): P
 /** Queue text for the narrator's next round message (e.g. a dialogue transcript to wrap up). */
 export function queueForNarrator(deps: ThreadDeps, storyId: string, text: string, turnId: string | null): void {
   deps.threads.append(narratorSession(deps, storyId), { role: 'user', content: text, kind: 'pending', turnId });
+}
+
+/**
+ * A thought changed by hand (advanced mode, docs/11 §5.10c), told to its mind with its next round. Its thread still
+ * holds the old version (an agenda is shown once per window), so untold it would go on acting on it, or write it back.
+ */
+export function tellOfHandEdit(deps: ThreadDeps, before: Thought, after: Thought, change: 'forgot' | 'restored' | 'edited'): void {
+  const session = deps.agents
+    .listSessions(before.storyId)
+    .find((s) => (before.owner === NARRATOR_OWNER ? s.role === 'narrator' : s.role === 'character' && s.npcObjectId === before.owner));
+  if (!session || !deps.threads.log(session.id).length) return; // it hasn't seen its thoughts yet: its next round shows them as they are
+  const lens = thoughtLens(deps, before.storyId);
+  const handle = thoughtHandle(before);
+  const visible = (t: Thought) => JSON.stringify([t.text, t.kind, t.importance, t.about, [...t.tags].sort(), t.confidence, t.hope, t.horizon]);
+  const text =
+    change === 'forgot'
+      ? `You have let go of ${handle} (${before.kind}): "${before.text}" It is no longer on your mind; don't take it up again unless something new brings it back.`
+      : change === 'restored'
+        ? `${handle} is on your mind again: ${lens.render(after)}`
+        : visible(before) === visible(after)
+          ? ''
+          : `Your thought ${handle} has changed${after.formerText && after.formerText !== before.formerText ? ` (it said: "${after.formerText}")` : ''}. It now reads: ${lens.render(after)}`;
+  if (text) deps.threads.append(session.id, { role: 'user', content: text, kind: 'pending', turnId: null });
 }
 
 /** The "Here:" line inputs from the current scene (until the round tracks location and items, M4). */

@@ -299,12 +299,23 @@ export function applyThoughtOps(
   const rememberList = selfCaps && remember.length > MAX_REMEMBER_PER_REPLY ? remember.slice(0, MAX_REMEMBER_PER_REPLY) : remember;
   if (rememberList.length < remember.length) result.notes.push(`Only ${MAX_REMEMBER_PER_REPLY} new thoughts are kept per reply; the rest were dropped.`);
   const existing = new Map(deps.thoughts.list(storyId, owner).map((t) => [t.text.toLowerCase(), t]));
+  // Your hand edits hold (docs/11 §5.10c): the wording a thought had before you edited it stands for that thought,
+  // and what you forgot by hand isn't written back word for word (the mind's thread still holds it).
+  const everything = deps.thoughts.list(storyId, owner, { includeRevoked: true });
+  for (const t of everything) if (t.status === 'active' && t.formerText && !existing.has(t.formerText.toLowerCase())) existing.set(t.formerText.toLowerCase(), t);
+  const forgottenByHand = new Map(
+    source === 'user' ? [] : everything.filter((t) => t.status === 'revoked' && t.userEditedAt != null && !t.revokedTurnId).map((t) => [t.text.toLowerCase(), t]),
+  );
   for (const op of rememberList) {
     const prepared = prepareRemember(op, handles);
     if (!prepared) continue;
     const same = existing.get(prepared.text.toLowerCase());
     if (same) {
       deps.thoughts.renew([same.id], clock); // restated: it came up again
+      continue;
+    }
+    if (forgottenByHand.has(prepared.text.toLowerCase())) {
+      result.notes.push(`You let go of "${prepared.text}"; it stays forgotten.`);
       continue;
     }
     if (prepared.kind === 'agenda' && agendaCount() >= MAX_AGENDA) {

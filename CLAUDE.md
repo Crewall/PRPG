@@ -47,8 +47,9 @@ is right.
     Settings UI, the adjudicator + hidden dice (kept, not in the Minds round);
   - **legacy** (retired, existing stories only): the classic engine and NPC Story Mode, the player interview;
   - adding a major character by hand during play (a mind, seeded; the narrator brings them in), and Back on
-    Android closing the top dialog or side panel first (`client/dist/back.js`);
-  - 299 passing tests.
+    Android closing the top dialog or side panel first (`client/dist/back.js`); hand edits of thoughts that stick
+    (the mind is told, a forgotten thought isn't written back, rewinds keep them);
+  - 302 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases, a reload-on-update check (doc 10 §14).
 

@@ -256,6 +256,8 @@ function rowToThought(r: Row, tags: string[]): Thought {
     hope: (r.hope as Thought['hope']) ?? null,
     horizon: (r.horizon as Thought['horizon']) ?? null,
     basis: (r.basis as string) ?? null,
+    userEditedAt: r.user_edited_at == null ? null : Number(r.user_edited_at),
+    formerText: (r.former_text as string) ?? null,
     revokedTurnId: (r.revoked_turn_id as string) ?? null,
     lastRecalledTurnId: (r.last_recalled_turn_id as string) ?? null,
     recallCount: r.recall_count as number,
@@ -324,13 +326,18 @@ export function createThoughtStore(db: Db) {
       db.transaction(() => {
         db.prepare(
           `INSERT INTO thoughts (id, story_id, owner, seq, text, pinned, status, source, created_turn_id, created_clock_min, renewed_clock_min, kind, importance, about, revises,
-                                 renewed_turn_index, confidence, hope, horizon, basis, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT idx FROM turns WHERE id = ?), (SELECT MAX(idx) FROM turns WHERE story_id = ?)), ?, ?, ?, ?, ?, ?)`,
+                                 renewed_turn_index, confidence, hope, horizon, basis, user_edited_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT idx FROM turns WHERE id = ?), (SELECT MAX(idx) FROM turns WHERE story_id = ?)), ?, ?, ?, ?, ?, ?, ?)`,
         ).run(tid, storyId, owner, seq, t.text, t.pinned ? 1 : 0, t.source, turnId, t.clockMin ?? null, t.clockMin ?? null, t.kind ?? 'note', t.importance ?? 5, t.about ?? null, t.revises ?? null,
-          turnId, storyId, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, now, now);
+          turnId, storyId, t.confidence ?? null, t.hope ?? null, t.horizon ?? null, t.basis ?? null, t.source === 'user' ? now : null, now, now);
         for (const tag of t.tags) db.prepare(`INSERT OR IGNORE INTO thought_tags (thought_id, tag) VALUES (?, ?)`).run(tid, tag);
       });
       return store.get(tid)!;
+    },
+
+    /** Changed by hand just now (docs/11 §5.10c): always later than any earlier mark, so a rewind can tell. */
+    markHandEdited(thoughtId: string): void {
+      db.prepare(`UPDATE thoughts SET user_edited_at = MAX(COALESCE(user_edited_at, 0) + 1, ?) WHERE id = ?`).run(Date.now(), thoughtId);
     },
 
     revoke(thoughtId: string, turnId: string | null): void {
@@ -349,7 +356,8 @@ export function createThoughtStore(db: Db) {
     ): void {
       const sets: string[] = [];
       const args: (string | number | null)[] = [];
-      if (patch.text !== undefined) (sets.push('text = ?'), args.push(patch.text));
+      // The old wording is kept when the text changes (SET reads the row as it was before the update).
+      if (patch.text !== undefined) (sets.push('former_text = CASE WHEN text <> ? THEN text ELSE former_text END, text = ?'), args.push(patch.text, patch.text));
       if (patch.confidence !== undefined) (sets.push('confidence = ?'), args.push(patch.confidence));
       if (patch.hope !== undefined) (sets.push('hope = ?'), args.push(patch.hope));
       if (patch.horizon !== undefined) (sets.push('horizon = ?'), args.push(patch.horizon));

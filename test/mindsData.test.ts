@@ -180,7 +180,7 @@ describe('the change pipeline', () => {
 describe('thoughts: recall selection and mentions', () => {
   const t = (seq: number, tags: string[], extra: Partial<Thought> = {}): Thought => ({
     id: `id${seq}`, storyId: 's', owner: 'marta', seq, text: `thought ${seq}`, tags, pinned: false, status: 'active', source: 'self',
-    kind: 'note', importance: 5, about: null, renewedClockMin: null, revises: null, renewedTurnIndex: null, confidence: null, hope: null, horizon: null, basis: null,
+    kind: 'note', importance: 5, about: null, renewedClockMin: null, revises: null, renewedTurnIndex: null, confidence: null, hope: null, horizon: null, basis: null, userEditedAt: null, formerText: null,
     createdTurnId: null, createdClockMin: null, revokedTurnId: null, lastRecalledTurnId: null, recallCount: 0, createdAt: seq, ...extra,
   });
   it('picks by tag overlap, then recency, within budget; skips pinned, revoked and already shown', () => {
