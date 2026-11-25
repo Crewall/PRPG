@@ -76,6 +76,13 @@
     "body": "Name, pronouns and appearance are what the others perceive of you, so they can tell you apart from everyone else. \"Who you are\" is for the narrator only. Tap 🎭 to edit. If you skip it, the narrator creates your character from the premise (you can change it afterwards); it only ever fills in what is empty. A new story's form starts filled in with the character you played last: change anything, or tap Start blank."
   },
   {
+    "id": "presence",
+    "group": "Characters",
+    "title": "Here, asleep, unconscious",
+    "body": "A character's card has a Here switch and Awake / Asleep / Unconscious. Here moves them into or out of the scene (the narrator moves people too, as they come and go). Someone asleep or unconscious perceives nothing: they hear nothing, get no news of the round and are never called to act or talk, so they can't suddenly join in. The narrator puts people to sleep, knocks them out and wakes them as the story goes; when they wake, they slept through what was said and only notice what is around them as they come to. Everyone present can see who is asleep (💤) or out cold (😵).",
+    "example": "💤 Marta — the narrator: \"Marta's head sinks onto her arms.\""
+  },
+  {
     "id": "add-character",
     "group": "Characters",
     "title": "Adding a character yourself",

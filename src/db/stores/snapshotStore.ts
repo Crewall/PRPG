@@ -160,9 +160,9 @@ export function createSnapshotStore(db: Db) {
       db.prepare(`DELETE FROM character_sheets WHERE story_id = ?`).run(storyId);
       for (const s of p.sheets) {
         db.prepare(
-          `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, tier_id, seeded, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.concept ?? '', s.nature ?? '', s.state, s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
+          `INSERT OR REPLACE INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, awareness, tier_id, seeded, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(s.object_id, s.story_id, s.is_player, s.description, s.appearance, s.pronouns ?? '', s.known_as ?? '', s.concept ?? '', s.nature ?? '', s.state, s.awareness ?? 'awake', s.tier_id ?? null, s.seeded, s.created_at, s.updated_at);
       }
     }
     if (p.variableValues) {

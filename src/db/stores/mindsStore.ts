@@ -3,6 +3,7 @@ import { id } from '../../util/id.ts';
 import { VariableDef } from '../../minds/variables.ts';
 import type { ChangeOutcome, VariableValue } from '../../minds/variables.ts';
 import type { Thought } from '../../minds/thoughts.ts';
+import type { Awareness } from '../../minds/presence.ts';
 
 // Storage for the Minds engine (docs/11 §7): character sheets, scenario
 // variables (definitions, values, change log) and self-written thoughts.
@@ -24,6 +25,8 @@ export interface CharacterSheet {
   /** 3–6 traits as nuanced phrases (docs/11 §2.7). */
   nature: string;
   state: string;
+  /** Whether they can perceive (docs/10 §5.1f). */
+  awareness: Awareness;
   tierId: string | null;
   seeded: boolean;
   createdAt: number;
@@ -41,13 +44,14 @@ const rowToSheet = (r: Row): CharacterSheet => ({
   concept: (r.concept as string) ?? '',
   nature: (r.nature as string) ?? '',
   state: r.state as string,
+  awareness: ((r.awareness as string) || 'awake') as Awareness,
   tierId: (r.tier_id as string) ?? null,
   seeded: !!(r.seeded as number),
   createdAt: r.created_at as number,
   updatedAt: r.updated_at as number,
 });
 
-export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'nature' | 'state' | 'tierId' | 'seeded'>>;
+export type SheetPatch = Partial<Pick<CharacterSheet, 'isPlayer' | 'description' | 'appearance' | 'pronouns' | 'knownAs' | 'concept' | 'nature' | 'state' | 'awareness' | 'tierId' | 'seeded'>>;
 
 export function createSheetStore(db: Db) {
   const store = {
@@ -73,17 +77,18 @@ export function createSheetStore(db: Db) {
         concept: patch.concept ?? prev?.concept ?? '',
         nature: patch.nature ?? prev?.nature ?? '',
         state: patch.state ?? prev?.state ?? '',
+        awareness: patch.awareness ?? prev?.awareness ?? 'awake',
         tierId: patch.tierId !== undefined ? patch.tierId : prev?.tierId ?? null,
         seeded: patch.seeded ?? prev?.seeded ?? false,
       };
       if (patch.isPlayer) db.prepare(`UPDATE character_sheets SET is_player = 0 WHERE story_id = ? AND object_id <> ?`).run(storyId, objectId);
       db.prepare(
-        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, tier_id, seeded, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO character_sheets (object_id, story_id, is_player, description, appearance, pronouns, known_as, concept, nature, state, awareness, tier_id, seeded, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(object_id) DO UPDATE SET is_player = excluded.is_player, description = excluded.description,
            appearance = excluded.appearance, pronouns = excluded.pronouns, known_as = excluded.known_as, concept = excluded.concept,
-           nature = excluded.nature, state = excluded.state, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
-      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.nature, next.state, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
+           nature = excluded.nature, state = excluded.state, awareness = excluded.awareness, tier_id = excluded.tier_id, seeded = excluded.seeded, updated_at = excluded.updated_at`,
+      ).run(objectId, storyId, next.isPlayer ? 1 : 0, next.description, next.appearance, next.pronouns, next.knownAs, next.concept, next.nature, next.state, next.awareness, next.tierId, next.seeded ? 1 : 0, prev?.createdAt ?? now, now);
       return store.get(objectId)!;
     },
 

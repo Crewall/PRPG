@@ -1,3 +1,4 @@
+import type { Awareness } from './presence.ts';
 import type { StoryStore } from '../db/stores/storyStore.ts';
 import { handleBaseFor, knowsName, namesOn } from './names.ts';
 import type { MemoryStore } from '../db/stores/memoryStore.ts';
@@ -437,6 +438,8 @@ export interface CharacterView {
   isPlayer: boolean;
   appearance: string;
   pronouns: string;
+  /** awake | asleep | unconscious: anyone present can see it (docs/10 §5.1f). */
+  awareness: Awareness;
   /** What strangers call them. */
   knownAs: string;
   /** Whether the viewing player knows this name (`name` is then the real name; otherwise the known-as label). */
@@ -534,6 +537,8 @@ export function mindsView(deps: MindsDeps, storyId: string, viewer: Viewer): { c
       isPlayer: sheet.isPlayer,
       appearance: sheet.appearance,
       pronouns: sheet.pronouns,
+      // Visible to anyone present: asleep, unconscious (docs/10 §5.1f).
+      awareness: sheet.awareness,
       knownAs: sheet.knownAs,
       nameKnown: viewer.kind === 'player' ? known : true,
       ...(viewer.kind === 'advanced' ? { realName: obj.name, playerKnowsName: known } : {}),

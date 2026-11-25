@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), Revert and edits that reach the minds (§10a), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), who is here and who can perceive (§5.1f), Revert and edits that reach the minds (§10a), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -246,6 +246,48 @@ what the round already knows:
   ×1.5, ×2).
 - ⚡ on a character card cycles: off → act next round (lead) → give them the floor (sole) → off.
 - The narrator does not mark minor characters (settled with the owner: not now).
+
+### 5.1f Who is here, and who can perceive (settled after a play test)
+
+The play test: a character who had fallen asleep kept hearing everything and acting, and turned up in the scene as
+if awake; someone who had left stayed "here". Every present character got every word spoken and a brief, and could
+be called, whatever their condition; presence only changed when the narrator remembered `cast.exit`.
+
+- **Awareness** (`character_sheets.awareness`, migration `019-minds-awareness.sql`): `awake` (the default),
+  `asleep` or `unconscious`. The narrator sets it in the block, `"awareness": { "#handle": "asleep" }` (and
+  `"awake"` to wake someone); you set it by hand on the character card. Synonyms are read leniently (sleeping →
+  asleep; knocked out, fainted, passed out → unconscious; woken, conscious → awake).
+- **Someone who isn't awake** (from the start of the round):
+  - is never called: not by the gate, the director ("to everyone" leaves them out), a spotlight or ⚡/⚡⚡, and a
+    conversation (§7) can't start with them;
+  - hears nothing and learns no names from speech;
+  - gets nothing in their thread: no brief, no *Heard* list, no "Nothing notable changes". A brief the narrator
+    writes for them anyway is dropped, and the narrator gets a note to wake them in the block if something wakes
+    them;
+  - shows on the narrator's sheet as `Asleep: perceives nothing and can't act…`, and in the other characters'
+    *Here:* line as `(asleep)` or `(unconscious)`: anyone present can see it.
+- **Changes within a round:**
+  - awake at the start, asleep or unconscious by the block: they lived through the round, so their brief and the
+    words they heard are delivered, followed by "Then you fall asleep." / "Then you lose consciousness.";
+  - not awake at the start, woken by the block: they slept through the round, so what was said is not delivered;
+    "You wake up." / "You come to." and their brief (what they notice as they wake) are;
+  - a newcomer who enters not awake gets "You are asleep." / "You are unconscious." instead of an arrival.
+- **Set by hand** (the card): their thread gets "You fall asleep." / "You lose consciousness." / "You wake up.", the
+  narrator a note ("#marta is now asleep (set by the player).").
+- **Here or not, by hand** (the card's *Here* switch; presence is still scene membership, which the narrator
+  changes with `cast.enter` / `cast.exit`):
+  - out: they leave the scene; the narrator is told they are gone and not to bring them back unless the story
+    does; their thread gets "You are no longer at <place>: you have gone elsewhere.";
+  - in: as when adding a character who is here now (doc 11 §2.2): "You have just arrived at <place>." and a note for
+    the narrator to bring them in.
+  - The player's character is always here.
+  - The Cast tab lists everyone met under *Here* and *Elsewhere* in both modes (before, *Elsewhere* was advanced
+    mode only), so someone moved out can be brought back; the chips mark 💤 asleep and 😵 unconscious, and the card
+    disables Talk and ⚡ for them.
+- The narrator prompt: "When a character falls asleep, faints or is knocked out, set their awareness; wake them the
+  same way. Someone who isn't awake perceives nothing and does nothing: no brief, no words, no actions. When
+  someone leaves, put them in cast.exit." The fallback block (distributor) and the block revised after an edited
+  reply (reviser) carry `awareness` too.
 
 ### 5.2 Settled while building M4
 

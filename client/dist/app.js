@@ -530,7 +530,7 @@ async function renderPlay(storyId) {
           : h('button', { class: 'chip pc missing', title: 'Who do you play? Without a character the others can\'t tell you apart from anyone else (the narrator fills one in if you don\'t).', onclick: () => showPlayerForm(null) }, '🎭 set your character'),
         ...(here.length
           ? here.map((c) => h('button', { class: `chip${forced.has(c.objectId) || floor.has(c.objectId) ? ' forced' : ''}`, title: `${tip(c)}\n\nTap: their card, Talk, Act next round.`, onclick: () => minds.openCharacterCard(mindsCtx, c.objectId) },
-              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.name}${marks(c.objectId)}`))
+              `${dialogue?.partner === c.objectId ? '💬 ' : ''}${c.awareness === 'asleep' ? '💤 ' : c.awareness === 'unconscious' ? '😵 ' : ''}${c.name}${marks(c.objectId)}`))
           : [h('span', { class: 'sub' }, 'nobody else here yet')]),
         h('span', { class: 'spacer' }),
         h('button', { class: `chip adv${advanced ? ' on' : ''}`, title: 'Advanced mode: see and edit everything (spoilers)', onclick: () => setAdvanced(!advanced) }, advanced ? '🔍 Advanced: on' : '🔍 Advanced'),

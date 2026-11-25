@@ -8,6 +8,7 @@ import { applyChanges, applyThoughtOps, createCharacter, editThought, mindsView,
 import { HOPES, HORIZONS, THOUGHT_KINDS, fades } from '../minds/thoughts.ts';
 import type { MindsDeps } from '../minds/service.ts';
 import { wordCount } from '../minds/text.ts';
+import { AWARENESS, awarenessNote } from '../minds/presence.ts';
 import { setTie } from '../minds/ties.ts';
 import { buildCharacterCall, buildNarratorCall, characterVariableLines, hereFromScene, narratorVariableLines, queueForCharacter, queueForNarrator, tellOfHandEdit, NARRATOR_OWNER } from '../minds/builders.ts';
 import type { ThreadDeps } from '../minds/builders.ts';
@@ -173,6 +174,10 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     playerKnowsName: z.boolean().optional(),
     state: z.string().optional(),
     tierId: z.string().nullable().optional(),
+    /** In the current scene or not (docs/10 §5.1f). */
+    here: z.boolean().optional(),
+    /** awake | asleep | unconscious (docs/10 §5.1f). */
+    awareness: z.enum(AWARENESS).optional(),
   });
   const checkLengths = (id: string, b: z.infer<typeof SheetBody>): string | undefined => {
     const max = app.stories.getStory(id)!.settings.minds.descriptionMaxWords;
@@ -211,20 +216,7 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     if (!fields.isPlayer && app.stories.getStory(id)?.settings.engine === 'minds') {
       const story = app.stories.getStory(id)!;
       const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
-      if (here && scene) {
-        app.stories.addActiveNpc(scene.id, oid);
-        const loc = scene.locationObjectId ? app.memory.getObject(scene.locationObjectId)?.name : undefined;
-        const obj = app.memory.getObject(oid)!;
-        const now = app.sheets.get(oid)!;
-        queueForCharacter(threadDeps, id, oid, `You have just arrived${loc ? ` at ${loc}` : ''}.`, null);
-        queueForNarrator(
-          threadDeps,
-          id,
-          `Note: the player added a character who is here now: #${obj.handle} ${obj.name}${now.pronouns ? ` (${now.pronouns})` : ''}${now.appearance ? ` — ${now.appearance}` : ''}.` +
-            `${now.concept ? ` Who they are: ${now.concept}.` : ''} Bring them in naturally in your next prose, and give them a brief.`,
-          null,
-        );
-      }
+      if (here && scene) setHere(id, oid, true, 'added');
       // Their mind, written like for anyone the narrator brings in; what the player wrote is never overwritten.
       app.jobs.enqueue('minds_seed', { storyId: id, payload: { objectId: oid } });
     }
@@ -249,7 +241,13 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
       reply.code(400);
       return { error: tooLong };
     }
-    const { state, name, playerKnowsName, ties, ...patch } = body.data;
+    const { state, name, playerKnowsName, ties, here, awareness, ...patch } = body.data;
+    if ((here === false || awareness) && app.sheets.get(oid)!.isPlayer) {
+      reply.code(400);
+      return { error: 'your character is always here and awake' };
+    }
+    if (here !== undefined) setHere(id, oid, here);
+    if (awareness) setAwareness(id, oid, awareness);
     if (name) app.memory.updateObject(oid, { name });
     if (ties) setTies(id, oid, ties);
     if (patch.concept !== undefined) patch.concept = patch.concept.trim();
@@ -265,6 +263,46 @@ export async function registerMindsRoutes(server: FastifyInstance, app: App): Pr
     if (state !== undefined) applyChanges(deps, id, [{ change: { holder: oid, key: STATE_KEY, op: 'set', value: state }, by: 'user' }]);
     return updateSheet(deps, id, oid, patch);
   });
+
+  // ---- Here or not, awake or not, by hand (docs/10 §5.1f) ----
+
+  const placeName = (storyId: string) => {
+    const story = app.stories.getStory(storyId)!;
+    const scene = story.currentSceneId ? app.stories.getScene(story.currentSceneId) : undefined;
+    return { scene, loc: scene?.locationObjectId ? app.memory.getObject(scene.locationObjectId)?.name : undefined };
+  };
+  /** Into or out of the current scene, telling the character and the narrator. */
+  function setHere(storyId: string, oid: string, here: boolean, why: 'added' | 'moved' = 'moved'): void {
+    const { scene, loc } = placeName(storyId);
+    if (!scene || scene.activeNpcIds.includes(oid) === here) return;
+    const obj = app.memory.getObject(oid)!;
+    const sheet = app.sheets.get(oid)!;
+    if (here) {
+      app.stories.addActiveNpc(scene.id, oid);
+      queueForCharacter(threadDeps, storyId, oid, `You have just arrived${loc ? ` at ${loc}` : ''}.`, null);
+      const who = `#${obj.handle} ${obj.name}${sheet.pronouns ? ` (${sheet.pronouns})` : ''}${sheet.appearance ? ` — ${sheet.appearance}` : ''}`;
+      queueForNarrator(
+        threadDeps,
+        storyId,
+        why === 'added'
+          ? `Note: the player added a character who is here now: ${who}.${sheet.concept ? ` Who they are: ${sheet.concept}.` : ''} Bring them in naturally in your next prose, and give them a brief.`
+          : `Note: #${obj.handle} (${obj.name}) is here now (the player brought them into the scene). Bring them in naturally in your next prose, and give them a brief.`,
+        null,
+      );
+    } else {
+      app.stories.removeActiveNpc(scene.id, oid);
+      queueForCharacter(threadDeps, storyId, oid, `You are no longer ${loc ? `at ${loc}` : 'here'}: you have gone elsewhere.`, null);
+      queueForNarrator(threadDeps, storyId, `Note: #${obj.handle} is no longer here (the player moved them out of the scene). Don't bring them back unless the story does.`, null);
+    }
+  }
+  /** Asleep, unconscious or awake, telling the character and the narrator. */
+  function setAwareness(storyId: string, oid: string, to: (typeof AWARENESS)[number]): void {
+    const from = app.sheets.get(oid)!.awareness;
+    if (from === to) return;
+    app.sheets.upsert(storyId, oid, { awareness: to });
+    queueForCharacter(threadDeps, storyId, oid, awarenessNote(from, to), null);
+    queueForNarrator(threadDeps, storyId, `Note: #${app.memory.getObject(oid)?.handle} is now ${to} (set by the player).`, null);
+  }
 
   // ---- Values and the change log ----
 

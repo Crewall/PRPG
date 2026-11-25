@@ -661,7 +661,7 @@ which had the thought as it was before the hand edit.
 As built, with one change from the sketch below: `variable_defs` stores each definition as Zod-validated JSON
 (`id, story_id, key, sort, def_json`), because the shape differs per type. Later migrations: `013-minds-ties.sql`
 (`character_sheets.concept`, `character_ties`), `014-minds-thoughts-v2.sql` (`thoughts.kind`, `importance`,
-`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`), `016-undo-slot.sql`, `017-minds-expectations-nature.sql` (`character_sheets.nature`; `thoughts.renewed_turn_index`, `confidence`, `hope`, `horizon`, `basis`), `018-thought-hand-edits.sql` (`thoughts.user_edited_at`, `former_text`, §5.10c); relation values
+`about`, `renewed_clock_min`, `revises`, `status_turn_id`), `015-minds-met.sql` (`character_met`), `016-undo-slot.sql`, `017-minds-expectations-nature.sql` (`character_sheets.nature`; `thoughts.renewed_turn_index`, `confidence`, `hope`, `horizon`, `basis`), `018-thought-hand-edits.sql` (`thoughts.user_edited_at`, `former_text`, §5.10c), `019-minds-awareness.sql` (`character_sheets.awareness`, doc 10 §5.1f); relation values
 use `variable_values.holder = "<from>><to>"`. Handles are stored without the `#`
 (`marta`) and shown with it (`#marta`). The code: `src/minds/` (rules, pure) and `src/db/stores/mindsStore.ts`.
 

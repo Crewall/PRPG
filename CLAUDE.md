@@ -49,8 +49,10 @@ is right.
   - adding a major character by hand during play (a mind, seeded; the narrator brings them in), and Back on
     Android closing the top dialog or side panel first (`client/dist/back.js`); hand edits of thoughts that stick
     (the mind is told, a forgotten thought isn't written back, rewinds keep them); the version check (a banner:
-    reload the page or restart the server after an update; `src/util/version.ts`, `client/dist/version.js`);
-  - 306 passing tests.
+    reload the page or restart the server after an update; `src/util/version.ts`, `client/dist/version.js`); who is
+    here and who can perceive (a Here switch on the card; asleep / unconscious characters hear nothing, get no
+    brief and are never called; `src/minds/presence.ts`);
+  - 312 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases (doc 10 §14).
 

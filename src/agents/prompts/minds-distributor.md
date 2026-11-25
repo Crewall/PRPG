@@ -13,6 +13,8 @@ to the player. Be faithful to the prose: never invent events, only record what i
   Use "set", or "delta" for numbers, or "add"/"remove" for lists.
 - "tags": a few topics, places and #handles that matter in this moment.
 - "time": the in-story minutes the round took.
+- "awareness": only when the prose shows a character falling asleep, passing out or waking: { "#handle":
+  "asleep" | "unconscious" | "awake" }. Someone not awake gets no brief.
 
 ## Reply: one JSON object, nothing else
 {

@@ -78,6 +78,7 @@ src/
     thoughts.ts         kinds and importance, remember/revise preparation, fading, recall selection, tag mentions
     places.ts           places and things: matching the narrator's names to what exists, the narrator's list
     focus.ts            how much each character says: focus tiers, limits, holding a reply to them
+    presence.ts         who can perceive: awake / asleep / unconscious, the notes for waking and falling asleep
     text.ts             handles, tag normalization, word limits
     templates.ts        scenario templates
     service.ts          the operations with I/O: apply changes, thought ops, create characters, views
@@ -156,6 +157,7 @@ server refuses (409) rather than undo the wrong turns.
    or described, a reply to who just spoke) or the director (Light tier). With a direction, those spoken to act
    (plus who'd react, the spotlight, forced ones); without one, the gate picks: forced, the narrator's spotlight,
    first appearance, mentioned by the player, acted last round (capped). Everyone hears where the words went.
+   Someone asleep or unconscious is never called, hears nothing and gets no brief (doc 10 §5.1f).
 3. Called characters declare in parallel, each on its own **persistent thread** (Medium tier): their pending
    briefs, the player's words "right now", their sheet, recalled thoughts. Replies are stored byte-exact.
 4. The narrator (Heavy tier) streams the prose; the fenced round block that follows is never shown. A missing
@@ -213,7 +215,7 @@ over drama, physics not morals") → the engine rolls a hidden d100 → `outcome
 | `jobs` | background work queue (`not_before`: backoff between attempts) |
 | `settings` | runtime settings (`runtimeConfig`), seeded from `config.json` on first boot |
 | `rules` | unused (the overseer was never built) |
-| `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, player flag, tier override |
+| `character_sheets` | Minds: description, the narrator's hand-over (`concept`), appearance, pronouns, known-as, one-sentence state, awareness (awake / asleep / unconscious), player flag, tier override |
 | `variable_defs` / `variable_values` / `variable_changes` | Minds: scenario variables (Zod JSON), values per holder or 'world', every attempted change |
 | `thoughts` / `thought_tags` | Minds: self-written memories: kind (agenda / opinion / feeling / note), importance 1–10 that fades, subject, tags; active / revoked / revised / faded; hand edits marked (`user_edited_at`, kept across rewinds) |
 | `character_met` | Minds: pairs of characters who have met (relation variables exist for them) |
@@ -291,7 +293,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 306 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 312 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

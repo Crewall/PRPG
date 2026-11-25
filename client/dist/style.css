@@ -472,3 +472,9 @@ table.vars.rel td { padding: 2px 6px; white-space: nowrap; }
   display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px;
   background: var(--panel-2); border: 1px solid var(--accent); box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 14px; }
 .update-banner > span { flex: 1; }
+
+/* Here / awake on the character card (docs/10 §5.1f). */
+.card-presence { gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 2px; }
+.card-presence label.inline { display: inline-flex; gap: 6px; align-items: center; margin: 0; }
+.card-presence input[type=checkbox] { width: auto; }
+.card-presence select { width: auto; padding: 6px 8px; }

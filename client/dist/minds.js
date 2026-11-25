@@ -66,8 +66,17 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
   const forced = ctx.forced.has(c.objectId);
   const hasFloor = ctx.floor?.has(c.objectId);
   const unknown = !c.isPlayer && (adv ? c.playerKnowsName === false : c.nameKnown === false);
+  // Asleep or unconscious: they perceive nothing and can't act until woken (docs/10 §5.1f).
+  const out = !c.isPlayer && c.awareness && c.awareness !== 'awake';
+  const setPresence = async (body) => { try { await api.patch(`/api/stories/${ctx.storyId}/minds/${c.objectId}`, body); m.close(); ctx.refresh(); } catch (e) { alert(e.message); } };
+  const presenceRow = c.isPlayer ? null : h('div', { class: 'row card-presence' },
+    h('label', { class: 'inline', title: 'In this scene or elsewhere. The narrator and they are told.' },
+      h('input', { type: 'checkbox', ...(present ? { checked: true } : {}), ...(ctx.busy() ? { disabled: true } : {}), onchange: (e) => setPresence({ here: e.target.checked }) }), ' Here'),
+    h('select', { title: 'Asleep or unconscious: they perceive nothing and can\'t act until woken', ...(ctx.busy() ? { disabled: true } : {}), onchange: (e) => setPresence({ awareness: e.target.value }) },
+      ...[['awake', 'Awake'], ['asleep', '💤 Asleep'], ['unconscious', '😵 Unconscious']].map(([v, l]) => h('option', { value: v, ...((c.awareness || 'awake') === v ? { selected: true } : {}) }, l))),
+    helpLink('presence'));
   const m = modal(`${c.isPlayer ? '🎭 ' : ''}${c.name}${c.pronouns ? ` (${c.pronouns})` : ''}`,
-    h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${unknown ? (adv ? ` · you don't know this name (to you: ${c.knownAs || 'someone'})` : ' · name unknown to you') : ''}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
+    h('div', { class: 'card-sub' }, `#${c.handle}${c.isPlayer ? ' · your character' : present ? ' · here with you' : ' · not here'}${out ? ` · ${c.awareness}` : ''}${unknown ? (adv ? ` · you don't know this name (to you: ${c.knownAs || 'someone'})` : ' · name unknown to you') : ''}${adv && !c.isPlayer ? (c.seeded ? ' · seeded' : ' · not seeded yet') : ''}`),
     c.appearance ? h('p', {}, c.appearance) : h('p', { class: 'sub' }, '(no appearance yet)'),
     c.state ? h('p', {}, h('span', { class: 'sub' }, 'State: '), `"${c.state}"`) : null,
     c.description || c.concept ? h('details', { open: c.isPlayer ? null : true }, h('summary', { class: 'sub' }, c.isPlayer ? 'Who you are' : 'Who they are (private)'), h('p', { class: 'prose' }, c.description || c.concept)) : null,
@@ -78,9 +87,10 @@ export async function openCharacterCard(ctx, objectId, { present = true } = {}) 
       ? h('table', { class: 'vars' }, ...vars.map((v) => h('tr', {}, h('td', { class: 'sub' }, v.label), h('td', {}, v.display), adv ? h('td', { class: `vis ${v.visibility}` }, v.visibility) : null)))
       : null,
     !adv && !c.isPlayer ? h('div', { class: 'sub' }, 'You see what anyone present could: appearance, pronouns and what is visibly true.') : null,
+    presenceRow,
     h('div', { class: 'row card-actions' },
-      !c.isPlayer && present ? h('button', { class: 'primary', disabled: ctx.busy() || ctx.dialoguePartner() === c.objectId ? true : null, onclick: () => { m.close(); ctx.talk(c); } }, ctx.dialoguePartner() === c.objectId ? '💬 Talking' : '💬 Talk') : null,
-      !c.isPlayer && present ? h('button', { title: 'Tap to cycle: act next round → give them the floor (they may say and do much more) → off', onclick: () => { ctx.toggleForce(c); m.close(); } }, hasFloor ? '⚡⚡ Has the floor — off' : forced ? '⚡ Will act — give the floor' : '⚡ Act next round') : null,
+      !c.isPlayer && present ? h('button', { class: 'primary', ...(out ? { title: `${c.awareness}: wake them first` } : {}), disabled: ctx.busy() || out || ctx.dialoguePartner() === c.objectId ? true : null, onclick: () => { m.close(); ctx.talk(c); } }, ctx.dialoguePartner() === c.objectId ? '💬 Talking' : '💬 Talk') : null,
+      !c.isPlayer && present ? h('button', { title: out ? `${c.awareness}: wake them first` : 'Tap to cycle: act next round → give them the floor (they may say and do much more) → off', ...(out ? { disabled: true } : {}), onclick: () => { ctx.toggleForce(c); m.close(); } }, hasFloor ? '⚡⚡ Has the floor — off' : forced ? '⚡ Will act — give the floor' : '⚡ Act next round') : null,
       c.isPlayer || adv ? h('button', { onclick: () => { m.close(); openSheetEditor(ctx, c.objectId); } }, adv && !c.isPlayer ? '📋 Sheet' : '✎ Edit') : null,
       helpLink(c.isPlayer ? 'player-character' : 'cast-bar')));
 }
@@ -713,7 +723,7 @@ export async function renderCastTab(ctx, body) {
     h('div', { class: 'mem-head', onclick: () => openCharacterCard(ctx, c.objectId, { present: present.has(c.objectId) }) },
       h('div', {}, h('b', {}, `${c.isPlayer ? '🎭 ' : ''}${c.name}`), c.pronouns ? h('span', { class: 'sub' }, ` (${c.pronouns})`) : null, ctx.marks?.(c.objectId) || null,
         h('div', { class: 'sub' }, [c.appearance, adv && c.state ? `State: "${c.state}"` : ''].filter(Boolean).join(' · ') || '—')),
-      h('span', { class: 'sub' }, c.isPlayer ? 'you' : present.has(c.objectId) ? 'here' : 'away')));
+      h('span', { class: 'sub' }, c.isPlayer ? 'you' : present.has(c.objectId) ? `here${c.awareness && c.awareness !== 'awake' ? ` · ${c.awareness}` : ''}` : 'away')));
   const chars = view.characters;
   const here = chars.filter((c) => c.isPlayer || present.has(c.objectId));
   const away = chars.filter((c) => !c.isPlayer && !present.has(c.objectId));
@@ -723,7 +733,8 @@ export async function renderCastTab(ctx, body) {
       h('button', { class: 'small', onclick: () => openAddCharacter(ctx) }, '+ Add character'), helpLink(adv ? 'advanced' : 'cast-bar')),
     view.world.length ? h('div', { class: 'mem-card world' }, h('div', { class: 'mem-head' }, h('b', {}, 'The world'), h('span', { class: 'sub' }, view.world.map((v) => `${v.label}: ${v.display}`).join(' · ')))) : null,
     h('h4', { class: 'sub' }, 'Here'), ...here.map(card),
-    away.length && adv ? h('h4', { class: 'sub' }, 'Elsewhere') : null, ...(adv ? away.map(card) : []),
+    // Elsewhere: everyone met so far (their card shows only what anyone could see), so the Here switch can bring them back.
+    away.length ? h('h4', { class: 'sub' }, 'Elsewhere') : null, ...away.map(card),
     adv ? h('details', {}, h('summary', { class: 'sub' }, "The narrator's notes"), thoughtsEditor(ctx, 'narrator')) : null,
     adv ? changeLog(ctx) : null,
   );

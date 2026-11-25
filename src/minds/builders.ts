@@ -40,7 +40,7 @@ export interface ThreadDeps extends MindsDeps {
 export interface HereInfo {
   location?: { handle: string; name: string; line?: string };
   /** Others present, the player character included: their public profile. */
-  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string; nameKnown?: boolean }[];
+  present: { handle: string; name: string; appearance: string; pronouns?: string; visibly?: string; nameKnown?: boolean; awareness?: 'asleep' | 'unconscious' }[];
   items: { handle: string; name: string; line?: string }[];
 }
 
@@ -329,7 +329,7 @@ export function renderHere(here: HereInfo): string {
     const who = p.nameKnown === false
       ? `${h(p.handle)}, name unknown to you${p.pronouns ? ` (${p.pronouns})` : ''}`
       : `${h(p.handle)} ${p.name}${p.pronouns ? ` (${p.pronouns})` : ''}`;
-    lines.push(`- ${who}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
+    lines.push(`- ${who}${p.awareness ? ` (${p.awareness})` : ''}${p.appearance ? ` — ${sentence(p.appearance)}` : ''}${p.visibly ? ` Visibly: ${p.visibly}` : ''}`);
   }
   const items = [...here.items].sort((a, b) => a.handle.localeCompare(b.handle));
   if (items.length) lines.push(`In view: ${items.map((i) => `${h(i.handle)}${i.line ? ` (${i.name} — ${i.line})` : ''}`).join(', ')}`);
@@ -486,6 +486,9 @@ function sheetBlock(deps: ThreadDeps, storyId: string, defs: VariableDef[], hold
     if (strong.length) lines.push(`  Strongly: ${strong.join(' · ')}`);
   }
   lines.push(`  State: ${sheet?.state ? `"${sheet.state}"` : '(none noted)'}`);
+  if (sheet && sheet.awareness !== 'awake') {
+    lines.push(`  ${sheet.awareness === 'asleep' ? 'Asleep' : 'Unconscious'}: perceives nothing and can't act. If something wakes them, set "awareness": "awake" for them in the block and brief what they notice as they come to.`);
+  }
   const values = valueLine(deps, storyId, defs, holder, { kind: 'narrator' }, true);
   if (values) lines.push(`  Variables: ${values}`);
   const toward = relationLine(deps, storyId, defs, holdersFor(deps, storyId), holder.id, others, { kind: 'narrator' });
@@ -638,6 +641,8 @@ export function hereFromScene(deps: ThreadDeps & { stories: MindsDeps['stories']
           appearance: sheet?.appearance ?? '',
           ...(sheet?.pronouns ? { pronouns: sheet.pronouns } : {}),
           ...(visibly ? { visibly } : {}),
+          // Anyone present can see someone is asleep or out cold (docs/10 §5.1f).
+          ...(sheet && sheet.awareness !== 'awake' ? { awareness: sheet.awareness } : {}),
         };
       })
       .filter((x): x is HereInfo['present'][number] => !!x),
