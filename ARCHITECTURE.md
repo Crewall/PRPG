@@ -162,6 +162,10 @@ server refuses (409) rather than undo the wrong turns.
    briefs, the player's words "right now", their sheet, recalled thoughts. Replies are stored byte-exact.
 4. The narrator (Heavy tier) streams the prose; the fenced round block that follows is never shown. A missing
    or broken block goes to the distributor (Light tier), then to plain briefs.
+   **Review** (doc 10 §10c, `minds.reviewReplies`, advanced mode): the round stops here when the client asks; the
+   turn waits with status `review` and `meta.review` (the narrator's reply, the characters' raw replies, direction,
+   order). `POST …/turns/:turnId/accept` (`TurnPipeline.acceptReply`) replays the round from those outputs, with
+   the edited prose and a revised block if the reply was edited, and goes on to steps 5–6.
 5. One transaction commits everything: threads, thoughts, cast and scene changes, variable and state changes by
    the rules, the narrator's notes, names learned (from speech heard, the prose for the player, the block's
    `names`), ties (a newcomer's `cast.enter.ties`, the block's `ties`), each character's brief (names it doesn't
@@ -270,7 +274,7 @@ jobs are requeued on boot), and report failures on the bus (shown as one quiet l
 
 ## 7. API and events (summary; the full list is in `src/api/http.ts`)
 
-- **Stories:** CRUD, randomize premise, turns (list, edit, delete), rewind, new scene, summaries, failed jobs.
+- **Stories:** CRUD, randomize premise, turns (list, edit, delete, accept a reply waiting for review), rewind, new scene, summaries, failed jobs.
 - **Memory:** objects and facts CRUD, merge, knowledge links, maintenance, rescan, suggestions, "look at".
 - **Characters:** promote, demote, enter by name, rebuild mind, NPC profiles, NPC knowledge, player interview.
 - **Minds** (`src/api/mindsRoutes.ts`): scenario variable definitions, templates and a preview of how the AIs read
@@ -284,7 +288,8 @@ jobs are requeued on boot), and report failures on the bus (shown as one quiet l
   paired, whose mind, turn and game time, cache, errors; `src/api/callsView.ts`), agent sessions.
 
 WebSocket in: `turn.submit` (Minds options: `force`, character ids that must act; `dialogue: { partner }`, one
-dialogue exchange), `turn.retry` (`turnId`: undo the last turn and run it again), `turn.cancel`.
+dialogue exchange; `review: true`, hold the reply for review), `turn.retry` (`turnId`: undo the last turn and run
+it again; `review`), `turn.cancel`.
 WebSocket out: `turn.accepted|status|delta|final|rejected|error`, `summary.updated`, `memory.updated`, `minds.updated`,
 `scene.changed`, `npc.profile.updated`, `story.rewound`, `job.failed`, `provider.waiting` (an overloaded provider:
 the call waits), `thread.activity` (live agent status bar).
@@ -293,7 +298,7 @@ the call waits), `thread.activity` (live agent status bar).
 
 ```bash
 npm install
-npm test            # Vitest, 312 tests, deterministic — fake and replay LLM drivers, no network
+npm test            # Vitest, 319 tests, deterministic — fake and replay LLM drivers, no network
 npm run typecheck   # tsc --noEmit
 npm start           # http://127.0.0.1:7777 (needs config.json)
 npm run smoke       # live check against each configured provider (needs real keys)

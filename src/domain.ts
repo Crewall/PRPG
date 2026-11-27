@@ -99,6 +99,9 @@ export const StorySettings = z.object({
       nameKnowledge: z.boolean().default(false),
       // The narrator's secret setup notes (plans, twists): only the narrator sees them.
       narratorNotes: z.string().default(''),
+      // Review each reply before it is applied (docs/10 §10c): the round stops after the narrator writes; the player
+      // accepts it (edited or not) and only then do the minds, threads and variables learn it. Advanced mode only.
+      reviewReplies: z.boolean().default(false),
     })
     .default({}),
   // The adjudicator: uncertain, consequential attempts are judged by a
@@ -151,7 +154,8 @@ export function resolveStorySettings(base: Record<string, unknown>, patch: Recor
 }
 
 export type StoryStatus = 'active' | 'archived';
-export type TurnStatus = 'streaming' | 'complete' | 'rejected' | 'error';
+// 'review': a Minds round written but not applied yet, waiting for the player to accept it (docs/10 §10c).
+export type TurnStatus = 'streaming' | 'complete' | 'rejected' | 'error' | 'review';
 export type SceneStatus = 'open' | 'closed';
 export type SessionState = 'active' | 'dormant' | 'closed';
 

@@ -51,8 +51,9 @@ is right.
     (the mind is told, a forgotten thought isn't written back, rewinds keep them); the version check (a banner:
     reload the page or restart the server after an update; `src/util/version.ts`, `client/dist/version.js`); who is
     here and who can perceive (a Here switch on the card; asleep / unconscious characters hear nothing, get no
-    brief and are never called; `src/minds/presence.ts`);
-  - 312 passing tests.
+    brief and are never called; `src/minds/presence.ts`); review each reply before it is applied (advanced mode,
+    `minds.reviewReplies`; the round waits in status `review` until ✓ Accept, edited or not; doc 10 §10c);
+  - 319 passing tests.
 - **Designed, not built:** branching retries, converting legacy stories, the interviewer for Minds, automatic
   dialogue mode, referee + dice for special cases (doc 10 §14).
 

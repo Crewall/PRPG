@@ -375,7 +375,15 @@ async function renderPlay(storyId) {
         cb.addEventListener('change', async () => { mset.nameKnowledge = cb.checked; await patchSettings({ minds: { ...mset } }); refreshSceneHeader(); });
         return h('label', { class: 'opt-row', title: 'On: nobody knows a stranger\'s name until they hear it; people are known by how they look. Off: everyone knows every name (older stories).' },
           cb, h('span', {}, 'names are learned (strangers stay unnamed) '), helpLink('names'));
-      })());
+      })(),
+      // Review before applying (docs/10 §10c): an advanced-mode option.
+      advanced ? (() => {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = !!mset.reviewReplies;
+        cb.addEventListener('change', async () => { mset.reviewReplies = cb.checked; await patchSettings({ minds: { ...mset } }); });
+        return h('label', { class: 'opt-row', title: 'On: each reply waits for you to accept it (edit it first if you like) before the characters, threads and variables learn it. Works while advanced mode is on.' },
+          cb, h('span', {}, 'review each reply before it is applied '), helpLink('review'));
+      })() : null);
 
     // Which engine plays this story (docs/10 §4, §13 M8). Minds is the engine; the classic
     // engine and NPC story mode are retired: they keep running the stories that use them.
@@ -896,7 +904,7 @@ async function renderPlay(storyId) {
     const cancelB = h('button', { class: 'link' }, 'cancel');
     // A roomy, full-width editor — the display bubble shrinks to its text, which
     // is far too small for editing longer messages.
-    const form = h('div', { class: `bubble ${cls} msg-editing` }, ta, h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, saveB, cancelB));
+    const form = h('div', { class: `bubble ${cls} msg-editing`, 'data-turn': turnId }, ta, h('div', { class: 'row', style: 'gap:8px; margin-top:6px' }, saveB, cancelB));
     bubble.replaceWith(form);
     // Grow to fit the existing content (capped), so long messages open usable.
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 480) + 'px';
@@ -905,7 +913,7 @@ async function renderPlay(storyId) {
     saveB.addEventListener('click', async () => {
       saveB.disabled = true;
       // Your last message in a Minds story: edit and resend (the AIs answer the new words; ↶ Revert brings back the old).
-      if (story.settings?.engine === 'minds' && field === 'playerInput' && lastTurn?.id === turnId && lastTurn.status === 'complete') {
+      if (story.settings?.engine === 'minds' && field === 'playerInput' && lastTurn?.id === turnId && (lastTurn.status === 'complete' || lastTurn.status === 'review')) {
         if (busy) { saveB.disabled = false; return; }
         try {
           await api.post(`/api/stories/${storyId}/rewind`, { turnId });
@@ -915,7 +923,8 @@ async function renderPlay(storyId) {
         return;
       }
       // The last reply of a Minds story: everyone learns the edited version (a light model updates the round).
-      const replay = story.settings?.engine === 'minds' && field === 'narration' && lastTurn?.id === turnId;
+      // (A reply waiting for review only changes its text: ✓ Accept applies it as edited.)
+      const replay = story.settings?.engine === 'minds' && field === 'narration' && lastTurn?.id === turnId && lastTurn.status !== 'review';
       if (replay) saveB.textContent = 'updating the story…';
       try {
         const r = await api.patch(`/api/stories/${storyId}/turns/${turnId}`, { [field]: ta.value });
@@ -930,6 +939,16 @@ async function renderPlay(storyId) {
   async function deleteMessage(bubble, turnId, field) {
     const isMinds = story.settings?.engine === 'minds';
     // The last exchange in a Minds story: really undone, as if it never happened (↶ Revert brings it back).
+    if (isMinds && lastTurn?.id === turnId && lastTurn.status === 'review') {
+      if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
+      if (!confirm('Remove this exchange?\n\nThe reply was never applied, so nothing else changes; your message goes back in the box.')) return;
+      try {
+        const r = await api.post(`/api/stories/${storyId}/rewind`, { turnId, action: 'remove' });
+        await redrawTranscript();
+        if (r.playerInput && !input.value.trim()) { input.value = r.playerInput; input.dispatchEvent(new Event('input')); }
+      } catch (e) { alert('remove failed: ' + e.message); }
+      return;
+    }
     if (isMinds && lastTurn?.id === turnId && lastTurn.status === 'complete') {
       if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return; }
       if (!confirm('Remove the last exchange?\n\nEverything it changed (memories, thoughts, variables) is undone too. You can bring it back with ↶ Revert.')) return;
@@ -1002,6 +1021,29 @@ async function renderPlay(storyId) {
     scrollDown();
   }
 
+  // Review before applying (docs/10 §10c): advanced mode with the story's switch on. The server holds the round
+  // after the narrator writes; ✓ Accept applies it, with any edit made to the reply first.
+  const wantReview = () => story.settings?.engine === 'minds' && advanced && !!story.settings?.minds?.reviewReplies;
+  function reviewBar(turnId) {
+    const acceptB = h('button', { class: 'small primary', title: 'Apply this reply: the characters, threads and variables learn it as it reads now' }, '✓ Accept');
+    const bar = h('div', { class: 'review-bar', 'data-turn': turnId },
+      h('span', { class: 'sub' }, 'Waiting for you: nobody has learned this reply yet. ✎ to change it first, ↻ to write it again.'),
+      acceptB, helpLink('review'));
+    acceptB.addEventListener('click', async () => {
+      if (busy) return;
+      // An edit still open in the transcript goes in with the accept.
+      const open = transcript.querySelector('.msg-editing textarea');
+      const narration = open && open.closest('.msg-editing')?.dataset.turn === turnId ? open.value : undefined;
+      acceptB.disabled = true; setBusy(true); showStage('applying the reply…');
+      try {
+        await api.post(`/api/stories/${storyId}/turns/${turnId}/accept`, narration !== undefined ? { narration } : {});
+        clearStage(); setBusy(false);
+        await redrawTranscript(); renderDrawer(); refreshSceneHeader();
+      } catch (e) { clearStage(); setBusy(false); acceptB.disabled = false; addStatus(`(accept failed — ${e.message})`); }
+    });
+    return bar;
+  }
+
   /** A failed or stopped attempt: say so, and offer to try again or drop it. */
   function failedNotice(turnId, text) {
     const retryB = h('button', { class: 'small primary', onclick: () => regenerate(turnId, { ask: false }) }, '↻ Retry');
@@ -1037,7 +1079,7 @@ async function renderPlay(storyId) {
     lastInput = text;
     setBusy(true);
     resetAgentStatus();
-    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId, ...(lastTurn ? { lastTurnId: lastTurn.id } : {}) }));
+    ws.send(JSON.stringify({ t: 'turn.retry', storyId, turnId, ...(lastTurn ? { lastTurnId: lastTurn.id } : {}), ...(wantReview() ? { review: true } : {}) }));
   }
 
   /** Drop a failed attempt (its message goes back in the box). */
@@ -1065,7 +1107,7 @@ async function renderPlay(storyId) {
       pendingPlayerBubble = null;
       turnCount = turns.length;
       for (const t of turns) {
-        const failed = t.status !== 'complete';
+        const failed = t.status !== 'complete' && t.status !== 'review';
         if (t.playerInput) {
           const b = messageBubble('player', t.playerInput, t.id, 'playerInput');
           if (failed) b.classList.add('failed');
@@ -1075,7 +1117,8 @@ async function renderPlay(storyId) {
       }
       const tail = turns.at(-1);
       lastTurn = tail ? { id: tail.id, status: tail.status, playerInput: tail.playerInput } : null;
-      if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
+      if (tail?.status === 'review') transcript.append(reviewBar(tail.id));
+      else if (tail && tail.status !== 'complete') failedNotice(tail.id, tail.status === 'rejected' ? 'This attempt was stopped.' : `This attempt failed${tail.meta?.error ? ` — ${tail.meta.error}` : '.'}`);
       // (Named apart from the outer `lastTurn`: a block-scoped one here made the assignment above throw, unseen.)
       const lastDone = turns.filter((t) => t.status === 'complete').at(-1);
       if (lastDone?.meta?.mode === 'dialogue' && !lastDone.meta.reply?.act) {
@@ -1579,8 +1622,9 @@ async function renderPlay(storyId) {
         // Dice stay hidden from play — shown only in debug mode (and always in turn meta/logs).
         if (debug && m.meta?.rolls?.length) for (const r of m.meta.rolls) transcript.append(h('div', { class: 'tokens' }, `🎲 ${r.actor} — ${r.action}: ${r.chance}% vs d100=${r.roll} → ${r.outcome}${r.assessment ? `  (${r.assessment})` : ''}`));
         if (m.meta && (m.meta.promptTokensEst || m.meta.outputTokensEst)) transcript.append(h('div', { class: 'tokens' }, `~${m.meta.promptTokensEst || 0} in / ${m.meta.outputTokensEst || 0} out · ${m.meta.durationMs || 0}ms`));
+        if (m.status === 'review') transcript.append(reviewBar(m.turnId));
         current = null; setBusy(false); scrollDown(); refreshUndo();
-        lastTurn = { id: m.turnId, status: 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
+        lastTurn = { id: m.turnId, status: m.status === 'review' ? 'review' : 'complete', playerInput: lastTurn?.id === m.turnId ? lastTurn.playerInput : pendingPlayerText || '' };
         if (m.meta?.mode === 'dialogue' && m.meta.reply?.act) {
           addStatus(`— ${dialogue?.name || 'They'} act${dialogue ? 's' : ''}: ${m.meta.reply.act}. The conversation ends. —`);
           setDialogue(null);
@@ -1654,6 +1698,7 @@ async function renderPlay(storyId) {
   function submitText(text, isRetry) {
     if (busy) { addStatus('(the storyteller is still working — wait or press Stop)'); return false; }
     if (!wsOpen()) { addStatus('(not connected — your message is kept; tap the status dot for details)'); return false; }
+    if (lastTurn?.status === 'review') { addStatus('(accept the last reply first — or ↻ write it again)'); return false; }
     currentTurnId = null;
     if (!isRetry && text) { pendingPlayerBubble = addBubble('player', text); scrollDown(true); }
     else pendingPlayerBubble = null;
@@ -1663,7 +1708,7 @@ async function renderPlay(storyId) {
     resetAgentStatus(); // fresh round — clear last turn's agent activity
     const force = !dialogue && forced.size ? [...forced] : undefined;
     const floorIds = !dialogue && floor.size ? [...floor] : undefined;
-    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}), ...(floorIds ? { floor: floorIds } : {}) }));
+    ws.send(JSON.stringify({ t: 'turn.submit', storyId, input: text, ...(dialogue ? { dialogue: { partner: dialogue.partner } } : {}), ...(force ? { force } : {}), ...(floorIds ? { floor: floorIds } : {}), ...(wantReview() ? { review: true } : {}) }));
     if (force || floorIds) { forced.clear(); floor.clear(); refreshSceneHeader(); }
     return true;
   }

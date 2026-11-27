@@ -73,6 +73,11 @@ export interface RoundOptions {
    * calls — their stored outputs are used — and the round block is revised to match the edited prose.
    */
   replay?: ReplayInput;
+  /**
+   * Review before applying (docs/10 §10c): stop once the narrator has written, before anything is committed. The
+   * turn waits with status 'review' and the outputs needed to replay it; accepting it replays the round.
+   */
+  review?: boolean;
   /** Which part of the round is running (for error messages). */
   setStage?: (stage: string) => void;
 }
@@ -368,6 +373,19 @@ export async function runMindsRound(deps: RoundDeps, storyIn: Story, turn: Turn,
     : await narrator.narrate(nCall.ctx, fenceGate(out), { turnId: turn.id, signal });
   const { prose, rawBlock } = splitNarratorReply(narratorText);
   if (!prose) throw new Error('the narrator wrote no story text (only a block)');
+
+  // ---- Review (docs/10 §10c): the player sees the reply first; nothing reaches anyone until they accept it ----
+  if (opts.review && !opts.replay) {
+    const characterReplies: Record<string, string> = {};
+    for (const r of results) if (r.raw !== undefined && r.reply) characterReplies[r.objectId] = r.raw;
+    const review: PendingReview = { narratorText, prose, characterReplies, direction, presentOrder: presentIds };
+    deps.stories.updateTurn(turn.id, {
+      narration: prose,
+      status: 'review',
+      meta: { engine: 'minds', mode: dialogue.length ? 'wrapup' : 'round', model: narratorBound.profile.model, durationMs: Date.now() - t0, review },
+    });
+    return deps.stories.getTurn(turn.id)!;
+  }
 
   // ---- 4. The round block: the narrator's, else the distributor's, else nothing ----
   let blockSource: 'narrator' | 'distributor' | 'fallback' = 'narrator';
@@ -724,8 +742,22 @@ export interface ReplayInput {
   characterReplies: Map<string, string>;
   /** The narrator's prose as the user edited it. */
   editedProse: string;
-  /** The round block the narrator wrote the first time. */
+  /** The round block the narrator wrote the first time (none: the distributor writes one from the prose). */
   originalBlock: unknown;
+  /** The narrator's whole reply, used as it is (a reviewed reply accepted unedited): no revision. */
+  narratorText?: string;
+}
+
+/** What a round waiting for review keeps (turn meta `review`, docs/10 §10c): enough to replay it. */
+export interface PendingReview {
+  /** The narrator's whole reply (prose + round block). */
+  narratorText: string;
+  /** Its prose as first written (an edit of the turn's narration is compared with it). */
+  prose: string;
+  /** Each called character's raw reply, by object id. */
+  characterReplies: Record<string, string>;
+  direction: DirectionResult;
+  presentOrder: string[];
 }
 
 /**
@@ -734,8 +766,11 @@ export interface ReplayInput {
  * original block stands.
  */
 async function replayNarration(deps: RoundDeps, story: Story, turn: Turn, roundMessage: string, replay: ReplayInput, signal: AbortSignal): Promise<string> {
+  if (replay.narratorText !== undefined) return replay.narratorText;
   const prose = replay.editedProse.trim();
-  let block: unknown = replay.originalBlock ?? {};
+  // No block the first time: the edited prose alone, and the distributor writes the block from it.
+  if (replay.originalBlock === undefined || replay.originalBlock === null) return prose;
+  let block: unknown = replay.originalBlock;
   try {
     const bound = deps.registry.getForRole('distributor', story.settings.roles.distributor);
     const session = deps.agents.ensureSession(story.id, 'distributor', bound.name);

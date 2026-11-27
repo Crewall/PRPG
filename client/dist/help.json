@@ -164,6 +164,12 @@
     "body": "Shows everything (descriptions, states, hidden variables, every character's mind) and lets you edit it. A character's card then has 📋 Sheet: profile, variables, and their mind (agenda, opinions and feelings by person, notes, faded thoughts), all editable. It spoils the story's secrets, so it is off by default. Turn it on with the Advanced button in a Minds story."
   },
   {
+    "id": "review",
+    "group": "Modes",
+    "title": "Review each reply before it is applied",
+    "body": "An advanced-mode option (⚙ story options → Minds engine). When it is on, each round stops once the narrator has written: you read the reply, and nobody has learned it yet — no character's memory, thread, thought or variable has changed. ✓ Accept applies it. To change it first, ✎ the reply and save, then Accept: the characters, threads and variables learn the edited version (a light model updates what everyone noticed to match). ↻ writes the reply again (it waits for you again); × removes the exchange and puts your message back in the box. You can't send a new message while a reply waits. The option only works while advanced mode is on in this browser; dialogue-mode exchanges are never held."
+  },
+  {
     "id": "pov",
     "group": "Modes",
     "title": "The POV filter",

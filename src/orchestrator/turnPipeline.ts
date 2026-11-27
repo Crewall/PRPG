@@ -37,7 +37,8 @@ import type { SheetStore, ThoughtStore, VariableStore, NameStore, TieStore, MetS
 import type { ThreadStore } from '../db/stores/threadStore.ts';
 import { runMindsRound } from '../minds/round.ts';
 import { runDialogueExchange } from '../minds/dialogue.ts';
-import type { ReplayInput, RoundDeps } from '../minds/round.ts';
+import type { PendingReview, ReplayInput, RoundDeps } from '../minds/round.ts';
+import { readRoundBlock, splitNarratorReply } from '../minds/contracts.ts';
 import { NO_DIRECTION } from '../minds/director.ts';
 import type { DirectionResult } from '../minds/director.ts';
 
@@ -87,6 +88,11 @@ export interface RunOptions {
   replay?: ReplayInput;
   /** Minds engine, dialogue mode: talk directly with this character (one exchange, nobody else called). */
   dialogue?: { partner: string };
+  /**
+   * Minds engine: the client asks to review the reply before it is applied (docs/10 §10c; sent in advanced mode).
+   * It takes effect only with the story's `minds.reviewReplies` on, and never for a dialogue exchange.
+   */
+  review?: boolean;
 }
 
 /** The turn the client meant to act on is no longer the story's last one. */
@@ -171,7 +177,7 @@ export class TurnPipeline {
    * earlier attempt is lost (branching is a TODO, docs/10 §14). `expectTurnId` is the story's last turn as the
    * client knows it: if the story moved on since, nothing is undone.
    */
-  async retry(storyId: string, out: TurnEmitter, opts: { turnId?: string; expectTurnId?: string } = {}): Promise<Turn | undefined> {
+  async retry(storyId: string, out: TurnEmitter, opts: { turnId?: string; expectTurnId?: string; review?: boolean } = {}): Promise<Turn | undefined> {
     this.cancel(storyId);
     return this.locks.withStory(storyId, async () => {
       const { stories, snapshots } = this.deps;
@@ -191,7 +197,11 @@ export class TurnPipeline {
       }
       const req = (target.meta.request ?? {}) as RunOptions;
       // Older dialogue turns kept no request: their partner is in the meta.
-      const runOpts: RunOptions = { ...req, ...(!req.dialogue && target.meta.mode === 'dialogue' && typeof target.meta.partner === 'string' ? { dialogue: { partner: target.meta.partner } } : {}) };
+      const runOpts: RunOptions = {
+        ...req,
+        ...(!req.dialogue && target.meta.mode === 'dialogue' && typeof target.meta.partner === 'string' ? { dialogue: { partner: target.meta.partner } } : {}),
+        ...(opts.review ? { review: true } : {}),
+      };
       // The snapshot taken before `target` holds the state before it; later turns go with it.
       this.undoTurn(storyId, target.id);
       stories.deleteTurnsFrom(storyId, target.index);
@@ -273,6 +283,35 @@ export class TurnPipeline {
     });
   }
 
+  /**
+   * Accept a reply waiting for review (docs/10 §10c). The round is taken back to its start and committed with the
+   * outputs it already has — the characters' replies byte-exact, no character or narrator asked again. If the
+   * player edited the reply (the turn's narration differs from what the narrator wrote), the edited prose goes in
+   * and a light model revises the round block to match; otherwise the narrator's reply is used as it is.
+   * Returns the committed turn (a new id), or undefined when `turnId` is not a reply waiting for review.
+   */
+  async acceptReply(storyId: string, turnId: string): Promise<Turn | undefined> {
+    return this.locks.withStory(storyId, async () => {
+      const { stories } = this.deps;
+      const last = stories.lastTurn(storyId);
+      if (!last || last.id !== turnId || last.status !== 'review') return undefined;
+      const review = last.meta.review as PendingReview | undefined;
+      if (!review) return undefined;
+      const edited = !!last.narration.trim() && last.narration.trim() !== review.prose.trim();
+      const replay: ReplayInput = {
+        direction: review.direction ?? NO_DIRECTION,
+        presentOrder: review.presentOrder,
+        characterReplies: new Map(Object.entries(review.characterReplies ?? {})),
+        editedProse: edited ? last.narration : review.prose,
+        originalBlock: readRoundBlock(splitNarratorReply(review.narratorText).rawBlock)?.block,
+        ...(edited ? {} : { narratorText: review.narratorText }),
+      };
+      const request = (last.meta.request ?? {}) as RunOptions;
+      this.undoTurn(storyId, last.id);
+      return this.runLocked(storyId, last.playerInput, nullEmitter(), { ...request, replay });
+    });
+  }
+
   /** Revert the last destructive action (docs/10 §10a). Returns what was undone, or undefined when nothing was saved. */
   async undo(storyId: string): Promise<{ action: string; label: string } | undefined> {
     this.cancel(storyId);
@@ -302,6 +341,8 @@ export class TurnPipeline {
     const story = stories.getStory(storyId);
     if (!story) return void out.error('', `story '${storyId}' not found`), undefined;
     if (story.status !== 'active') return void out.error('', `story '${storyId}' is not active`), undefined;
+    // A reply waiting for review must be accepted (or written again, or taken back) before the story moves on.
+    if (stories.lastTurn(storyId)?.status === 'review') return void out.error('', 'accept the last reply first (or ↻ write it again)'), undefined;
 
     // Step 1 — backup (feature 1a): capture everything mutable BEFORE this turn
     // writes anything, so a rewind can restore the exact pre-message state.
@@ -333,6 +374,7 @@ export class TurnPipeline {
               force: opts.force,
               floor: opts.floor,
               replay: opts.replay,
+              review: !!opts.review && story.settings.minds.reviewReplies,
               setStage: (s) => (stage = s),
             });
         out.final(finalTurn);
