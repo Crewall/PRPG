@@ -256,13 +256,31 @@ export async function registerHttpRoutes(server: FastifyInstance, app: App): Pro
       if (!stories.getTurn(turnId)) return { ok: false, recommitted: true, error: 'the edit could not be applied to the story — ↶ Revert brings back the original' };
       // Not replayable (a conversation exchange, an older story): a transcript-only edit below.
     }
-    app.snapshots.saveRowUndo(id, turnId, { action: 'edit-text', label: 'Undo the edit' });
+    // A reply waiting for review (docs/10 §10c) is only text until it is accepted: nothing to revert.
+    if (turn.status !== 'review') app.snapshots.saveRowUndo(id, turnId, { action: 'edit-text', label: 'Undo the edit' });
     const updated = stories.setTurnText(turnId, body)!;
     if (!updated.playerInput.trim() && !updated.narration.trim()) {
       dropTurn(id, turnId);
       return { ok: true, deleted: true };
     }
     return { ok: true, turn: updated };
+  });
+
+  // Accept a reply waiting for review (docs/10 §10c): the round is applied, with the reply as it now reads (an
+  // edit made before accepting is what everyone learns). `narration` saves an edit and accepts in one call.
+  server.post('/api/stories/:id/turns/:turnId/accept', async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const body = z.object({ narration: z.string().optional() }).parse(req.body ?? {});
+    const turn = stories.getTurn(turnId);
+    if (!turn || turn.storyId !== id || turn.status !== 'review' || stories.lastTurn(id)?.id !== turnId) {
+      reply.code(409);
+      return { error: 'that reply is not waiting for review — reload' };
+    }
+    if (body.narration?.trim()) stories.setTurnText(turnId, { narration: body.narration });
+    const accepted = await pipeline.acceptReply(id, turnId);
+    if (accepted?.status === 'complete') return { ok: true, turn: accepted };
+    reply.code(500);
+    return { ok: false, error: accepted?.meta?.error ? String(accepted.meta.error) : 'the reply could not be applied — ↻ write it again' };
   });
 
   // Delete any past message/exchange: drop the turn and its transcript

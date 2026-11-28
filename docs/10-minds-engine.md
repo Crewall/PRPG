@@ -1,6 +1,6 @@
 # 10 — Minds engine: one narrator, character minds, per-character briefs
 
-**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), who is here and who can perceive (§5.1f), Revert and edits that reach the minds (§10a), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
+**Status: M1–M8 are built: the Minds engine is the engine for new stories (dialogue mode, thread compaction, the public profile, names that are learned, the narrator's hand-over and ties, relation variables, thoughts with kinds and importance that fade, places and things reused by #handle (§5.1d), event order (§6), focus tiers (§5.1e), who is here and who can perceive (§5.1f), Revert and edits that reach the minds (§10a), review each reply before it is applied (§10c), the director that works out who is spoken to, the full UI); the classic engine and NPC story mode are retired (they run existing stories only) and get deleted in M9, when the owner says so.** Companion docs:
 [11 — character sheets](11-character-sheets.md) (description, state, variables, thoughts) and
 [12 — models and providers](12-models-and-providers.md) (tiers, DeepSeek, caching).
 
@@ -601,6 +601,30 @@ Each dialog, and the side panel on a narrow screen, now adds a history entry whe
 overlay first (a dialog through its own Close or Cancel); closing it by hand takes the entry back out. Backing out
 of a new story's "Who do you play?" form leaves the story waiting (the 🎭 chip opens the form again).
 `client/dist/back.js`.
+
+## 10c. Review each reply before it is applied (settled with the owner)
+
+An advanced-mode option, per story: `minds.reviewReplies` (⚙ story options → Minds engine, shown only in advanced
+mode). The client sends `review: true` with a turn (`turn.submit`, `turn.retry`) only while advanced mode is on in
+that browser and the switch is on; the server holds a round only when both say so.
+
+- **Where it stops:** after the narrator has written (the player has read the reply), before step 4 (the round
+  block) and the commit. Nothing is written but the turn: status `review`, narration = the prose, and `meta.review`
+  = the narrator's whole reply, the called characters' raw replies, the direction and the present order (enough to
+  replay the round, as ✎ on the last reply does, §10a).
+- **✓ Accept** (`POST /api/stories/:id/turns/:turnId/accept`, optional `narration` to save an edit in the same
+  call): the turn is taken back to its start and the round replayed with those outputs (no director, character or
+  narrator call). Unedited: the narrator's reply is used as it is (no revision). Edited (the narration differs from
+  what the narrator wrote): the edited prose goes in, and a light model revises the round block to match; with no
+  block the first time, the distributor writes one from the edited prose. Accepting gives the turn a new id.
+- **While a reply waits:** a new message is refused ("accept the last reply first"). ✎ on the reply changes only its
+  text (no Revert slot: nothing was applied); ✎ on the player message is edit-and-resend; × removes the exchange
+  (nothing to restore) and puts the message back in the box; ↻ writes it again, waiting again if review is still
+  on. The state survives a restart (it is in the turn row).
+- **Not held:** dialogue-mode exchanges, and legacy engines. Background jobs (seeding, compaction, natures) are
+  only queued at the commit, so none runs on an unaccepted reply.
+- **If the accept fails** (a cancel; a failed revision is not a failure: the original block stands), the
+  turn ends as a failed attempt; ↻ Retry writes it again.
 
 ## 10. Advanced mode and the POV filter
 
